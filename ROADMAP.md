@@ -13,9 +13,9 @@
 
 ## 总进度（2026-10-12 更新）
 
-**M1 独立化重构已交付 ✅（v1.0.1）**：脱离前身 fork，重写底层、去掉自定义标记机制、
-换上 `vac` 命名空间与 esbuild 构建，并把侧边栏 Dashboard（用量统计）接上。
-下一个阶段是把 Codex 链路端到端验证、以及 Dashboard 的第二轮增强（见大纲）。
+**M1 独立化重构已交付 ✅ + v1.0.1 已发布 ✅（2026-10-12）**：脱离前身 fork，重写底层、
+去掉自定义标记机制、换上 `vac` 命名空间与 esbuild 构建，接上侧边栏 Dashboard（用量统计），
+并完成首个 GitHub Release。下一阶段是把 Codex 链路端到端验证、宿主实测验收、以及 Dashboard 增强。
 
 ---
 
@@ -47,7 +47,7 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 | P1-1 | Codex 链路端到端验证 | 用真实 `codex-acp` 跑通连接/会话/工具调用；确认 `CodexUsageSource` 的用量口径与真实数据一致 |
 | P1-2 | 宿主实测验收 | `npm run dev:host` 目视验收 Dashboard 与聊天面板的渲染、统计数字是否对得上 |
 | P1-3 | 打包体积瘦身 | `dist/extension.js` 约 2 MB，主要来自 ACP SDK 全量引入；评估按需引入或裁剪 |
-| P1-4 | 首次发布准备 | 注册 publisher、准备 marketplace 图标与截图、CHANGELOG 归档到 v1.0.1 |
+| ~~P1-4~~ | ~~首次发布~~ | ✅ 已完成（2026-10-12）：v1.0.1 已打 GitHub Release 并附 `.vsix`；市场发布见 P2-5 |
 
 ### 🟢 远期 / 增强
 
@@ -57,3 +57,4 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 | P2-2 | 价格表校验 | `dashboard/usage/pricing.ts` 的 `PRICING_AS_OF` 与各档价格需按官方口径复核 |
 | P2-3 | 更多 agent 接入 | 保持「加 agent 只动 `agents/AgentProfile.ts` + 配置」这一约束不被破坏 |
 | P2-4 | 记录区长对话性能 | 虚拟列表 / 流式 markdown 只重绘尾块（当前依赖合并 postMessage 缓解） |
+| P2-5 | 上架 VS Code Marketplace | 注册 publisher、准备图标与截图、按 vsce publish 流程发布 |
