@@ -1,0 +1,1404 @@
+// 新 Chat 面板（Claude Code 优先）与面板路由层：新增文件。
+// 输入区：发送/停止、斜杠命令补全、配置选择器（ACP Session Config Options）、附件 chips。
+//
+// 与旧面板的差异：
+// · 附件真正可用（旧面板的 file-attached 消息在 webview 侧**没有消费者**，端到端是死的）
+// · 斜杠命令展示 input.hint（旧面板完全忽略 `input`）
+// · 配置选择器支持 `type: 'boolean'`（旧面板只认 select）
+//
+// 注意：本文件是嵌在模板字符串里的客户端代码，**每个反斜杠都要写成 `\\`**。
+export const composerClient = `
+(function (NS) {
+  'use strict';
+
+  var input = null;
+  var sendBtn = null;
+  // [CUSTOM- 停止确认条（#stopConfirm）。
+  var stopConfirmEl = null;
+  // [CUSTOM- "这个 agent 吃不了轮次中的补充消息"那条说明（#steerHint）。
+  var steerHintEl = null;
+  var slashPopup = null;
+  var attachmentsEl = null;
+  // [CUSTOM- 编辑器里**当前打开的文件**（宿主推来的，见 ChatPanelHost.pushActiveFile）。
+  // 它是一格「候选引用」：'+' 还没引用、'x' 已引用；点一下就把路径加进/移出这条消息。
+  var activeFile = null;
+  var pickersEl = null;
+  var contextMeter = null;
+  // [CUSTOM- '+' 菜单的 DOM：'#additionalDirectories' 是 chips 行，'#addBtn' 是
+  // 入口按钮，'#addMenu' 是一级/二级共用的弹出菜单。
+  var additionalDirectoriesEl = null;
+  var addPicker = null;
+  var addBtn = null;
+  var addMenu = null;
+  // 菜单层级：0 = 一级（工作区目录 / 文件或文件夹），1 = 二级（目录列表 + 返回 + Browse）。
+  var addMenuLevel = 0;
+  // [CUSTOM- The last usage we were given. The ring's "a turn is running"
+  // outer arc is driven by setRunning, and that path never sees 'meta' — so the numbers
+  // are kept here and redrawn from them.
+  var lastUsage = null;
+  // [CUSTOM- 图片附件的缩略图（id → dataUrl）。客户端本地缓存、随 reload 丢，
+  // 纯展示用——宿主内存仍持有全图供发送，丢了这个只是 chip 缩略图回退成图标。
+  var imageThumbs = {};
+
+  var state = {
+    sessionId: null,
+    agentName: null,
+    running: false,
+    loading: false,
+    commands: [],
+    configOptions: [],
+    // [CUSTOM- 自定义模型别名（vac.customModels，来自 meta / draftOptions）。
+    // 模型本身经 agent 的 '_meta.extraModels' 注入进入 model 配置项（见 SessionManager），
+    // 这里只拿它做**显示名映射**：agent 把自定义模型列为裸 id，optionLabel 据此显示成 name。
+    customModels: [],
+    attachments: [],
+    slashIndex: 0,
+    slashMatches: [],
+    // [CUSTOM- Draft mode: a new session that does not exist yet.
+    // '{ draftId, cwd }' while the panel is on a draft, else null. The two modes
+    // are mutually exclusive — 'setFocus' clears this and 'setDraft' clears
+    // 'sessionId' — because 'send()' branches on it.
+    draft: null,
+    /** A create-then-send is in flight; blocks a second send. */
+    draftPending: false,
+    // [CUSTOM- 当前 agent 是否吃"轮次进行中的补充消息"（steering，来自 meta）。
+    // 它决定 running 时回车是**发出去**还是**原样待着并提示**（见 send / refreshSteerHint）。
+    steering: false,
+    // [CUSTOM- 额外根目录（additionalDirectories，多根工作区）。草稿页可编辑、
+    // 已有会话只读；workspaceFolders 是菜单候选（来自 directoryChoices）。
+    additionalDirectories: [],
+    addDirectoriesReadonly: false,
+    workspaceFolders: []
+  };
+
+  // [CUSTOM- Per-session drafts. Switching sessions used to clear
+  // the textarea outright, so checking another tab lost whatever you had typed.
+  // Persisted through the same webview-local state as the scroll memory.
+  // [CUSTOM- …and per-DRAFT: a draft has no sessionId, which is exactly
+  // how its text went missing (see ownerKey).
+  var drafts = {};
+  var draftTimer = null;
+  // [CUSTOM- 当前聚焦草稿上用户已选的配置项（configId → value 字符串）。
+  // 权威副本在 draft 对象上（见 setDraft）；这里只是"此刻那一个"的引用。
+  var selections = {};
+
+  /**
+   * Who owns what is in the textarea right now: the focused draft, or the focused
+   * session. A DRAFT HAS NO sessionId — keying the store by sessionId alone meant
+   * 'stashDraft' silently did nothing while a draft was focused, so leaving a draft
+   * discarded the typed text, and entering another draft showed the previous one's
+   * text (nothing restored it either).
+   */
+  function ownerKey() {
+    return state.draft ? state.draft.draftId : state.sessionId;
+  }
+
+  function stashDraft() {
+    var key = ownerKey();
+    if (key) { drafts[key] = input.value; }
+  }
+
+  function persistDraftsSoon() {
+    if (draftTimer) { return; }
+    draftTimer = window.setTimeout(function () {
+      draftTimer = null;
+      if (NS.boot && NS.boot.persistUi) { NS.boot.persistUi({ drafts: drafts }); }
+    }, 300);
+  }
+
+  function restoreDraft(sessionId) {
+    var text = sessionId ? drafts[sessionId] : undefined;
+    input.value = text === undefined ? '' : text;
+    autoGrow();
+  }
+
+  /** Drop a closed session's draft (hygiene: ids are never reused). */
+  function forgetDraft(sessionId) {
+    if (!sessionId || drafts[sessionId] === undefined) { return; }
+    delete drafts[sessionId];
+    persistDraftsSoon();
+  }
+
+  function init() {
+    input = NS.dom.qs('promptInput');
+    sendBtn = NS.dom.qs('sendStopBtn');
+    // [CUSTOM- 停止确认条（不可逆动作的第二步；见 showStopAsk）。
+    stopConfirmEl = NS.dom.qs('stopConfirm');
+    steerHintEl = NS.dom.qs('steerHint');
+    slashPopup = NS.dom.qs('slashPopup');
+    attachmentsEl = NS.dom.qs('attachments');
+    pickersEl = NS.dom.qs('configPickers');
+    contextMeter = NS.dom.qs('contextMeter');
+    // [CUSTOM- 额外根目录（additionalDirectories）的 DOM。
+    additionalDirectoriesEl = NS.dom.qs('additionalDirectories');
+    addPicker = NS.dom.qs('addPicker');
+    addBtn = NS.dom.qs('addBtn');
+    addMenu = NS.dom.qs('addMenu');
+
+    input.addEventListener('keydown', onKeyDown);
+    input.addEventListener('input', function () {
+      stashDraft();
+      persistDraftsSoon();
+      updateSlashPopup();
+      // [CUSTOM- 那条说明的判据里有"输入框里有没有东西"，所以它跟着每次输入走。
+      refreshSteerHint();
+    });
+    // [CUSTOM- Restore the per-session drafts (same webview-local
+    // state the scroll memory uses; each document keeps its own copy).
+    if (NS.boot && NS.boot.recallUi) {
+      var ui = NS.boot.recallUi();
+      if (ui && ui.drafts) { drafts = ui.drafts; }
+    }
+    sendBtn.addEventListener('click', function () {
+      // [CUSTOM- 停止不再一键生效：先问一句（同 Escape 那条路）。
+      if (state.running) { showStopAsk(); } else { send(); }
+    });
+    if (stopConfirmEl) {
+      stopConfirmEl.addEventListener('click', function (event) {
+        var btn = event.target && event.target.closest ? event.target.closest('[data-stop-confirm]') : null;
+        if (!btn) { return; }
+        if (btn.getAttribute('data-stop-confirm') === 'stop') { hideStopAsk(); cancel(); }
+        else { hideStopAsk(); }
+      });
+    }
+    document.addEventListener('click', function (event) {
+      if (!pickersEl.contains(event.target)) { closeMenus(); }
+      // [CUSTOM- '+' 菜单也随点外部收起。
+      if (!addMenu || !addMenu.contains(event.target)) { closeAddMenu(); }
+    });
+    // [CUSTOM- '+' 入口：按钮开一级菜单；菜单里点一级项切层级、二级项切换目录/Browse/返回。
+    if (addBtn) {
+      addBtn.addEventListener('click', function (event) {
+        event.stopPropagation();
+        var wasOpen = addMenu && addMenu.className.indexOf('open') !== -1;
+        closeAddMenu();
+        if (!wasOpen && addMenu) {
+          addMenuLevel = 0;
+          renderAddMenu();
+          addMenu.className = 'picker-menu open';
+        }
+      });
+    }
+    if (addMenu) {
+      addMenu.addEventListener('click', function (event) {
+        // [CUSTOM- 点菜单里的东西**必须**停在这里：下面 renderAddMenu() 会重建 DOM、
+        // 把被点的那个元素摘掉，冒泡到 document 时 contains(event.target) 就变 false、菜单被
+        // 「点外面」检查关掉（pitfalls #28 的重演）。stopPropagation 让 document 那条永远收不到。
+        event.stopPropagation();
+        var item = event.target && event.target.closest ? event.target.closest('[data-add-action],[data-add-dir]') : null;
+        if (!item) { return; }
+        var action = item.getAttribute('data-add-action');
+        if (action === 'directories') { addMenuLevel = 1; renderAddMenu(); return; }
+        if (action === 'files') {
+          closeAddMenu();
+          NS.bridge.post({ type: 'pickFiles' });
+          return;
+        }
+        var path = item.getAttribute('data-add-dir');
+        if (path === '__back__') { addMenuLevel = 0; renderAddMenu(); return; }
+        if (path === '__browse__') {
+          closeAddMenu();
+          NS.bridge.post({ type: 'pickDirectory', purpose: 'additionalDirectories' });
+          return;
+        }
+        toggleAdditionalDirectory(path);
+      });
+    }
+    // [CUSTOM- 底栏浮起来了，消息区要靠这个高度才知道该留多少底部空间。
+    watchHeight();
+  }
+
+  function target() {
+    return { sessionId: state.sessionId };
+  }
+
+  function canCompose() {
+    // [CUSTOM- A draft has no sessionId yet but is perfectly
+    // composable — its first message is what creates the session.
+    return (!!state.sessionId || !!state.draft) && !state.loading;
+  }
+
+  // [CUSTOM- Send/Stop 图标化：文字换成内联 SVG，语义保留在 title/aria-label。
+  function setSendIcon(running) {
+    NS.dom.clear(sendBtn);
+    sendBtn.appendChild(NS.icons.icon(running ? 'stop' : 'send', 'send-icon'));
+    sendBtn.title = running ? 'Stop' : 'Send';
+    sendBtn.setAttribute('aria-label', running ? 'Stop' : 'Send');
+  }
+
+  function refreshControls() {
+    // [CUSTOM- 最先算：下面两条早退分支（draftPending / draft）也会换 placeholder
+    // 与禁用态，那条说明的显隐是独立的一件事，不该被它们跳过。
+    refreshSteerHint();
+    var enabled = canCompose();
+    input.disabled = !enabled;
+    sendBtn.disabled = !enabled && !state.running;
+    sendBtn.className = 'send-stop ' + (state.running ? 'stop' : 'send');
+    if (state.draftPending) {
+      // A create-then-send is in flight: the button must not accept a second one.
+      sendBtn.disabled = true;
+      setSendIcon(false);
+      input.placeholder = 'Creating this session\\u2026';
+      return;
+    }
+    setSendIcon(state.running);
+    // [CUSTOM- Pickers are inert while the create-then-send is in flight: the
+    // message already carries the choices, so a change now would only desync the label.
+    var pickerButtons = pickersEl.querySelectorAll('.picker-btn');
+    for (var i = 0; i < pickerButtons.length; i++) { pickerButtons[i].disabled = state.draftPending; }
+    if (state.draft) {
+      // Say why the tab says "New session": the first message is what creates it. The slash
+      // list is mentioned when the host could give us one (the agent's last session's commands).
+      input.placeholder = state.commands.length > 0
+        ? 'Your first message creates this session, or / for commands\\u2026'
+        : 'Your first message creates this session\\u2026';
+      return;
+    }
+    if (state.commands.length > 0) {
+      input.placeholder = 'Type a message, or / for commands\\u2026';
+    } else {
+      input.placeholder = 'Type a message\\u2026';
+    }
+  }
+
+  function send() {
+    // [CUSTOM- 轮次进行中：**能发就发**。
+    //
+    // 以前这里是 if (state.running) { return; }（"扩展会拒掉第二个 prompt，先清空输入框
+    // 会把草稿弄丢"）。前半句现在不成立了：宿主对支持 steering 的 agent 会把这条消息**注入**
+    // 正在跑的那一轮（_session/steering），不是第二个 prompt。用户的报障正是"任务进行中
+    // 没法回车发送"。
+    // 后半句仍然成立，所以**不支持的 agent 照旧不发** —— 但不再静默：refreshSteerHint 会在
+    // 输入卡上方写明原因（"输入框里打了字却按回车没反应"是最容易让人以为程序坏了的那种）。
+    if (state.running && !state.steering) { return; }
+    var text = input.value;
+    // [CUSTOM- 有附件（图片/文件）时允许空文字发送；纯文字则要求非空。
+    if ((!text || text.trim().length === 0) && state.attachments.length === 0) { return; }
+
+    if (state.draft) {
+      // [CUSTOM- A draft has no session yet, so the host creates it
+      // and THEN sends ('createDraftAndSend').
+      //
+      // **The textarea is deliberately NOT cleared here.** Creating the session
+      // can fail (the agent will not start, the directory is gone), and in that
+      // case both the draft tab and the typed text must survive. Clearing
+      // happens on 'draftResolved'; on 'draftFailed' the text stays put.
+      if (state.draftPending) { return; }
+      state.draftPending = true;
+      // [CUSTOM- 面板上立刻要有反应。建会话是**秒级到十几秒**的等待（真机：agent 侧
+      // session/create 的 sdk-initialize 一步 0.7s/11.1s/13.2s），而这段时间里输入框的字故意留着
+      // （058：失败时要保命）、placeholder 被内容挡着 ⇒ 不加这一句，屏幕上没有任何一处能看出
+      // "已经在建了"（用户报的就是这个）。相位由状态卡渲染，收尾在 boot 的 draftResolved/draftFailed。
+      if (NS.stateCard) { NS.stateCard.beginCreating(); }
+      // [CUSTOM- 草稿上攒的附件随这条消息一起交上去（草稿还没有会话，宿主没法
+      // 用 attachPath/attachImage 那种会话作用域的通道收它）。发送**不在这里清空**：这条消息
+      // 可能失败（draftFailed），那时图片和文字都得留着 —— 与 textarea 的处理同一条规矩。
+      var pending = draftFiles[state.draft.draftId] || [];
+      var draftImages = [];
+      var draftPaths = [];
+      for (var i = 0; i < pending.length; i++) {
+        if (pending[i].kind === 'image') {
+          draftImages.push({
+            id: pending[i].id, name: pending[i].name,
+            mimeType: pending[i].mimeType, dataUrl: pending[i].dataUrl,
+          });
+        } else {
+          draftPaths.push(pending[i].path);
+        }
+      }
+      NS.bridge.post({
+        type: 'createDraftAndSend',
+        draftId: state.draft.draftId,
+        cwd: state.draft.cwd || undefined,
+        text: text,
+        // [CUSTOM- The mode/model picked on this page travels with the message
+        // that creates the session (there is nothing to configure until it exists).
+        // Read at SEND time, not at press time: a failed attempt keeps the draft, and the
+        // retry must carry the selection as it is then, not as it was.
+        configSelections: draftSelections(),
+        images: draftImages,
+        paths: draftPaths,
+        // [CUSTOM- 草稿页显式勾选的额外根目录（additionalDirectories）。
+        additionalDirectories: state.additionalDirectories
+      });
+      refreshControls();
+      return;
+    }
+
+    if (!state.sessionId) { return; }
+    NS.bridge.post({ type: 'sendPrompt', sessionId: state.sessionId, text: text });
+    input.value = '';
+    // [CUSTOM- The draft is consumed by sending it.
+    stashDraft();
+    persistDraftsSoon();
+    hideSlash();
+    autoGrow();
+  }
+
+  /**
+   * [CUSTOM- 停止确认的显隐。
+   *
+   * 用户 2026-10-04 报：「Escape 不管触发停止还是关弹窗，都是不可逆的，需要先弹二次确认框」。
+   * 事实核过：真正不可逆的只有**停止**（工具的调用会被掐断）；关菜单/浮层都能重开，表单抽屉的
+   * Escape 也只是收起、打过的字全在 —— 所以只给"停止"加这一步，其余保持一键（多一步只是添堵）。
+   *
+   * 形态是**面板内一条**（#stopConfirm，在输入卡上方、同宽同中线），不是宿主模态框：不抢焦点、
+   * 不遮住你要停的那个会话，而且它的高度会经 composer 的观察器进 --vac-composer-h，
+   * 消息区照常让位（176 的重算也在）。
+   */
+  function showStopAsk() {
+    if (!state.running || !stopConfirmEl || !stopConfirmEl.hidden) { return; }
+    stopConfirmEl.hidden = false;
+  }
+
+  function hideStopAsk() {
+    if (!stopConfirmEl || stopConfirmEl.hidden) { return; }
+    stopConfirmEl.hidden = true;
+  }
+
+  /**
+   * [CUSTOM- "按了回车却什么都没发生"的说明条。
+   *
+   * 判据要求**三件事同时成立**：轮次在跑、这个 agent 不支持 steering、而输入框里确实有东西
+   * 想发（有文字或有附件）。少了最后一条它就会在每一次长轮次里无缘无故地常驻 —— 而它要说的
+   * 恰恰是"你手上这条消息发不出去"。
+   */
+  function refreshSteerHint() {
+    if (!steerHintEl) { return; }
+    var hasText = !!(input.value && input.value.trim().length > 0) || state.attachments.length > 0;
+    steerHintEl.hidden = !(state.running && !state.steering && hasText);
+  }
+
+  function cancel() {
+    if (!state.sessionId) { return; }
+    NS.bridge.post({ type: 'cancelTurn', sessionId: state.sessionId });
+  }
+
+  function onKeyDown(event) {
+    if (slashPopup && !slashPopup.hidden) {
+      if (event.key === 'ArrowDown') { event.preventDefault(); moveSlash(1); return; }
+      if (event.key === 'ArrowUp') { event.preventDefault(); moveSlash(-1); return; }
+      if (event.key === 'Tab' || event.key === 'Enter') {
+        event.preventDefault();
+        acceptSlash();
+        return;
+      }
+      if (event.key === 'Escape') { event.preventDefault(); hideSlash(); return; }
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      // [CUSTOM- 回车**只发送，绝不停止**。
+      //
+      // 用户 2026-10-04 报："输入框消息发出之后，再按一次 Enter 会触发停止"。根因是回车与
+      // Send/Stop 按钮共用一条路由（state.running ? cancel() : send()）—— 而发完消息后
+      // 光标还在输入框里、手也还在键盘上，第二次回车就把**整轮**停掉了。
+      // 现在只调 send()：它自己守着两件事（跑着不发、空内容且无附件不发），于是"跑着按回车"
+      // 变成一个安全的空操作。停止是**显式动作**：Send/Stop 按钮（title/aria 就是 "Stop"）
+      // 或者 Escape —— 不该跟"发消息"共用同一个键。
+      send();
+      return;
+    }
+    if (event.key === 'Escape' && state.running) {
+      event.preventDefault();
+      // [CUSTOM- 再按一次 Escape = 收起这一问（不停止）；要点"停止"才真停。
+      if (stopConfirmEl && !stopConfirmEl.hidden) { hideStopAsk(); } else { showStopAsk(); }
+    }
+  }
+
+  /** Grow the textarea with its content, between sane bounds. */
+  function autoGrow() {
+    input.style.height = 'auto';
+    // [CUSTOM- 下限从 60px 放开：默认就占**一行**，随内容长高。
+    // 空内容 / JS 未跑时的保底高度交给 CSS 的 min-height（.prompt-input）；
+    // 上限仍是 320，而"面板再高也不许超过屏幕 38%"那条由 CSS 的 max-height 夹 ——
+    // 两者同时存在时浏览器取小的那个，所以这里不需要知道视口有多高。
+    var next = Math.min(320, input.scrollHeight);
+    input.style.height = next + 'px';
+  }
+
+  /**
+   * [CUSTOM- 把底栏**此刻的高度**写给 CSS（--vac-composer-h）。
+   *
+   * 底栏是绝对定位、浮在消息之上的（styles.ts 的 .composer），占位得靠留白补回来：
+   * #messages 的 padding-bottom 与 #jumpToLatest 的 bottom 都用这个变量。高度随输入框在
+   * 1 行与多行之间变化，所以只能量 —— 用 ResizeObserver 观察底栏本身，而不是去列"哪些事件
+   * 会改变它的高度"（pitfall #27：那种清单必然落后）。
+   */
+  function watchHeight() {
+    var composerEl = NS.dom.qs('composer');
+    // 桩 DOM（src/test/chat-client.test.ts）没有 #composer，它的 body.style 也没有
+    // setProperty ⇒ 判空跳过，别让这条新代码把客户端逻辑测试打红。
+    if (!composerEl || !document.body || !document.body.style || !document.body.style.setProperty) { return; }
+    function apply() {
+      var height = composerEl.offsetHeight;
+      document.body.style.setProperty('--vac-composer-h', height + 'px');
+      // [CUSTOM- 高度变了就进滚动诊断（这条链是这个 bug 的第一嫌疑）。
+      if (NS.scroll && NS.scroll.noteGeometry) { NS.scroll.noteGeometry('composer', height); }
+      // [CUSTOM- 留白变了 ⇒ 视口判定要跟着重算（scroll 事件不会来，见 scroll.ts 的 reflow）。
+      if (NS.scroll && NS.scroll.reflowNow) { NS.scroll.reflowNow(); }
+    }
+    applyHeight = apply;
+    apply();
+    if (typeof window.ResizeObserver === 'function') {
+      var observer = new window.ResizeObserver(apply);
+      observer.observe(composerEl);
+    } else {
+      // 与 rail.ts 的 onResize 同一个态度：没有 ResizeObserver 时说一声，而不是静默错位。
+      // （resize 兜底由下面那条统一的监听负责，这里只出声。）
+      console.warn('[vac] ResizeObserver unavailable: the composer will not make room when it grows');
+    }
+    // [CUSTOM- 观测器在「文档没在渲染」的时段不可靠：2026-10-09 的真机实验里，
+    // display:none 循环（hide → show）只收到过初始那一次回调 —— hide 和恢复都不报（pitfalls #62）。
+    // 而这段留白是**承重**的（变量停在 0 时，贴底 = 内容末尾被输入卡压住、还滚不动），
+    // 不能押在回调上：文档重新可见 / 窗口尺寸变化时自己再量一次。apply 幂等（值没变时
+    // noteGeometry 去重、setProperty 同值、reflowNow 只在贴底时写一次 scrollTop）。
+    if (document.addEventListener) {
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState && document.visibilityState !== 'visible') { return; }
+        apply();
+      });
+    }
+    if (window.addEventListener) { window.addEventListener('resize', apply); }
+  }
+  // [CUSTOM- 给 scroll.ts 的「尾巴被输入卡压住」自愈用的重测出口（见那里的
+  // healIfTailCovered）—— 判据在滚动侧（用户看得见的结果），重新落地的动作在这里（唯一写者）。
+  var applyHeight = null;
+
+  // --- Add menu () ----------------------------------------
+  // 输入栏 '+' 菜单：一级「工作区目录 / 文件或文件夹」，二级「返回 + 目录列表 + Browse」。
+  // 额外根目录（additionalDirectories）草稿页可编辑、已有会话只读；真相在 boot 的 draft 对象上。
+
+  function closeAddMenu() {
+    if (addMenu) { addMenu.className = 'picker-menu'; }
+    addMenuLevel = 0;
+  }
+
+  function setDirectoryChoices(message) {
+    state.workspaceFolders = (message && message.workspaceFolders) || [];
+  }
+
+  function toggleAdditionalDirectory(path) {
+    var list = state.additionalDirectories.slice();
+    var idx = list.indexOf(path);
+    if (idx >= 0) { list.splice(idx, 1); } else { list.push(path); }
+    if (state.draft) { NS.draft.setAdditionalDirectories(state.draft.draftId, list); }
+  }
+
+  function setPickedDirectory(path) {
+    if (!path) { return; }
+    var list = state.additionalDirectories.slice();
+    if (list.indexOf(path) < 0) { list.push(path); }
+    if (state.draft) { NS.draft.setAdditionalDirectories(state.draft.draftId, list); }
+  }
+
+  // [CUSTOM- 'Files or folders' 的文件选择器结果：草稿页本地攒、会话页走 attachPath。
+  function setPickedFiles(paths) {
+    if (!paths || paths.length === 0) { return; }
+    if (state.draft) { addDraftPaths(paths); }
+    else if (state.sessionId) { NS.bridge.post({ type: 'attachPath', sessionId: state.sessionId, paths: paths }); }
+  }
+
+  function setAdditionalDirectories(list) {
+    state.additionalDirectories = list || [];
+    renderAdditionalDirectories();
+    if (addMenu && addMenu.className.indexOf('open') !== -1 && addMenuLevel === 1) { renderAddMenu(); }
+  }
+
+  function renderAdditionalDirectories() {
+    if (!additionalDirectoriesEl) { return; }
+    NS.dom.clear(additionalDirectoriesEl);
+    var list = state.additionalDirectories || [];
+    for (var i = 0; i < list.length; i++) {
+      (function (path) {
+        var chip = NS.dom.el('span', 'attachment');
+        var icon = NS.icons.icon('folder', 'chip-icon');
+        if (icon) { chip.appendChild(icon); }
+        chip.appendChild(NS.dom.el('span', 'attachment-name', basenameOf(path)));
+        chip.title = path;
+        if (!state.addDirectoriesReadonly) {
+          var remove = NS.dom.el('button', 'attachment-x', '\\u00d7');
+          remove.title = 'Remove directory';
+          remove.addEventListener('click', function () { toggleAdditionalDirectory(path); });
+          chip.appendChild(remove);
+        }
+        additionalDirectoriesEl.appendChild(chip);
+      })(list[i]);
+    }
+    additionalDirectoriesEl.hidden = list.length === 0;
+    // [CUSTOM- '+' 现在是复合入口（还有 Files or folders），所以**不再**按会话隐藏；
+    // 「Workspace directories」在已有会话里灰置（见 renderAddMenu），Files or folders 照常可用。
+  }
+
+  /** 一级菜单项：图标 + 文字。 */
+  function addMenuItem(action, iconKind, label) {
+    var item = NS.dom.el('button', 'picker-item');
+    item.type = 'button';
+    item.setAttribute('data-add-action', action);
+    var icon = NS.icons.icon(iconKind, 'chip-icon');
+    if (icon) { item.appendChild(icon); }
+    item.appendChild(NS.dom.el('span', 'add-menu-label', label));
+    return item;
+  }
+
+  function renderAddMenu() {
+    if (!addMenu) { return; }
+    NS.dom.clear(addMenu);
+    if (addMenuLevel === 0) {
+      // [CUSTOM- 已有会话里 additionalDirectories 已锁死不可改 ⇒ 灰置该项；
+      // Files or folders（文件引用）任何阶段都能用，照常。
+      var dirsItem = addMenuItem('directories', 'folder', 'Workspace directories');
+      if (state.addDirectoriesReadonly) { dirsItem.disabled = true; }
+      addMenu.appendChild(dirsItem);
+      addMenu.appendChild(addMenuItem('files', 'document', 'Files or folders'));
+      return;
+    }
+    // 二级：返回 + 目录列表 + Browse。
+    var back = NS.dom.el('button', 'picker-item');
+    back.type = 'button';
+    back.setAttribute('data-add-dir', '__back__');
+    back.appendChild(NS.dom.el('span', 'add-menu-label', '← Back'));
+    addMenu.appendChild(back);
+    var folders = state.workspaceFolders || [];
+    var cwd = state.draft ? state.draft.cwd : null;
+    var shown = 0;
+    for (var i = 0; i < folders.length; i++) {
+      if (cwd && folders[i] === cwd) { continue; }
+      var item = NS.dom.el('button', 'picker-item' + (state.additionalDirectories.indexOf(folders[i]) >= 0 ? ' active' : ''));
+      item.type = 'button';
+      item.setAttribute('data-add-dir', folders[i]);
+      var dirIcon = NS.icons.icon('folder', 'chip-icon');
+      if (dirIcon) { item.appendChild(dirIcon); }
+      item.appendChild(NS.dom.el('span', 'add-menu-label', basenameOf(folders[i])));
+      item.title = folders[i];
+      addMenu.appendChild(item);
+      shown++;
+    }
+    if (shown === 0) {
+      addMenu.appendChild(NS.dom.el('div', 'picker-group', 'No workspace folders'));
+    }
+    var browse = NS.dom.el('button', 'picker-item');
+    browse.type = 'button';
+    browse.setAttribute('data-add-dir', '__browse__');
+    var browseIcon = NS.icons.icon('folder', 'chip-icon');
+    if (browseIcon) { browse.appendChild(browseIcon); }
+    browse.appendChild(NS.dom.el('span', 'add-menu-label', 'Browse…'));
+    addMenu.appendChild(browse);
+  }
+
+  // --- Slash commands ------------------------------------------------------
+
+  function currentQuery() {
+    var value = input.value;
+    if (value.length === 0 || value.charAt(0) !== '/') { return null; }
+    if (value.indexOf(' ') !== -1) { return null; }
+    return value.slice(1).toLowerCase();
+  }
+
+  function updateSlashPopup() {
+    autoGrow();
+    var query = currentQuery();
+    if (query === null || state.commands.length === 0) { hideSlash(); return; }
+
+    var matches = [];
+    for (var i = 0; i < state.commands.length; i++) {
+      var cmd = state.commands[i];
+      if (query.length === 0 || String(cmd.name).toLowerCase().indexOf(query) === 0) {
+        matches.push(cmd);
+      }
+    }
+    if (matches.length === 0) { hideSlash(); return; }
+
+    state.slashMatches = matches;
+    if (state.slashIndex >= matches.length) { state.slashIndex = 0; }
+    renderSlash();
+  }
+
+  function renderSlash() {
+    NS.dom.clear(slashPopup);
+    for (var i = 0; i < state.slashMatches.length; i++) {
+      var cmd = state.slashMatches[i];
+      // [CUSTOM- A real <button>: the popup was mouse-only before.
+      var item = NS.dom.el('button', 'slash-item' + (i === state.slashIndex ? ' active' : ''));
+      item.type = 'button';
+      item.appendChild(NS.dom.el('span', 'slash-name', '/' + cmd.name));
+      var desc = cmd.description || cmd.inputHint || '';
+      if (desc) { item.appendChild(NS.dom.el('span', 'slash-desc', desc)); }
+      bindSlashItem(item, i);
+      slashPopup.appendChild(item);
+    }
+    slashPopup.hidden = false;
+  }
+
+  function bindSlashItem(item, index) {
+    item.addEventListener('mouseenter', function () {
+      state.slashIndex = index;
+      renderSlash();
+    });
+    item.addEventListener('click', function (event) {
+      event.preventDefault();
+      state.slashIndex = index;
+      acceptSlash();
+    });
+  }
+
+  function moveSlash(delta) {
+    var count = state.slashMatches.length;
+    if (count === 0) { return; }
+    state.slashIndex = (state.slashIndex + delta + count) % count;
+    renderSlash();
+  }
+
+  function acceptSlash() {
+    var cmd = state.slashMatches[state.slashIndex];
+    if (!cmd) { hideSlash(); return; }
+    input.value = '/' + cmd.name + ' ';
+    hideSlash();
+    input.focus();
+    autoGrow();
+  }
+
+  function hideSlash() {
+    slashPopup.hidden = true;
+    state.slashMatches = [];
+    state.slashIndex = 0;
+  }
+
+  // --- Config pickers ------------------------------------------------------
+
+  function closeMenus() {
+    var menus = pickersEl.querySelectorAll('.picker-menu');
+    for (var i = 0; i < menus.length; i++) { menus[i].className = 'picker-menu'; }
+  }
+
+  function optionLabel(option) {
+    var value = option.currentValue;
+    if (option.type === 'boolean') { return value ? 'On' : 'Off'; }
+    // [CUSTOM- 自定义模型：agent 经 '_meta.extraModels' 注入后把模型列为**裸 id**，
+    // currentValue 命中自定义 modelId 时显示配置的 name，否则落到 agent 候选（找不到再回退裸值）。
+    if (option.category === 'model') {
+      var customName = customModelName(value);
+      if (customName !== null) { return customName; }
+    }
+    var options = option.options || [];
+    for (var i = 0; i < options.length; i++) {
+      var entry = options[i];
+      if (entry && entry.options) {
+        for (var j = 0; j < entry.options.length; j++) {
+          if (entry.options[j].value === value) { return entry.options[j].name; }
+        }
+      } else if (entry && entry.value === value) {
+        return entry.name;
+      }
+    }
+    return String(value);
+  }
+
+  // [CUSTOM- 自定义模型的显示名（按 modelId 查）；没命中返回 null。
+  function customModelName(modelId) {
+    var custom = state.customModels || [];
+    for (var i = 0; i < custom.length; i++) {
+      if (String(custom[i].modelId) === String(modelId)) {
+        return custom[i].name || custom[i].modelId;
+      }
+    }
+    return null;
+  }
+
+  function iconFor(category) {
+    if (category === 'mode') { return '\\u26a1'; }
+    if (category === 'model') { return '\\u25c8'; }
+    if (category === 'thought_level') { return '\\u22ef'; }
+    return '\\u2699';
+  }
+
+  function renderPickers() {
+    NS.dom.clear(pickersEl);
+    var options = state.configOptions || [];
+    for (var i = 0; i < options.length; i++) {
+      var option = options[i];
+      if (option.type !== 'select' && option.type !== 'boolean') { continue; }
+      pickersEl.appendChild(buildPicker(option));
+    }
+  }
+
+  function buildPicker(option) {
+    var wrap = NS.dom.el('div', 'picker');
+    var btn = NS.dom.el('button', 'picker-btn');
+    btn.type = 'button';
+    // [CUSTOM- 草稿页的选择器不是"现有会话的设置"，而是"这条消息将要创建的那个
+    // 会话的选择"——不说清楚，按钮上显示的值（来自该 agent 上一次会话）会被当成新会话已有的值。
+    var hint = option.description || option.name || option.id;
+    btn.title = state.draft ? 'For the session this message creates: ' + hint : hint;
+    btn.appendChild(NS.dom.el('span', 'picker-icon', iconFor(option.category)));
+    btn.appendChild(NS.dom.el('span', 'picker-label', optionLabel(option)));
+    wrap.appendChild(btn);
+
+    var menu = NS.dom.el('div', 'picker-menu');
+    wrap.appendChild(menu);
+
+    btn.addEventListener('click', function (event) {
+      event.stopPropagation();
+      var wasOpen = menu.className.indexOf('open') !== -1;
+      closeMenus();
+      if (!wasOpen) {
+        menu.className = 'picker-menu open';
+        renderMenu(menu, option);
+      }
+    });
+    return wrap;
+  }
+
+  function renderMenu(menu, option) {
+    NS.dom.clear(menu);
+    if (option.type === 'boolean') {
+      menu.appendChild(menuItem(menu, option, option.currentValue ? false : true, option.currentValue ? 'Off' : 'On'));
+      return;
+    }
+    var options = option.options || [];
+    for (var i = 0; i < options.length; i++) {
+      var entry = options[i];
+      if (entry && entry.options) {
+        menu.appendChild(NS.dom.el('div', 'picker-group', entry.name || ''));
+        for (var j = 0; j < entry.options.length; j++) {
+          menu.appendChild(menuItem(menu, option, entry.options[j].value, entry.options[j].name));
+        }
+      } else if (entry) {
+        menu.appendChild(menuItem(menu, option, entry.value, entry.name));
+      }
+    }
+    // [CUSTOM- 自定义模型现在由 agent 经 '_meta.extraModels' 注入后进入 model 配置项
+    // （见 SessionManager），这里不再硬塞一个「自定义」分组 —— 再塞会与 agent 候选重复。
+  }
+
+  function menuItem(menu, option, value, label) {
+    // [CUSTOM- A real <button> — the config menus were mouse-only.
+    var item = NS.dom.el('button', 'picker-item' + (String(option.currentValue) === String(value) ? ' active' : ''), label);
+    item.type = 'button';
+    item.setAttribute('aria-pressed', String(option.currentValue) === String(value) ? 'true' : 'false');
+    item.addEventListener('click', function (event) {
+      event.stopPropagation();
+      closeMenus();
+      // [CUSTOM- A draft has no session to configure yet — see chooseDraftValue.
+      if (state.draft) { chooseDraftValue(option, value); return; }
+      NS.bridge.post({
+        type: 'setConfigOption',
+        sessionId: state.sessionId,
+        configId: option.id,
+        value: String(value)
+      });
+    });
+    return item;
+  }
+
+  // --- Context meter (, 129 改圆环) ---------------------
+  // Claude Code 风格的上下文用量。数据来自 meta.usage（宿主已从 usage_update /
+  // PromptResponse.usage 填充），无需新增协议消息。
+  //
+  // [CUSTOM- 从"细条 + 百分比"改成**圆环 + 圆心数字**：底部按钮栏里横向空间
+  // 是稀缺的，而圆环在同样的高度下多给了一个"正在跑"的外圈动效（见 setRunning）。
+  var GAUGE_NS = 'http://www.w3.org/2000/svg';
+  var GAUGE_HALF = 13;          // viewBox is 26x26; every circle is centred here
+  var GAUGE_R = 9;              // the progress ring
+  var GAUGE_SPIN_R = 11.5;      // the "a turn is running" ring, well outside it
+  var GAUGE_C = 2 * Math.PI * GAUGE_R;
+
+  function gaugeCircle(className, radius) {
+    var circle = document.createElementNS(GAUGE_NS, 'circle');
+    circle.setAttribute('class', className);
+    circle.setAttribute('cx', String(GAUGE_HALF));
+    circle.setAttribute('cy', String(GAUGE_HALF));
+    circle.setAttribute('r', String(radius));
+    return circle;
+  }
+
+  /** A 26x26 pair of rings: the inner one is the progress, the outer one only shows up
+   * while a turn is running (CSS spins it). The gap between them is deliberate — with a
+   * smaller one the two rings touch and the outer arc stops reading as a separate ring. */
+  function buildGauge(pct) {
+    var root = document.createElementNS(GAUGE_NS, 'svg');
+    root.setAttribute('viewBox', '0 0 26 26');
+    root.setAttribute('width', '24');
+    root.setAttribute('height', '24');
+    root.setAttribute('aria-hidden', 'true');
+    root.appendChild(gaugeCircle('gauge-track', GAUGE_R));
+    var fill = gaugeCircle('gauge-fill', GAUGE_R);
+    // dasharray is the whole circumference and dashoffset hides the part not yet reached.
+    // SVG attributes cannot do calc(), so both numbers are computed here rather than in CSS.
+    fill.setAttribute('stroke-dasharray', String(GAUGE_C));
+    fill.setAttribute('stroke-dashoffset', String(GAUGE_C * (1 - pct)));
+    root.appendChild(fill);
+    root.appendChild(gaugeCircle('gauge-spin', GAUGE_SPIN_R));
+    return root;
+  }
+
+  // [CUSTOM- 现在画在 DOM 里的那组数字（见 renderContext 的"数值没变就不重建"）。
+  var drawnGauge = null;
+
+  function renderContext(usage) {
+    lastUsage = usage || null;
+    if (!lastUsage || !lastUsage.size) {
+      contextMeter.hidden = true;
+      drawnGauge = null;
+      return;
+    }
+    var pct = Math.max(0, Math.min(1, lastUsage.used / lastUsage.size));
+    var percent = Math.round(pct * 100);
+    var label = Math.round(lastUsage.used / 1000) + 'k / ' + Math.round(lastUsage.size / 1000) + 'k tokens';
+    // The cost line used to live in the header bar; that bar is gone, so it rides in the
+    // tooltip rather than being dropped.
+    //
+    // [CUSTOM- 两位小数：agent 给的是一枚裸浮点（实测 2.6394680000000004
+    // —— 累计值反复相加的浮点噪声），原样拼进去就是"4.676045 USD"这种一长串。
+    // 金额只做展示、不参与计算，四舍五入到分即可；非数字（undefined/null/NaN）不显示。
+    // ⚠️ 本文件是嵌在模板字符串里的客户端代码，注释里也**不能出现反引号**（pitfalls #11）。
+    var cost = Number(lastUsage.costAmount);
+    if (lastUsage.costAmount !== undefined && lastUsage.costAmount !== null && isFinite(cost)) {
+      label += '  ' + cost.toFixed(2) + ' ' + (lastUsage.costCurrency || '');
+    }
+    // [CUSTOM- 思考 token：有就显示（官方插件的 thinking 卡片会动态显示它），
+    // 没有就不显示 —— 不猜、不编一个数。
+    if (typeof lastUsage.thoughtTokens === 'number' && lastUsage.thoughtTokens > 0) {
+      label += '  ·  ' + Math.round(lastUsage.thoughtTokens / 1000) + 'k thinking';
+    }
+    contextMeter.hidden = false;
+    contextMeter.title = percent + '%  ·  ' + label;
+    contextMeter.className = 'context-meter'
+      + (pct > 0.9 ? ' hot' : (pct > 0.7 ? ' warn' : ''))
+      + (state.running ? ' running' : '');
+    // [CUSTOM- 数字没变就**不要重建 DOM**，只改上面那几样（便宜、不碰结构）。
+    //
+    // 为什么必须这样：setRunning 会走到这里，而它由 sessionsChanged 驱动 —— 宿主**每收到一个
+    // agent_message_chunk 就 refreshSessions()**（见 ChatPanelHost 的 chunk 分支），于是流式
+    // 期间这里每秒重建几十次。而重建 <svg> 会让外圈那条 CSS 动画**从 0 重新开始**，它永远到不了
+    // 转起来的那一步 —— 用户看到的就是"任务进行中时外圈的闪烁失效，只剩下面多了一段圆环"。
+    // 实测（preview-records.mjs 的 #gauge-rebuild 档，判据是节点身份而非动画时钟）：
+    // sameSvgNode: false（修前）→ 修后为 true。⚠️ 本文件禁反引号，注释里也别写（pitfalls #11）。
+    var sameNumbers = drawnGauge && drawnGauge.used === lastUsage.used && drawnGauge.size === lastUsage.size;
+    if (!sameNumbers) {
+      NS.dom.clear(contextMeter);
+      contextMeter.appendChild(buildGauge(pct));
+      contextMeter.appendChild(NS.dom.el('span', 'gauge-text', String(percent)));
+      drawnGauge = { used: lastUsage.used, size: lastUsage.size };
+    }
+  }
+
+  // --- Attachments ---------------------------------------------------------
+
+  function renderAttachments() {
+    NS.dom.clear(attachmentsEl);
+    // [CUSTOM- 引用栏里除了已加的附件，还有**编辑器当前文件**那一格 —— 即使一条附件
+    // 都没有也要显示（那就是「给它一个 + 就能加进来」的入口）。
+    // [CUSTOM- 但它只在**还没引用**时出现：已引用的那一条在附件行里本来就有自己的
+    // chip，两个都摆出来就是重复 tag（用户 2026-10-09 报"编辑区重复选择时出现重复的 tag"，见图）。
+    // 去引用改走附件 chip 自己的 ×（那个 × 按"路径 + 区间"的同一性摘，只摘这一段）。
+    if (state.attachments.length === 0 && !activeFile) {
+      attachmentsEl.hidden = true;
+      return;
+    }
+    attachmentsEl.hidden = false;
+    if (activeFile && !isReferenced(activeFile)) { attachmentsEl.appendChild(activeFileChip(activeFile)); }
+    for (var i = 0; i < state.attachments.length; i++) {
+      (function (attachment) {
+        var chip = NS.dom.el('span', 'attachment');
+        // [CUSTOM- 图片附件：缩略图优先（本地缓存，无则回退成相框图标）。
+        if (attachment.kind === 'image') {
+          var thumb = imageThumbs[attachment.path];
+          if (thumb) {
+            var img = NS.dom.el('img', 'attachment-thumb');
+            img.setAttribute('src', thumb);
+            img.setAttribute('alt', attachment.name);
+            chip.appendChild(img);
+          } else {
+            chip.appendChild(NS.icons.icon('image', 'attachment-thumb-icon'));
+          }
+        } else {
+          // [CUSTOM- 文件附件也带图标（与引用栏那一格同一枚 </> 图形）——
+          // 用户 2026-10-09 报"已添加引用的文件 tag 左侧没有图标，需要加上"。
+          var fileIcon = NS.icons.icon('file', 'chip-icon');
+          if (fileIcon) { chip.appendChild(fileIcon); }
+        }
+        chip.appendChild(NS.dom.el('span', 'attachment-name', attachment.name));
+        var remove = NS.dom.el('button', 'attachment-x', '\\u00d7');
+        remove.title = 'Remove attachment';
+        remove.addEventListener('click', function () {
+          // [CUSTOM- 草稿上没有会话可 detach（那条消息是会话作用域的，发出去
+          // 也只会被宿主丢掉）⇒ 就地删掉本地那一份。
+          if (state.draft) {
+            var list = draftFiles[state.draft.draftId] || [];
+            for (var k = 0; k < list.length; k++) {
+              // [CUSTOM- 按**同一性**（路径 + 区间）摘：同一文件的多段各有自己的 ×。
+              // 引用栏那格的 × 退役后这里是唯一的摘除口 —— 按路径全摘会把别的段一起带走。
+              if (sameRef(list[k], attachment)) { list.splice(k, 1); break; }
+            }
+            syncDraftAttachments();
+            refreshControls();
+            return;
+          }
+          // [CUSTOM- 同样带上区间：宿主的 detachFile **不带区间 = 该路径全摘**（207），
+          // 那会把同一个文件别的段一起摘掉。
+          NS.bridge.post({
+            type: 'detachFile', sessionId: state.sessionId, path: attachment.path,
+            lineStart: attachment.lineStart, lineEnd: attachment.lineEnd,
+          });
+        });
+        chip.appendChild(remove);
+        attachmentsEl.appendChild(chip);
+      })(state.attachments[i]);
+    }
+  }
+
+  // [CUSTOM- 「编辑器当前文件」那一格。
+  //
+  // 与官方插件同一件事：不用先去别处找文件、Attach File —— 正在看的那个文件就在引用栏里，
+  // 点 '+' 加进来。已引用与否**从附件列表现算**（不另存一份状态，否则两条真相迟早对不上 ——
+  // pitfalls #19）；宿主的 'attachments' 回复一到，这一格自己就**消失**（214：已引用的那条
+  // 在附件行里有自己的 chip，两处都显示就是重复 tag）。
+  function refLabel(file) {
+    var range = '';
+    if (file.lineStart) {
+      range = ':' + file.lineStart
+        + (file.lineEnd && file.lineEnd > file.lineStart ? '-' + file.lineEnd : '');
+    }
+    return (file.name || file.path) + range;
+  }
+
+  // [CUSTOM- 引用的**同一性 = 路径 + 行区间**：同一个文件的不同段是两条引用
+  // （用户要求"当前框选的行与已添加引用的不同，则显示 +"）。没有区间的（拖拽/粘贴进来的文件）
+  // 按路径比 —— 与它们本来的行为一致。
+  function sameRef(a, b) {
+    if (a.path !== b.path) { return false; }
+    return (a.lineStart || 0) === (b.lineStart || 0) && (a.lineEnd || 0) === (b.lineEnd || 0);
+  }
+
+  function isReferenced(file) {
+    var list = state.attachments || [];
+    for (var i = 0; i < list.length; i++) { if (sameRef(list[i], file)) { return true; } }
+    return false;
+  }
+
+  function activeFileChip(file) {
+    // [CUSTOM- 一整格**一个 chip**：外壳负责描边/底色（预选态：强调色底 + 虚线），
+    // 里面是 tag（图标 + 文件名，点了 openFile）+ 开关（'+'）。两个都是真按钮、**平级**
+    // 而不是嵌套（button 里不能放 button），键盘各自可达；开关不再露在 chip 外面（用户嫌突兀）。
+    // [CUSTOM- "已引用"那一态连同外壳的 × 一起退役：已引用时这一格**根本不出现**
+    // （见 renderAttachments 里那道 !isReferenced 门槛；去引用走附件 chip 的 ×，它按
+    // "路径 + 区间"的同一性摘）——两个都摆出来正是用户报的"重复 tag"。
+    var wrap = NS.dom.el('span', 'ref-chip');
+
+    var tag = NS.dom.el('button', 'ref-tag');
+    tag.type = 'button';
+    tag.setAttribute('data-path', file.path);
+    tag.title = file.path + (file.lineStart
+      ? ' (lines ' + file.lineStart + '-' + (file.lineEnd || file.lineStart) + ')' : '');
+    var icon = NS.icons.icon('file', 'chip-icon');
+    if (icon) { tag.appendChild(icon); }
+    tag.appendChild(NS.dom.el('span', 'ref-label', refLabel(file)));
+    wrap.appendChild(tag);
+
+    var toggle = NS.dom.el('button', 'ref-toggle', '+');
+    toggle.type = 'button';
+    toggle.title = 'Add this file to the message';
+    toggle.setAttribute('aria-label', toggle.title);
+    toggle.addEventListener('click', function (event) {
+      event.preventDefault();
+      attachReference(file);
+    });
+    wrap.appendChild(toggle);
+    return wrap;
+  }
+
+  /** 把当前文件加进这条消息的引用：会话页发 attachPath，草稿页先本地攒着（193）。 */
+  function attachReference(file) {
+    var meta = { name: refLabel(file) };
+    if (file.lineStart) { meta.lineStart = file.lineStart; meta.lineEnd = file.lineEnd || file.lineStart; }
+    if (state.draft) { addDraftPaths([file.path], [meta]); return; }
+    if (!state.sessionId) { return; }
+    NS.bridge.post({ type: 'attachPath', sessionId: state.sessionId, paths: [file.path], meta: [meta] });
+  }
+
+  /** 宿主推来的「编辑器当前文件」变了（含选区行区间；null = 没有打开的文件）。 */
+  function setActiveFile(file) {
+    activeFile = file && file.path ? file : null;
+    renderAttachments();
+  }
+
+  // --- Draft mode () ------------------------------------
+
+  // [CUSTOM- 草稿页攒下的附件：draftId -> [{ id, kind, name, path, mimeType, dataUrl }]。
+  //
+  // 为什么客户端要自己存一份：附件本来是**会话作用域**的（宿主按 sessionId 存），而草稿还没有
+  // 会话 —— 于是"新建会话页粘一张图"在 boot.attachImage 里就被那句 "no session is focused" 拒了，
+  // 图根本发不出去（用户报的正是它）。现在草稿先把它攒在这里（展示 chip 用其中一小部分字段），
+  // 首条消息（createDraftAndSend）时随消息交给宿主，宿主建完会话再走**同一条**附件通道落账。
+  // 按 draftId 记（同文本草稿按 draftId 存的理由一样：切走再切回不该串）。
+  // 只在内存里：base64 很大，不跟着 webview 状态持久化。
+  var draftFiles = {};
+
+  /** 这份草稿的附件（给 renderAttachments 用的轻量视图，不带 base64）。 */
+  function draftFilesOf(draftId) {
+    var list = draftId ? draftFiles[draftId] : null;
+    var out = [];
+    if (!list) { return out; }
+    for (var i = 0; i < list.length; i++) {
+      out.push({
+        id: list[i].id, kind: list[i].kind, name: list[i].name, path: list[i].path,
+        // [CUSTOM- 区间也要带过来：引用的同一性（路径 + 区间）靠它判断（见 sameRef）——
+        // 漏了它，"同一段加过没有"永远答"没有"，同一段会被攒下两次。
+        lineStart: list[i].lineStart, lineEnd: list[i].lineEnd,
+      });
+    }
+    return out;
+  }
+
+  /** 把草稿页当前该显示的附件刷成这份草稿自己的（切草稿/进草稿都走它）。 */
+  function syncDraftAttachments() {
+    state.attachments = state.draft ? draftFilesOf(state.draft.draftId) : [];
+    renderAttachments();
+  }
+
+  /** 草稿页收到一张粘贴的位图（boot.attachImage 在没有会话时转到这里）。 */
+  function addDraftImage(info) {
+    if (!state.draft || !info || !info.id) { return false; }
+    var draftId = state.draft.draftId;
+    var list = draftFiles[draftId] || (draftFiles[draftId] = []);
+    list.push({
+      id: info.id, kind: 'image', name: info.name || 'image',
+      path: info.id, mimeType: info.mimeType || 'image/png', dataUrl: info.dataUrl,
+    });
+    rememberImage(info.id, info.dataUrl);
+    syncDraftAttachments();
+    refreshControls();
+    return true;
+  }
+
+  /** 草稿页收到拖入/粘贴的文件路径（同上）。 */
+  function addDraftPaths(paths, meta) {
+    if (!state.draft || !paths || paths.length === 0) { return false; }
+    var draftId = state.draft.draftId;
+    var list = draftFiles[draftId] || (draftFiles[draftId] = []);
+    var labels = meta && meta.length ? meta : [];
+    for (var i = 0; i < paths.length; i++) {
+      var p = String(paths[i] || '');
+      if (!p) { continue; }
+      // [CUSTOM- 显示名优先用调用方给的（编辑器那条带行区间），否则 basename。
+      var m = labels[i] || {};
+      var label = typeof m.name === 'string' && m.name ? m.name : basenameOf(p);
+      // [CUSTOM- 行区间也存下来：同一性（路径 + 区间）要用它判断"这一段加过没有"。
+      list.push({
+        id: 'file-' + Date.now() + '-' + i, kind: 'file', name: label, path: p,
+        lineStart: m.lineStart, lineEnd: m.lineEnd,
+      });
+    }
+    syncDraftAttachments();
+    refreshControls();
+    return true;
+  }
+
+  function basenameOf(p) {
+    var parts = String(p).split(/[\\\\/]/);
+    return parts[parts.length - 1] || p;
+  }
+
+  /** Switch the composer into draft mode: enabled, but bound to no session yet. */
+  function setDraft(draft) {
+    // [CUSTOM- Stash BEFORE the state changes — the outgoing owner may be
+    // another DRAFT, and losing its text is what this fix is about.
+    stashDraft();
+    state.sessionId = null;
+    state.agentName = null;
+    state.running = false;
+    state.loading = false;
+    state.draft = draft ? { draftId: draft.draftId, cwd: draft.cwd || null } : null;
+    // [CUSTOM- 用户在这个草稿页上选过的配置项（configId → value），随草稿存活。
+    // 存回 boot 持有的那个 draft 对象上：切换草稿/切走再切回时它还在，而且**只有一份**
+    // （composer 只读它，pitfall #19 的"两份副本"在这里要避开）。
+    selections = draft ? (draft.selections || {}) : {};
+    if (draft) { draft.selections = selections; }
+    state.draftPending = false;
+    // [CUSTOM- 附件也按草稿记（切走再切回不该串，同文本草稿的道理）。
+    state.attachments = draftFilesOf(state.draft ? state.draft.draftId : null);
+    // [CUSTOM- 草稿页可编辑额外根目录（additionalDirectories）；真相在 draft 对象上。
+    state.additionalDirectories = draft ? (draft.additionalDirectories || []) : [];
+    state.addDirectoriesReadonly = false;
+    renderAdditionalDirectories();
+    // No session ⇒ no 'meta' yet: mode/model/commands only arrive once the agent
+    // has created the session. That is inherent to a draft, not an oversight.
+    // [CUSTOM- …but the panel no longer leaves it at that: the HOST keeps a
+    // snapshot of this agent's last session (config options + available commands) and
+    // 'setDraftOptions' fills these two in from it. They are the *candidates* for the
+    // session this message will create — not that session's state, which does not exist yet.
+    state.commands = [];
+    state.configOptions = [];
+    hideSlash();
+    renderPickers();
+    renderAttachments();
+    // [CUSTOM- 草稿没有会话，也就没有用量：不清的话输入框右侧的上下文表盘会**留着
+    // 上一个会话的数字**（用户截图：新建会话还显示着上一条的百分比）。
+    renderContext(null);
+    refreshControls();
+    // …and hand back what THIS draft had. Without it, switching drafts carried the
+    // previous draft's text across (and a discarded-then-reopened draft came back empty).
+    restoreDraft(state.draft ? state.draft.draftId : null);
+    autoGrow();
+    // [CUSTOM- Ask the host for the composer's options. A draft has no session,
+    // and mode/model/commands are session-scoped in ACP, so the host answers from a snapshot of
+    // this agent's LAST session ('setDraftOptions'). The request lives here rather than in boot
+    // because the component that has to render the answer is the one that knows it is missing;
+    // draftId rides along so a late answer cannot land on a different draft.
+    if (state.draft) {
+      NS.bridge.post({ type: 'listDraftOptions', draftId: state.draft.draftId });
+    }
+  }
+
+  /**
+   * [CUSTOM- The host answered 'listDraftOptions'.
+   *
+   * Guarded by 'draftId': the answer is asynchronous, so by the time it lands the user may have
+   * switched to another draft (or dropped this one). Applying it anyway is how a value chosen
+   * for draft A silently shows up in draft B — see pitfall #23's family.
+   */
+  function setDraftOptions(payload) {
+    if (!state.draft || state.draft.draftId !== payload.draftId) { return; }
+    state.configOptions = payload.configOptions || [];
+    state.commands = payload.availableCommands || [];
+    // [CUSTOM- 自定义模型随草稿选项一起到。
+    state.customModels = payload.customModels || [];
+    // The user's own picks outrank the snapshot's values: this draft may have been focused
+    // before, and the answer always arrives with the snapshot's (agent-side) current values.
+    applyDraftSelections();
+    renderPickers();
+    refreshControls();
+  }
+
+  /**
+   * [CUSTOM- Put the values the user already picked back onto a fresh snapshot copy.
+   *
+   * Only ids and values that the snapshot actually offers are replayed: a stale snapshot (the
+   * agent's model list changed) must not make the button label claim a value this agent no
+   * longer has — the host would then skip it silently at creation time.
+   */
+  function applyDraftSelections() {
+    for (var i = 0; i < state.configOptions.length; i++) {
+      var option = state.configOptions[i];
+      if (!Object.prototype.hasOwnProperty.call(selections, option.id)) { continue; }
+      var value = selections[option.id];
+      if (option.type === 'boolean') {
+        option.currentValue = value === 'true';
+      } else if (offersValue(option, value)) {
+        option.currentValue = value;
+      }
+    }
+  }
+
+  /** Does this select option still offer 'value'? (Both the flat and the grouped shape.) */
+  function offersValue(option, value) {
+    var options = option.options || [];
+    for (var i = 0; i < options.length; i++) {
+      var entry = options[i];
+      if (!entry) { continue; }
+      if (entry.options) {
+        for (var j = 0; j < entry.options.length; j++) {
+          if (String(entry.options[j].value) === value) { return true; }
+        }
+      } else if (String(entry.value) === value) {
+        return true;
+      }
+    }
+    // [CUSTOM- 自定义模型也在候选里 —— 否则 setDraftOptions 回包时
+    // applyDraftSelections 会把用户选的自定义模型回滚掉（它不在 agent 的 options 里）。
+    if (option.category === 'model' && customModelName(value) !== null) { return true; }
+    return false;
+  }
+
+  /**
+   * [CUSTOM- The user picked a value on the DRAFT page: record it on the draft.
+   *
+   * Deliberately **no** 'setConfigOption' message: a draft has no sessionId, so that message
+   * would carry 'sessionId: null' and be dropped by the host's 'verifySession' guard (§5.4
+   * rule 1) — the user would have chosen something and nothing at all would happen. The choice
+   * travels with 'createDraftAndSend' instead, and the local copy's 'currentValue' is updated
+   * so the button says what it will do.
+   */
+  function chooseDraftValue(option, value) {
+    var next = option.type === 'boolean' ? (value === true || value === 'true') : String(value);
+    option.currentValue = next;
+    selections[option.id] = String(next);
+    renderPickers();
+  }
+
+  /** The draft's picked values, in protocol shape (only what the user actually touched). */
+  function draftSelections() {
+    var out = [];
+    for (var id in selections) {
+      if (Object.prototype.hasOwnProperty.call(selections, id)) {
+        out.push({ configId: id, value: selections[id] });
+      }
+    }
+    return out;
+  }
+
+  /** The user picked a directory for the focused draft. */
+  function updateDraftCwd(draftId, cwd) {
+    if (!state.draft || state.draft.draftId !== draftId) { return; }
+    state.draft.cwd = cwd || null;
+    refreshControls();
+  }
+
+  /** The first message was accepted: leave draft mode and clear the box. */
+  function resolveDraft() {
+    // [CUSTOM- 附件已随首条消息交给宿主（draftResolved 才走到这里），本地这份清掉；
+    // 与 textarea 同一条规矩 —— 失败时（failDraft）文字和图片都留着。
+    if (state.draft) { delete draftFiles[state.draft.draftId]; }
+    state.draft = null;
+    state.draftPending = false;
+    state.attachments = [];
+    input.value = '';
+    autoGrow();
+    renderAttachments();
+    refreshControls();
+  }
+
+  /** Creating the session failed: stay in draft mode AND keep the typed text. */
+  function failDraft() {
+    state.draftPending = false;
+    refreshControls();
+    input.focus();
+  }
+
+  // --- Public API ----------------------------------------------------------
+
+  function setFocus(summary, meta) {
+    // [CUSTOM- Draft mode and session mode are mutually exclusive —
+    // 'send()' branches on 'state.draft', so a stale one would misroute a send.
+    var wasDraft = !!state.draft;
+    var changed = wasDraft || !state.sessionId || !summary || summary.sessionId !== state.sessionId;
+    // [CUSTOM- Stash BEFORE the id changes, so the outgoing
+    // session's draft is filed under its own id rather than the incoming one.
+    // [CUSTOM- …and before 'state.draft' is cleared: a draft's text is
+    // filed under the draft's id, so clearing it first would make ownerKey() null and
+    // drop the text (which is exactly the reported data loss).
+    if (changed) { stashDraft(); }
+    // [CUSTOM- 换会话：上一轮的那一问不该跟过来。
+    if (changed) { hideStopAsk(); }
+    // [CUSTOM- 同理：能力是**每个 agent 一份**的，不能从上一个会话跟过来。
+    // 先按"不支持"处理（保守：宁可提示也不把消息发到不认它的 agent 上），meta 一到就更新。
+    if (changed) { state.steering = false; }
+    state.draft = null;
+    state.draftPending = false;
+    state.sessionId = summary ? summary.sessionId : null;
+    state.agentName = summary ? summary.agentName : null;
+    state.running = summary ? !!summary.running : false;
+    state.loading = summary ? !!summary.loading : false;
+    if (changed) {
+      state.attachments = [];
+      hideSlash();
+      // [CUSTOM- Only on an actual switch: re-assigning the value
+      // for the SAME session would move the caret to the end while the user is
+      // typing (a 'focus' for the already-focused session does arrive — e.g.
+      // clicking it again in the tree).
+      restoreDraft(state.sessionId);
+    }
+    if (meta) {
+      state.commands = meta.availableCommands || [];
+      state.configOptions = meta.configOptions || [];
+      // [CUSTOM- 只有"宿主明确说了"才改这个能力位：meta 缺失时保持原值，
+      // 免得一次 meta 丢失就把支持 steering 的会话降级成发不出去。
+      if (typeof meta.steering === 'boolean') { state.steering = meta.steering; }
+      // [CUSTOM- 会话的额外根目录（只读展示，来自宿主 meta）。
+      state.additionalDirectories = meta.additionalDirectories || [];
+      // [CUSTOM- 自定义模型别名（来自宿主 meta）。
+      state.customModels = meta.customModels || [];
+    } else {
+      state.commands = [];
+      state.configOptions = [];
+      state.additionalDirectories = [];
+      state.customModels = [];
+    }
+    // [CUSTOM- 已有会话：额外根目录只读（创建后锁死不可改）。
+    state.addDirectoriesReadonly = true;
+    renderPickers();
+    renderAttachments();
+    renderAdditionalDirectories();
+    renderContext(meta && meta.usage);
+    refreshControls();
+    autoGrow();
+  }
+
+  function setRunning(running) {
+    state.running = running;
+    // [CUSTOM- 轮次自己结束了（或切走了）：那一问就没有意义了。
+    if (!running) { hideStopAsk(); }
+    refreshControls();
+    // [CUSTOM- The ring's outer arc says "a turn is running", and this path
+    // has no meta of its own — redraw from the numbers we kept.
+    renderContext(lastUsage);
+  }
+
+  function setMeta(meta) {
+    state.commands = meta.availableCommands || [];
+    state.configOptions = meta.configOptions || [];
+    // [CUSTOM- 自定义模型别名（来自宿主 meta）。
+    state.customModels = meta.customModels || [];
+    // [CUSTOM- 能力位（见 setFocus 的同名处理）。
+    if (typeof meta.steering === 'boolean') { state.steering = meta.steering; }
+    renderPickers();
+    renderContext(meta.usage);
+    refreshControls();
+  }
+
+  function setAttachments(list) {
+    state.attachments = list || [];
+    renderAttachments();
+  }
+
+  // [CUSTOM- 客户端记录图片缩略图（boot.ts 读取剪贴板位图后调用）。
+  function rememberImage(id, dataUrl) {
+    imageThumbs[id] = dataUrl;
+    renderAttachments();
+  }
+
+  function setLoading(loading) {
+    state.loading = loading;
+    refreshControls();
+  }
+
+  function focusInput() { input.focus(); }
+  // [CUSTOM- Lets boot.ts decide whether it is appropriate to move
+  // the caret into the composer (no session / still loading = it is not).
+  function isComposable() { return canCompose(); }
+
+  NS.composer = {
+    // [CUSTOM- 编辑器当前文件（宿主推来）→ 引用栏那一格。
+    setActiveFile: setActiveFile,
+    init: init,
+    setFocus: setFocus,
+    setRunning: setRunning,
+    setMeta: setMeta,
+    setAttachments: setAttachments,
+    rememberImage: rememberImage,
+    setLoading: setLoading,
+    focusInput: focusInput,
+    isComposable: isComposable,
+    forgetDraft: forgetDraft,
+    setDraft: setDraft,
+    setDraftOptions: setDraftOptions,
+    updateDraftCwd: updateDraftCwd,
+    resolveDraft: resolveDraft,
+    failDraft: failDraft,
+    // [CUSTOM- 额外根目录（additionalDirectories）：boot 的 setter 回写、目录候选、
+    // Browse 结果都走这三个。
+    setAdditionalDirectories: setAdditionalDirectories,
+    setDirectoryChoices: setDirectoryChoices,
+    setPickedDirectory: setPickedDirectory,
+    // [CUSTOM- 'Files or folders' 文件选择器结果。
+    setPickedFiles: setPickedFiles,
+    // [CUSTOM- 草稿页的附件（boot 在没有会话时转到这里，见 attachImage/attachPaths）。
+    addDraftImage: addDraftImage,
+    addDraftPaths: addDraftPaths,
+    // [CUSTOM- 重测底栏高度并重写 --vac-composer-h（观测器可能哑火，见
+    // watchHeight 里的说明）。滚动侧的「尾巴被压住」自愈会调它 —— 判据在那边（用户看得见的
+    // 结果），唯一的写者仍然是这里。
+    refreshHeight: function () { if (applyHeight) { applyHeight(); } }
+  };
+})(window.__vac = window.__vac || {});
+`;
