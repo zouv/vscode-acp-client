@@ -20,8 +20,8 @@ check-docs.sh
 .gitattributes
 *.map
 *.ts
-!dist/**
 tsconfig.json
 vitest.config.ts
 eslint.config.mjs
 .vscode-test.mjs
+dist/extension.js.map
