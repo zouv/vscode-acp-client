@@ -46,7 +46,7 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 |---|------|------|
 | P1-1 | Codex 链路端到端验证 | 用真实 `codex-acp` 跑通连接/会话/工具调用；确认 `CodexUsageSource` 的用量口径与真实数据一致 |
 | P1-2 | 宿主实测验收 | `npm run dev:host` 目视验收 Dashboard 与聊天面板的渲染、统计数字是否对得上 |
-| P1-3 | 打包体积瘦身 | `dist/extension.js` 约 2 MB，主要来自 ACP SDK 全量引入；评估按需引入或裁剪 |
+| P1-3 | 打包体积瘦身 | `dist/extension.js` 1.42 MB（压缩后），主要来自 ACP SDK 全量引入；评估按需引入或裁剪 |
 | ~~P1-4~~ | ~~首次发布~~ | ✅ 已完成（2026-10-12）：v1.0.1 已打 GitHub Release 并附 `.vsix`；市场发布见 P2-5 |
 
 ### 🟢 远期 / 增强

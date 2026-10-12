@@ -16,12 +16,12 @@
 ## 状态快照
 
 - **最近更新**：2026-10-12
-- **整体状态**：✅ 无进行中的开发任务（M1 已交付并发布 v1.0.1，等待下一个需求）
-- **当前分支（必填）**：`main`，已与 `origin/main` 同步（`fe15283` 初始化 → `9a96770` 打包修复）。
+- **整体状态**：✅ 无进行中的开发任务（v1.0.2 已发布，等待下一个需求）
+- **当前分支（必填）**：`main`，与 `origin/main` 同步。
   **未经用户明确指示不要 commit / push。**
-- **最后验证状态**：`npm run lint` ✅ · `npm run typecheck` ✅ · `npm run test:unit` ✅（88 项）
-  · `npm test`（真实宿主）✅ 454 项通过 · `sh check-docs.sh` ✅ 0 警告
-  · `npx vsce package` ✅ 生成 `vscode-acp-client-1.0.1.vsix`（392 KB，已剔除 sourcemap）
+- **最后验证状态**：`npm run lint` ✅ · `npm run typecheck` ✅ · `npm run test:unit` ✅（90 项）
+  · `npm test`（真实宿主）✅ 456 项通过 · `sh check-docs.sh` ✅ 0 警告
+  · `npm run vsix` ✅ 生成 `release/vscode-acp-client-1.0.2.vsix`（打包产物固定落在 `release/`）
 
 ---
 
@@ -68,7 +68,7 @@
 ## 如何运行 / 测试（Quick Verify）
 
 - 运行（开发宿主）：`npm run dev:host`（宿主窗口内 `Ctrl+R` 重载生效）
-- 构建：`npm run compile`；生产打包：`npm run package`
+- 构建：`npm run compile`；生产打包：`npm run package`；打 `.vsix`：`npm run vsix`（产物落 `release/`）
 - 校验/测试：`npm run test:unit`（vitest，秒级）· `npm test`（编译 + lint + 真实宿主测试）
 - lint / 类型：`npm run lint` · `npm run typecheck`
 - 文档体检：`sh check-docs.sh`
@@ -78,8 +78,9 @@
 
 ## 关键决策记录（Key Decisions）
 
-- **v1.0.1 已发布**：GitHub Release <https://github.com/zouv/vscode-acp-client/releases/tag/v1.0.1>
-  附 `vscode-acp-client-1.0.1.vsix`。`.vsix` 不进 git（`.gitignore` 已忽略），只作为 Release 资产。
+- **v1.0.2 已发布**：GitHub Release <https://github.com/zouv/vscode-acp-client/releases/tag/v1.0.2>
+  附 `vscode-acp-client-1.0.2.vsix`。`.vsix` 不进 git（`.gitignore` 已忽略），只作为 Release 资产——
+  打包产物固定落 `release/`，由 `npm run vsix` 生成（见 `scripts/package-vsix.mjs`）。
 
 - **出处处理**：前身基线（`vendor/main`）中存在过的文件一律**重写**，不搬运原文；
   基线中不存在的自写文件（Chat 面板子系统、两个桥、`CustomModels`、`BuildInfo`、Dashboard 设计）直接沿用。
@@ -95,3 +96,5 @@
 
 - Dashboard 的价格表（`PRICING_AS_OF = '2026-01'`）需要按官方口径复核。
 - 是否要在首个发布版本里保留 `vac.restoreSessionsOnOpen` 的默认 `ask` 行为。
+- `doc-audit` skill 的扫描范围仍是「5 份根文档 + `docs/00-目录.md`」，**未覆盖 `arch/*.md`**——
+  这次分册的漂移正是靠人工扫出来的（本次用户选择先不改 skill）。
