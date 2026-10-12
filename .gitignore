@@ -1,0 +1,9 @@
+node_modules/
+dist/
+out/
+*.vsix
+*.map
+.vscode-test/
+.DS_Store
+release/
+.claude/explore-results/

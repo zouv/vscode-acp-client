@@ -1,0 +1,229 @@
+// 新 Chat 面板（Claude Code 优先）与面板路由层：新增文件。
+// ToolInvocation → 可序列化视图模型。旧面板对工具调用**完全不渲染详情**（没有 content、
+// 没有 diff、没有 terminal、没有 locations），这里把 ACP 能给的都保留下来。
+// 注意 ToolKind/ToolCallStatus 用的是 ACP 的真实取值（旧面板的 getStatusIcon 判的是
+// 'running'——那是个 ACP 从不发送的字符串，导致 pending/in_progress 都渲染成无色 '…'）。
+import type { ToolCallStatus, ToolKind } from '@agentclientprotocol/sdk';
+
+import { toContentView, type ContentBlockView } from './contentBlocks';
+import type { ToolInvocation, SubagentInfo } from '../transcript/types';
+
+/** One entry of a tool call's `content` collection. */
+export type ToolContentItem =
+  | { type: 'content'; block: ContentBlockView }
+  | { type: 'diff'; path: string; oldText: string | null; newText: string }
+  | { type: 'terminal'; terminalId: string };
+
+export interface ToolLocationView {
+  path: string;
+  name: string;
+  line?: number;
+}
+
+/** Serializable view model handed to the webview for one tool call. */
+export interface ToolCallView {
+  toolCallId: string;
+  title: string;
+  kind: ToolKind;
+  status: ToolCallStatus;
+  /** Command line, when the raw input carries one (`execute` tools). */
+  command: string | null;
+  // [CUSTOM- The agent's OWN description of the call ("List files in
+  // the working directory"), which is what the card head shows in place of the
+  // command line — the shape the official Claude Code panel uses. Latched by
+  // `ToolInvocationStore`; absent for tools that carry none (e.g. Read), where the
+  // client falls back to `title`.
+  description?: string;
+  /**
+   * [CUSTOM- The tool's raw output text, as a fallback for the OUT
+   * section when `items` carries nothing renderable.
+   *
+   * `rawOutput` is set by the agent on EVERY tool result (the captured replay has it
+   * on all six calls) while `items` depends on how the agent chose to format the
+   * result — for a Bash call the current adapter sends the output as a ```console
+   * text block when the client does not advertise terminal output, but the streamed
+   * `tool_call_update`s for the same call carry the DESCRIPTION as their content. So
+   * "no visible item, but an output string" is a state that really occurs, and
+   * without this field the reader gets an empty box.
+   */
+  output?: string;
+  // [CUSTOM- The agent's OWN name for the tool ("Bash" / "Read" /
+  // "Edit"), when it publishes one in `_meta`. `kind` is ACP's coarse vocabulary
+  // ("Run" / "Read"), so this is what tells two "Run" cards apart at a glance.
+  toolName?: string;
+  /**
+   * [CUSTOM- Set when this call delegated to a **sub-agent** and its result
+   * reported who that was (`_meta.claudeCode.toolResponse.agentType` …). The card marks
+   * itself with it, so the reader can tell a sub-agent's report from the main agent's own
+   * words — the two look identical otherwise (see SubagentInfo in transcript/types.ts).
+   */
+  subagent?: SubagentInfo;
+  locations: ToolLocationView[];
+  items: ToolContentItem[];
+  /**
+   * [CUSTOM- How long the call took, when it has finished.
+   *
+   * Computed HERE rather than shipping both timestamps: a finished duration needs
+   * no clock on the client. A call that is still running reports nothing — a live
+   * counter would mean a ticking re-render, and the pulsing status glyph already
+   * says "in progress".
+   */
+  elapsedMs?: number;
+  /**
+   * [CUSTOM- The tool's OWN reported duration in seconds
+   * (`_meta.claudeCode.toolResponse.elapsedTimeSeconds`). More accurate than
+   * `elapsedMs` (which includes transport and rendering overhead). Latched by
+   * the store because it only arrives on the completion update.
+   */
+  toolElapsedSeconds?: number;
+  /** Nesting parent, when a NestingStrategy inferred one (Phase 4). */
+  parentId?: string;
+  inferredParent?: boolean;
+}
+
+const DEFAULT_KIND: ToolKind = 'other';
+const DEFAULT_STATUS: ToolCallStatus = 'pending';
+
+/** Convert an indexed invocation into the serializable view model. */
+export function toToolCallView(inv: ToolInvocation): ToolCallView {
+  const view: ToolCallView = {
+    toolCallId: inv.toolCallId,
+    title: inv.title,
+    kind: inv.kind ?? DEFAULT_KIND,
+    status: inv.status ?? DEFAULT_STATUS,
+    command: extractCommand(inv.rawInput),
+    locations: inv.locations.map(l => ({
+      path: l.path,
+      name: basename(l.path),
+      line: typeof l.line === 'number' ? l.line : undefined,
+    })),
+    items: toToolContentItems(inv.content),
+  };
+  if (inv.endedAt !== undefined) { view.elapsedMs = Math.max(0, inv.endedAt - inv.startedAt); }
+  // [CUSTOM- 工具自己报的耗时（`toolResponse.elapsedTimeSeconds`）优先于
+  // `endedAt - startedAt`（后者含传输与渲染开销）。两者都在时显示工具的版本。
+  if (inv.toolElapsedSeconds !== undefined) { view.toolElapsedSeconds = inv.toolElapsedSeconds; }
+  if (inv.description) { view.description = inv.description; }
+  if (typeof inv.rawOutput === 'string' && inv.rawOutput.trim().length > 0) { view.output = inv.rawOutput; }
+  const toolName = extractToolName(inv.meta);
+  if (toolName) { view.toolName = toolName; }
+  // [CUSTOM- 委派给子 agent 的调用：身份由 store 锁存（见 latchSubagent）。
+  if (inv.subagent) { view.subagent = inv.subagent; }
+  if (inv.parentId) {
+    view.parentId = inv.parentId;
+    view.inferredParent = inv.inferredParent;
+  }
+  return view;
+}
+
+/**
+ * [CUSTOM- The agent's own tool name out of `_meta`, if it published
+ * one.
+ *
+ * `_meta` is vendor-specific by definition (ACP types it `unknown`), so this reads
+ * exactly one known shape and stays silent for anything else — guessing at a
+ * second vendor's key would be the "inferred, not reported" mistake that §5.6 of
+ * chat-panel.md warns about. Every tool call in the captured Claude Code replay
+ * carries `_meta.claudeCode.toolName`.
+ */
+function extractToolName(meta: unknown): string | undefined {
+  if (!meta || typeof meta !== 'object') { return undefined; }
+  const claudeCode = (meta as { claudeCode?: unknown }).claudeCode;
+  if (!claudeCode || typeof claudeCode !== 'object') { return undefined; }
+  const name = (claudeCode as { toolName?: unknown }).toolName;
+  return typeof name === 'string' && name.length > 0 ? name : undefined;
+}
+
+function toToolContentItems(content: unknown[]): ToolContentItem[] {
+  const items: ToolContentItem[] = [];
+  for (const raw of content) {
+    if (!raw || typeof raw !== 'object') { continue; }
+    const item = raw as { type?: string; [k: string]: unknown };
+    switch (item.type) {
+      case 'content': {
+        const block = toContentView(item.content as never);
+        if (block) { items.push({ type: 'content', block }); }
+        break;
+      }
+      case 'diff': {
+        items.push({
+          type: 'diff',
+          path: String(item.path ?? ''),
+          oldText: typeof item.oldText === 'string' ? item.oldText : null,
+          newText: typeof item.newText === 'string' ? item.newText : '',
+        });
+        break;
+      }
+      case 'terminal':
+        items.push({ type: 'terminal', terminalId: String(item.terminalId ?? '') });
+        break;
+      default:
+        break;
+    }
+  }
+  return items;
+}
+
+/**
+ * Best-effort command extraction. `rawInput` is typed `unknown` and is
+ * agent-specific, so this only recognises the obvious `{ command }` shapes.
+ */
+function extractCommand(rawInput: unknown): string | null {
+  if (!rawInput || typeof rawInput !== 'object') { return null; }
+  const input = rawInput as Record<string, unknown>;
+  const direct = input.command ?? input.cmd;
+  if (typeof direct === 'string' && direct.length > 0) { return direct; }
+  const args = input.args;
+  if (Array.isArray(args) && args.every(a => typeof a === 'string')) {
+    return args.join(' ');
+  }
+  return null;
+}
+
+// [CUSTOM- The three helpers below have no callers today — the
+// client renders the glyphs and labels itself (see the STATUS_GLYPH / KIND_LABEL
+// maps at the top of html/client/toolCallView.ts). They are kept rather than
+// deleted because they are the HOST-side spelling of the same knowledge, and a
+// host-side renderer (a log line, a tree item, a future panel) would want them.
+//
+// **If you change one, change the other.** Two copies of the same mapping is
+// exactly the drift that produced  (a key renamed on one side
+// only, updates silently dropped). Collapsing them properly means sending the
+// glyph/label from the host in ToolCallView — a protocol change, not this round.
+
+/** Human-readable status glyph. Keyed on the four real `ToolCallStatus` values. */
+export function statusGlyph(status: ToolCallStatus): string {
+  switch (status) {
+    case 'pending': return '◷';
+    case 'in_progress': return '◐';
+    case 'completed': return '✓';
+    case 'failed': return '✗';
+    default: return '•';
+  }
+}
+
+/** CSS class suffix for a status, matching the stylesheet. */
+export function statusClass(status: ToolCallStatus): string {
+  return `tc-${status}`;
+}
+
+/** Human-readable label for a tool kind. */
+export function kindLabel(kind: ToolKind): string {
+  switch (kind) {
+    case 'read': return 'Read';
+    case 'edit': return 'Edit';
+    case 'delete': return 'Delete';
+    case 'move': return 'Move';
+    case 'search': return 'Search';
+    case 'execute': return 'Run';
+    case 'think': return 'Think';
+    case 'fetch': return 'Fetch';
+    case 'switch_mode': return 'Mode';
+    default: return 'Tool';
+  }
+}
+
+function basename(p: string): string {
+  const parts = p.split(/[\\/]/);
+  return parts[parts.length - 1] || p;
+}

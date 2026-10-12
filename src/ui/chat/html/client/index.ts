@@ -1,0 +1,86 @@
+// 新 Chat 面板（Claude Code 优先）与面板路由层：新增文件。
+// 客户端模块装配：按依赖顺序拼接成一个 <script nonce>。
+//
+// webview 内没有模块系统（CSP 只允许带 nonce 的内联脚本），所以每个模块是一个 IIFE，
+// 统一挂到 `window.__vac` 命名空间下。顺序只影响**加载时**的相互引用；
+// 运行时引用（如 NS.bridge 由 boot 提供）不受顺序影响。
+import { domClient } from './dom';
+import { iconsClient } from './icons';
+import { scrollClient } from './scroll';
+import { linksClient } from './links';
+import { permissionViewClient } from './permissionView';
+// [CUSTOM- 权限抽屉：与表单抽屉同形，注册在 permissionView 之后（它用
+// permissionView.buildHead/buildActions 生成内容）。
+import { permissionDrawerClient } from './permissionDrawer';
+// [CUSTOM- Form cards (ACP elicitation / AskUserQuestion) — the permission
+// card's sibling, so it loads next to it.
+import { elicitationViewClient } from './elicitationView';
+import { toolCallViewClient } from './toolCallView';
+import { transcriptViewClient } from './transcriptView';
+import { outlineClient } from './outline';
+// [CUSTOM- 连接状态卡（取代 sessionMenu 里的空态按钮）。加载期不碰 DOM，
+// 全部由 boot 的 init() 驱动——这也是它能在桩 DOM 测试里被单独加载的前提。
+import { stateCardClient } from './stateCard';
+import { sessionMenuClient } from './sessionMenu';
+import { directoryMenuClient } from './directoryMenu';
+import { railClient } from './rail';
+import { tabsClient } from './tabs';
+import { composerClient } from './composer';
+import { contextMenuClient } from './contextMenu';
+import { lightboxClient } from './lightbox';
+import { stickyUserClient } from './stickyUser';
+// [CUSTOM- 记录区「Times」开关的状态机（按会话记 + 一个默认值）。与 stateCard 同类：
+// 加载期不碰 DOM，全部由 boot 的 init() 驱动，因此能在桩 DOM 里被单独加载。
+import { timesClient } from './times';
+// [CUSTOM- 长任务看门狗（记录区 markdown 回填分帧的验收手段，也是"点了没反应"
+// 这类症状的常驻证据）。
+import { perfClient } from './perf';
+import { bootClient } from './boot';
+
+const MODULES: ReadonlyArray<string> = [
+  domClient,
+  // Record-type icons are used by both transcriptView and toolCallView, so they
+  // are registered before either of them.
+  iconsClient,
+  scrollClient,
+  linksClient,
+  // Must precede transcriptView: build() dispatches on entry kind at runtime,
+  // which only works once every view module has been registered.
+  permissionViewClient,
+  // [CUSTOM- Same reason, one drawer over: it builds its content with
+  // permissionView's head/actions builders.
+  permissionDrawerClient,
+  elicitationViewClient,
+  toolCallViewClient,
+  transcriptViewClient,
+  outlineClient,
+  stateCardClient,
+  sessionMenuClient,
+  // [CUSTOM- The draft page's directory drawer (same drawer shape
+  // as sessionMenu, which is why it sits next to it).
+  directoryMenuClient,
+  railClient,
+  tabsClient,
+  composerClient,
+  // [CUSTOM- Takes the context menu over from Chromium's native one.
+  contextMenuClient,
+  // [CUSTOM- 图片点击放大（lightbox），独立模块、boot 里 install。
+  lightboxClient,
+  // [CUSTOM- 最近一条已滚出视口的用户消息，克隆到消息区顶部。
+  stickyUserClient,
+  // [CUSTOM- Times 开关（它 apply 时要重渲染置顶副本，所以排在 stickyUser 之后）。
+  timesClient,
+  // [CUSTOM- 看门狗：boot 的 init 里装（加载期不碰 DOM，可在桩里单独驱动）。
+  perfClient,
+  bootClient,
+];
+
+/** Concatenate every client module into one nonce'd inline script. */
+export function clientScript(nonce: string): string {
+  return `<script nonce="${nonce}">\n${MODULES.join('\n')}\n</script>`;
+}
+
+/** The concatenated client code, exposed for syntax verification. */
+export function clientSource(): string {
+  return MODULES.join('\n');
+}
