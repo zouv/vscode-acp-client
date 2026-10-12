@@ -9,6 +9,7 @@ import type {
   PromptResponse,
   SessionConfigOption,
   SessionInfo as ProtocolSessionInfo,
+  SessionNotification,
 } from '@agentclientprotocol/sdk';
 
 import { profileFor } from '../agents/AgentProfile';
@@ -30,7 +31,7 @@ import type {
   SessionInfo,
   SessionOrigin,
 } from './types';
-import type { SessionUpdateHandler } from '../handlers/SessionUpdateHandler';
+import type { SessionUpdateHandler, SessionUpdateListener } from '../handlers/SessionUpdateHandler';
 
 export { pickDefaultCwd } from './cwd';
 export type {
@@ -63,6 +64,7 @@ export class SessionManager extends EventEmitter {
   private readonly connector: AgentConnector;
   private readonly inFlightTurns = new Set<string>();
   private readonly loadingSessionIds = new Set<string>();
+  private readonly updateListener?: SessionUpdateListener;
   private historyStore: SessionHistoryStore | null = null;
   private permissionBridge: PermissionBridge | null = null;
   private elicitationBridge: ElicitationBridge | null = null;
@@ -70,13 +72,21 @@ export class SessionManager extends EventEmitter {
   constructor(
     private readonly agentManager: AgentManager,
     private readonly connectionManager: ConnectionManager,
-    _sessionUpdateHandler?: SessionUpdateHandler,
+    private readonly sessionUpdateHandler?: SessionUpdateHandler,
   ) {
     super();
     this.connector = new AgentConnector(agentManager, connectionManager, {
       resolveCwd: () => this.resolveDefaultCwd(),
       onConnected: agentName => this.emit('agent-connected', agentName),
     });
+
+    // 会话状态（可用命令 / 配置项 / 当前模式）由 core 自己从 agent 推送里落账：
+    // 这些通知会早于 `session/new` 响应到达，而 UI 侧的监听器在会话未注册时整体丢弃，
+    // 这里走 `apply*` 的 pending 缓冲 + `registerSession` 的 drain 才是对的。
+    if (sessionUpdateHandler) {
+      this.updateListener = notification => this.applySessionUpdate(notification);
+      sessionUpdateHandler.addListener(this.updateListener);
+    }
 
     agentManager.on('agent-error', (evt: { agentId: string; error: Error }) => {
       const agentName = this.connector.nameOf(evt.agentId);
@@ -402,6 +412,40 @@ export class SessionManager extends EventEmitter {
     this.emit('available-commands-changed', sessionId, commands);
   }
 
+  applyCurrentMode(sessionId: string, modeId: string): void {
+    const session = this.store.get(sessionId);
+    if (!session) {
+      this.pending.setMode(sessionId, modeId);
+      return;
+    }
+    if (session.modes) { session.modes.currentModeId = modeId; }
+    this.emit('mode-changed', sessionId, modeId);
+  }
+
+  /** 只接纯状态通知；带 UI 语义的（chunk / tool_call / plan / usage…）归 `ChatPanelHost.onSessionUpdate`。 */
+  private applySessionUpdate(notification: SessionNotification): void {
+    const { sessionId } = notification;
+    const data = notification.update as {
+      sessionUpdate?: string;
+      availableCommands?: AvailableCommand[];
+      configOptions?: SessionConfigOption[] | null;
+      currentModeId?: string;
+    };
+    switch (data.sessionUpdate) {
+      case 'available_commands_update':
+        this.applyAvailableCommands(sessionId, data.availableCommands ?? []);
+        return;
+      case 'config_option_update':
+        this.applyConfigOptions(sessionId, data.configOptions ?? null);
+        return;
+      case 'current_mode_update':
+        if (typeof data.currentModeId === 'string') { this.applyCurrentMode(sessionId, data.currentModeId); }
+        return;
+      default:
+        return;
+    }
+  }
+
   applySessionInfoUpdate(sessionId: string, update: { title?: string | null; updatedAt?: string | null }): void {
     const session = this.store.get(sessionId);
     if (session) {
@@ -608,6 +652,7 @@ export class SessionManager extends EventEmitter {
   }
 
   dispose(): void {
+    if (this.updateListener) { this.sessionUpdateHandler?.removeListener(this.updateListener); }
     this.agentManager.killAll();
     this.connectionManager.dispose();
     this.store.clear();

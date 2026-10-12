@@ -101,4 +101,26 @@ describe('PendingSessionState', () => {
     expect(target.configOptions).toBeNull();
     expect(target.title).toBeUndefined();
   });
+
+  it('drains a buffered mode onto the session when the agent reported modes', () => {
+    const pending = new PendingSessionState();
+    const target = session('s1');
+    target.modes = {
+      currentModeId: 'ask',
+      availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'code', name: 'Code' }],
+    };
+    pending.setMode('s1', 'code');
+
+    pending.drainInto(target);
+    expect(target.modes?.currentModeId).toBe('code');
+  });
+
+  it('drops a buffered mode when the session has no modes at all', () => {
+    const pending = new PendingSessionState();
+    const target = session('s1');
+    pending.setMode('s1', 'code');
+
+    pending.drainInto(target);
+    expect(target.modes).toBeNull();
+  });
 });

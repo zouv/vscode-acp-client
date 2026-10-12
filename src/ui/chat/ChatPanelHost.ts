@@ -438,9 +438,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // 事件上而不是 pushMeta 里：pushMeta 在"没有 surface attach"或"不是聚焦会话"时会提前
     // return，后台会话的变化就进不了快照——而那正是下一次草稿页要用的那份。
     //
-    // 隐藏依赖（查过才敢写）：这两个事件之所以会响，是因为会话更新的 listener 调用了
-    // `applyConfigOptions` / `applyAvailableCommands`，而它是这两者的唯一调用者（斜杠补全靠它）。
-    // 哪天那些调用者改成惰性创建，快照会**静默停止更新**（斜杠补全也会一起坏）。
+    // 隐藏依赖（查过才敢写）：这两个事件由 **core** 产生——`SessionManager` 订阅了
+    // `SessionUpdateHandler`，把 agent 推送的 `config_option_update` / `available_commands_update`
+    // 落成会话状态后 emit。哪天那条订阅被摘掉，快照会**静默停止更新**（斜杠补全一起坏），
+    // 而"某个事件没人 emit"这类缺口测试抓不到（见 pitfalls #65）。
     on('config-options-changed', (sessionId: string) => this.rememberAgentOptions(sessionId));
     on('available-commands-changed', (sessionId: string) => this.rememberAgentOptions(sessionId));
 

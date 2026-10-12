@@ -13,7 +13,7 @@
 // **为什么不测 DOM**：这一层不需要。上面三类问题全都能在协议流上判定，而这样测试不依赖
 // webview、跑得快、也不会因为布局细节而脆。**布局类问题**（空白条、条目被压扁、diff 被
 // 折叠、按钮化后外观错位）需要另一层"真 webview + 客户端回传 DOM dump"的测试——
-// 那层没写，所以那类问题仍然只能人工验收（见 docs/dev-workflow.md 的验收清单）。
+// 那层没写，所以那类问题仍然只能人工验收（见 docs/03-验收清单.md）。
 //
 // **夹具从哪来**：`scripts/capture-acp-replay.mjs` 用真实 agent 抓的。
 // 协议形状变了才需要重抓；抓包脚本的用法写在该文件头。
@@ -966,6 +966,48 @@ suite('chat panel: draft page creates the session on first send', () => {
     assert.deepStrictEqual(reply.configOptions, SNAPSHOT_OPTIONS);
     assert.deepStrictEqual(reply.availableCommands, [
       { name: 'compact', description: 'Compact the conversation', inputHint: 'what to keep' },
+    ]);
+  });
+
+  test('the real notification chain fills the snapshot (nobody emits the event by hand)', function () {
+    const { harness, manager } = draftHarness();
+    registerFakeSession(manager, 'live-session', 'Claude Code');
+
+    // Drive the notification the agent actually sends. `seedAgentOptions` above emits the
+    // events by hand, which is exactly why the broken chain stayed invisible: nobody was
+    // asking *who* emits them. This test asks.
+    harness.handler.handleUpdate({
+      sessionId: 'live-session',
+      update: {
+        sessionUpdate: 'available_commands_update',
+        availableCommands: [{ name: 'compact', description: 'Compact the conversation', input: { hint: 'what to keep' } }],
+      } as unknown as SessionNotification['update'],
+    });
+
+    harness.host.onMessage({ type: 'listDraftOptions', draftId: 'd-real' });
+    assert.deepStrictEqual(messagesOf(harness, 'draftOptions')[0].availableCommands, [
+      { name: 'compact', description: 'Compact the conversation', inputHint: 'what to keep' },
+    ]);
+  });
+
+  test('a command notification that beats registration is parked, drained, and reaches the snapshot', function () {
+    const { harness, manager } = draftHarness();
+    // The agent starts pushing before the `session/new` response lands. The host's own
+    // listener drops notifications for unknown sessions, so core has to park them
+    // (PendingSessionState) and drain on registration.
+    harness.handler.handleUpdate({
+      sessionId: 'late-session',
+      update: {
+        sessionUpdate: 'available_commands_update',
+        availableCommands: [{ name: 'review', description: 'Review the diff' }],
+      } as unknown as SessionNotification['update'],
+    });
+    registerFakeSession(manager, 'late-session', 'Claude Code');
+    manager.emit('session-created', 'late-session', 'Claude Code');
+
+    harness.host.onMessage({ type: 'listDraftOptions', draftId: 'd-late' });
+    assert.deepStrictEqual(messagesOf(harness, 'draftOptions')[0].availableCommands, [
+      { name: 'review', description: 'Review the diff', inputHint: null },
     ]);
   });
 

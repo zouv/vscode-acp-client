@@ -104,10 +104,12 @@ export class PendingSessionState {
   private readonly commands = new Map<string, AvailableCommand[]>();
   private readonly configs = new Map<string, SessionConfigOption[]>();
   private readonly titles = new Map<string, string>();
+  private readonly modes = new Map<string, string>();
 
   setCommands(sessionId: string, value: AvailableCommand[]): void { this.commands.set(sessionId, value); }
   setConfig(sessionId: string, value: SessionConfigOption[]): void { this.configs.set(sessionId, value); }
   setTitle(sessionId: string, value: string): void { this.titles.set(sessionId, value); }
+  setMode(sessionId: string, value: string): void { this.modes.set(sessionId, value); }
 
   drainInto(session: SessionInfo): void {
     const { sessionId } = session;
@@ -125,6 +127,12 @@ export class PendingSessionState {
     if (title !== undefined) {
       session.title = title;
       this.titles.delete(sessionId);
+    }
+    // 只有响应里带了 modes（agent 支持模式）才认这条推送；否则这是个异常通知，丢弃。
+    const mode = this.modes.get(sessionId);
+    if (mode !== undefined) {
+      if (session.modes) { session.modes.currentModeId = mode; }
+      this.modes.delete(sessionId);
     }
   }
 }
