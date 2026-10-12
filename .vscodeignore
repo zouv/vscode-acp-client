@@ -4,6 +4,7 @@ src/**
 out/**
 node_modules/**
 scripts/**
+arch/**
 docs/**
 .agents/**
 .claude/**

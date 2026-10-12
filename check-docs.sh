@@ -6,6 +6,7 @@
 #
 # 定位：整套文档体系靠 AI 自觉维护，本脚本补上「脚本能判的」硬兜底——
 #   占位符残留、文档体量超标、根文档缺失、CHANGELOG 疑似漏记。
+#   扫描范围：根文档 + `docs/*.md`（面向人）+ `arch/*.md`（ARCHITECTURE.md 分册）。
 #   ⚠ 只查机械可判的项；语义漂移（图谱↔代码是否对得上）仍需跑 doc-audit 由 AI 核对。
 #
 # 建议：接入 git pre-commit 或 CI，让「文档不腐化」从靠记性变成靠机制。
@@ -32,7 +33,7 @@ fi
 
 # 1. 占位符 / AI-INIT 残留（已初始化项目里一处都不该有）
 residue=0
-for f in "${ROOT_DOCS[@]}" docs/*.md; do
+for f in "${ROOT_DOCS[@]}" docs/*.md arch/*.md; do
   [ -f "${f}" ] || continue
   if grep -qE '\{\{|AI-INIT' "${f}"; then
     bad "占位符/AI-INIT 残留：${f}（初始化没做干净）"
