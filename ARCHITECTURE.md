@@ -52,7 +52,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | ACP 握手 / 协议抓包 / SDK 升级 / 能力协商 | `core/ConnectionManager.ts` + `core/AcpClientImpl.ts` + `utils/Logger.ts(logTraffic)` | tree、webview | §2.2 |
 | 会话生命周期（新建/恢复/切换/关闭、认证 -32000） | `core/SessionManager.ts` + `core/auth.ts` + `core/SessionStore.ts` | handlers、webview | §2.3 |
 | 发消息 / 取消 / 轮次中补发 / 轮次状态 | `core/SessionManager.ts`(sendPrompt/cancelTurn/steerPrompt) + `handlers/SessionUpdateHandler.ts` | tree | §2.4 |
-| 聊天 UI（面板行为 / 记录 / 标签页） | `src/ui/chat/**`（入口 `index.ts`；先看 `docs/arch/chat-panel.md` §5.1 文件表） | core、dashboard | §2.5 |
+| 聊天 UI（面板行为 / 记录 / 标签页） | `src/ui/chat/**`（入口 `index.ts`；**先读 `arch/chat-panel.md` 顶部的分册导航表**，再按主题只读那一份分册） | core、dashboard | §2.5 |
 | 编辑区面 / 双面同步 / 焦点 | `ui/chat/ChatViewProvider.ts` + `ChatEditorPanel.ts` + `ChatSurface.ts` | core 内部 | §2.5 |
 | 权限弹窗 / 表单（AskUserQuestion） | `handlers/PermissionBridge.ts`、`ElicitationBridge.ts` + 客户端 `html/client/{permissionView,permissionDrawer,elicitationView}.ts` | core 编排 | §2.6 |
 | 文件读写 / 终端 / 工具卡片数据 | `handlers/FileSystemHandler.ts`、`TerminalHandler.ts`、`utils/TailBuffer.ts` | 会话编排 | §2.6 |
@@ -78,7 +78,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/core/AgentManager.ts` | agent 子进程生命周期：`spawnAgent`/`killAgent`/`killAll`；Windows 走 `cmd.exe`，类 Unix 走 login shell（修 npx ENOENT）；进程组 + `taskkill /T /F` 一并收子孙 | agent 起不来 / 平台差异 / 进程泄漏 |
 | `src/core/ConnectionManager.ts` | stdio → Web Streams → `ndJsonStream`；建 `ClientSideConnection`；`initialize`（含 `clientCapabilities`）；解析 `_meta.steering`；traffic tap | 协议握手 / 抓包 / SDK 升级 |
 | `src/core/AgentConnector.ts` | agent 名 ↔ 进程 id 索引、`ensure()` 合并并发连接、能力摘要缓存、**每连接控制面串行队列** `enqueue()` | 连接去重 / 能力协商 / RPC 排队 |
-| `src/core/SessionManager.ts` | 编排器：`connectToAgent`/`createSession`/`newConversation`/`closeSession`/`disconnectAgent`/`ensureConnected`/`sendPrompt`/`steerPrompt`/`cancelTurn`/`setMode`/`setModel`/`setConfigOption`/`listSessions`/`openExistingSession`/`loadSession`/`resumeSession` | 会话状态机 / 新事件 / 能力协商 |
+| `src/core/SessionManager.ts` | 编排器：`connectToAgent`/`createSession`/`newConversation`/`closeSession`/`disconnectAgent`/`ensureConnected`/`sendPrompt`/`steerPrompt`/`cancelTurn`/`setMode`/`setModel`/`setConfigOption`/`listSessions`/`openExistingSession`/`loadSession`/`resumeSession`；**订阅 `SessionUpdateHandler`**，把 `available_commands_update` / `config_option_update` / `current_mode_update` 落成状态（`applyAvailableCommands`/`applyConfigOptions`/`applyCurrentMode`，会话未注册时进 `PendingSessionState`） | 会话状态机 / 新事件 / 能力协商 |
 | `src/core/SessionStore.ts` | 会话索引与焦点（`focusOrder`/`mostRecentLiveId`）+ `PendingSessionState`（早到通知缓冲）。**纯逻辑，禁 import vscode** | 索引语义 / 焦点后继规则 |
 | `src/core/cwd.ts` | `pickDefaultCwd`：每会话工作目录三级链（配置→工作区→进程），配置非法则拒绝并回退。**纯函数** | 默认目录策略 |
 | `src/core/auth.ts` | `-32000` 判定 + 交互式认证流程 | 认证行为 |
@@ -160,7 +160,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
-| 面板整体行为 / 消息协议 | `ChatPanelHost.ts`（先看 `docs/arch/chat-panel.md` §5.1 文件表） | **勿整读**，用 grep 定位 |
+| 面板整体行为 / 消息协议 | `ChatPanelHost.ts`（文件表见 `arch/chat-panel.md` §5.1；主题细节按该文顶部的分册导航表分流） | **勿整读**，用 grep 定位 |
 | 侧边栏视图注册 / 双面焦点 | `ChatViewProvider.ts:resolveWebviewView` / `syncFocus` | 视图上**只能有一个** `onDidReceiveMessage` |
 | 编辑区面板 | `ChatEditorPanel.ts:open` / `focusMostRecentSession` | 与侧边栏共享同一个 host |
 | 记录区渲染 | `transcript/TranscriptStore.ts`、`content/*`、`html/client/transcriptView.ts` | 布局类问题见 §5 |
@@ -262,6 +262,10 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 
 订阅点集中在 `src/extension.ts`、`src/ui/**` 与 `src/dashboard` 的 host 适配。**改事件签名 = 改契约**，同步更新本表。
 
+> `available-commands-changed` / `config-options-changed` / `mode-changed` 这三条**由 core 直接消费 agent 推送产生**
+> （`SessionManager` 订阅 `SessionUpdateHandler`）——即"谁 emit 它们"不是面板的职责。UI 只订阅事件。
+> 早于 `session/new|load|resume` 响应到达的推送会先缓冲（`PendingSessionState`），随会话注册时落盘。
+
 | 事件 | 参数 | 说明 |
 |---|---|---|
 | `agent-connected` | (agentName) | 握手成功（此时可能还没有会话） |
@@ -318,5 +322,4 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 - **会话早到的通知要缓冲**：`session/new` 响应解析与通知派发之间存在微任务竞态（`PendingSessionState`）。
 - **换行符一律 LF**：`.gitattributes` 已钉住；写入 CRLF 会让整文件产生伪差异。
 - **`vac.turnInProgress` 必须与 `isTurnInFlight` 同步**，否则 Escape 要么失效要么常亮。
-- 本仓库与上游 fork 的关系、以及 `docs/` 下各篇笔记的来历，见
-  [`docs/architecture.legacy.md`](docs/architecture.legacy.md)（前身仓库架构，历史存档）。
+- 本仓库与上游 fork 的关系、以及出处处理原则，见 [`README.md`](README.md) 的「出处与上游」。

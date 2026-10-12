@@ -62,6 +62,7 @@ src/ui/                 SessionTreeProvider / StatusBarManager / chat/（聊天�
 src/dashboard/          Dashboard 视图 + usage/（用量统计的数据层与聚合）
 src/test/               真实 Extension Host 的 mocha 测试
 docs/                   使用/维护文档（面向人）
+arch/                   ARCHITECTURE 分册（面向 AI，按模块拆分；入口是 ARCHITECTURE.md §0.5 路由表）
 AGENTS.md               AI 工作铁律（AI 开工先读）
 ARCHITECTURE.md         代码链路图谱（面向 AI）
 ROADMAP.md              开发路线图（总体计划与完成度）
@@ -69,6 +70,16 @@ CHANGELOG.md            发布变更记录（按版本）
 HANDOFF.md              会话接力（进行中状态）
 manager.sh              统一管理脚本
 ```
+
+## 出处与上游
+
+本仓库以 `formulahendry/vscode-acp` 的 fork 起步，现已**完全脱钩、自主演进**：
+凡在前身基线中存在过的文件一律**重写**，所以仓库只保留本项目自己的 MIT 版权（`Copyright (c) 2026 zouv`），
+不需要保留上游署名；基线中不存在的自写文件（Chat 面板子系统、权限与表单两个回调桥、
+`CustomModels`、`BuildInfo`、Dashboard）则直接沿用。全局标识符命名空间为 `vac.*`
+（命令 / 配置键 / 视图 id / 上下文键 / Memento key）。
+
+> 更细的取舍与后果见 [`CHANGELOG.md`](CHANGELOG.md) 的 `[1.0.1]` 与 [`ROADMAP.md`](ROADMAP.md) 的 M1 里程碑。
 
 ## 许可证
 

@@ -1,13 +1,8 @@
 # Chat 面板 · 会话目录与重开路径
 
-> **来源说明**：本文是从前身仓库（`custom-vscode-acp`）搬来的开发笔记，**尚未按新仓库校订**。
-> 文中出现的 `acpc.*` 命名（新仓库为 `vac.*`）、`CUSTOM-YYYYMMDD-NNN` 编号、旧仓库 `CUSTOMIZATIONS/` 路径、
-> webpack 构建、`src/ui/ChatWebviewProvider.ts`（旧面板，已删除）都属于历史；
-> 新仓库的命名空间是 `vac.*`、构建是 esbuild、`CUSTOMIZATIONS/` 机制已取消。结论仍然有效，标识符请自行替换。
-
-> **这是什么**：`docs/arch/chat-panel.md` §5.13–§5.15 的**拆出部分**（CUSTOM-20260925-060），
+> **这是什么**：`arch/chat-panel.md` §5.13–§5.15 的**拆出部分**（CUSTOM-20260925-060），
 > 以及后续长在这里的 §5.24（历史选择器的目录过滤，CUSTOM-20260926-079）。
-> 主文件已到 488 行，超了 `architecture.md` §0 那条「体量铁律」（超过 ~400 行即拆分）。
+> 主文件已到 488 行，超了 `ARCHITECTURE.md` §0 那条「体量铁律」（超过 ~400 行即拆分）。
 >
 > **为什么这几节放在一起**：它们是同一个主题的几面——**会话与它的工作目录**。
 > 建会话时选目录（§5.15）、已存在会话的目录从哪来（§5.14）、重开会话时那条 replay 链
@@ -16,9 +11,12 @@
 >
 > **§5.x 的编号原样保留**（与 `chat-panel.md` 同一套编号，跨文件连续），所以各处引用只需换文件名。
 >
-> **配套**：面板的整体架构、文件职责、消息纪律、安全约定、权限卡、大纲/引导条、以及面板审计
-> 的结论表，都在 [`chat-panel.md`](./chat-panel.md)（§5.1–§5.12）；任务路由见
-> [`../../architecture.md`](../../architecture.md)。
+> **配套（面板分册群，均沿用同一套 §5.x 编号）**：面板的整体架构、文件职责、消息纪律、安全约定、
+> 权限卡、大纲/引导条、以及面板审计的结论表，都在 [`chat-panel.md`](./chat-panel.md)（§5.1–§5.12）；
+> 记录区见 [`chat-panel-records.md`](./chat-panel-records.md)；
+> 输入侧与抽屉见 [`chat-panel-input.md`](./chat-panel-input.md)；
+> 会话状态、诊断与几何见 [`chat-panel-state.md`](./chat-panel-state.md)；
+> 任务路由见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。
 
 ---
 
@@ -65,7 +63,7 @@ node scripts/capture-acp-replay.mjs --out src/test/fixtures/claude-code-session-
 **这一层不测什么（写在文件头，也写在这）**：**不做 DOM 测试**。
 它能判定的三类问题全在协议流上可判，而这样测试不依赖 webview、跑得快、不会因布局细节而脆。
 **布局类问题**（空白条 / 条目被压扁 / diff 被折叠 / 按钮化后外观错位）仍只能人工验收——
-`docs/dev-workflow.md` 的验收清单里那些项**仍然有效，不要因为"有测试了"就跳过**。
+`docs/03-验收清单.md` 里的那些项**仍然有效，不要因为"有测试了"就跳过**。
 
 **同族的收尾（053）**：`user_message_chunk` 到达时要 `finalizeEntries({only:'assistant'})`，
 `session-load-end` 时要 `finalizeEntries()`——replay 是**有限**流，结束后不可能还有东西在流式。
@@ -186,7 +184,7 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 | 默认目录 | **[155] 来自地址栏**：客户端把 header 的 `#cwdBtn` 正显示的目录（聚焦草稿的 `cwd`，否则聚焦会话的）随 `listHistory { cwd }` 送上来，宿主按它标记 `current` 候选，客户端据此设默认过滤 —— **"用户看到的"与"默认筛的"同源**（草稿的目录是客户端私有的，宿主本来猜不到，058）。客户端没送（没有聚焦会话 / 会话没有 cwd）⇒ 未过滤，**不会**替用户挑一个目录；宿主侧的 `historyFilterCwd`（聚焦会话属于该 agent 时用它的 cwd，否则第一个工作区文件夹）**降级为兜底**，只为不带 `cwd` 的调用保留。默认筛到某个目录时**同样会按需补扫磁盘**（`requestSupplement`，与手动选目录同一入口）——否则"默认目录不是第一个工作区文件夹"时会缺掉 094 补出来的那些磁盘会话 |
 | 计数行 | 未过滤：`232 sessions · from the agent`（不变）；过滤：`12 of 232 sessions · from the agent`——**总数不能省**，只写"12 sessions"会像 agent 丢了两百多条 |
 | **列表来源是并集（092）** | `source: 'agent' \| 'local' \| 'merged'`（`merged` = 有多个来源贡献）。连上 agent 时是 **agent 列表 ∪ 转录目录 ∪ 本地缓存**：靠前者优先（agent 是"会话还在不在"的权威），只有后面来源知道的行带 `fromDisk` / `fromCache` 标记（tooltip 里说明），按 `updatedAt` 倒序。**为什么必须并集**：agent 的 `session/list` **不是全集**——实测（091 的探针）227 条里没有缺 cwd 的，但本项目磁盘上 8 个会话只报了 6 个，少掉的正是**仍在其他窗口开着的**那些 |
-| **第三个来源：转录目录（094）** | Claude Code 把每个工作目录的会话放在 `<CLAUDE_CONFIG_DIR 或 ~/.claude>/projects/<路径里非字母数字都换成 '-' 的 slug>/<sessionId>.jsonl`。**官方插件看到的就是这个目录**，所以这里补上它（`diskSessions.ts`）。三条硬约束：**只对 Claude Code**（`CLAUDE_CODE_AGENT`，与 `MODERN_AGENTS` 分开——那是"用哪个面板"，这是"愿意读谁的私有存储"）；**初始只扫当前工作目录对应的那一个 slug**（与本地缓存同作用域）；**095 起按过滤目录按需补扫**——客户端过滤到具体目录时发 `supplementHistory { cwd }`，宿主 `readDiskHistory(agent, cwd?)` 按该目录扫描并增量返回（`historySupplement`），解决多根/跨目录场景下扫错目录的问题；**任何失败都只是"没有补充"**，绝不影响 agent 的那份列表。读取用**按行流式**、超长行跳过（转录能到几十 MB，且**第一行本身就可能很大**——按字符切一刀会读不到任何记录，探针的第一版就是这么错的） |
+| **第三个来源：转录目录（094）** | Claude Code 把每个工作目录的会话放在 `<CLAUDE_CONFIG_DIR 或 ~/.claude>/projects/<路径里非字母数字都换成 '-' 的 slug>/<sessionId>.jsonl`。**官方插件看到的就是这个目录**，所以这里补上它（`diskSessions.ts`）。三条硬约束：**只对 Claude Code**（`CLAUDE_CODE_AGENT`）；**初始只扫当前工作目录对应的那一个 slug**（与本地缓存同作用域）；**095 起按过滤目录按需补扫**——客户端过滤到具体目录时发 `supplementHistory { cwd }`，宿主 `readDiskHistory(agent, cwd?)` 按该目录扫描并增量返回（`historySupplement`），解决多根/跨目录场景下扫错目录的问题；**任何失败都只是"没有补充"**，绝不影响 agent 的那份列表。读取用**按行流式**、超长行跳过（转录能到几十 MB，且**第一行本身就可能很大**——按字符切一刀会读不到任何记录，探针的第一版就是这么错的） |
 | **没有目录的行（093）** | `dirKey` 为空（agent 没报 cwd）的行**不属于任何候选**——但"不知道它在哪个目录"**不等于**"它在别的目录"，静默丢弃是把猜测当规则。现在：菜单末尾多一个 `Unknown folder (N)` 候选（哨兵 key `~unknown`，真实 key 必含分隔符、撞不了车），选中即筛出这些行；用真实目录过滤时计数行补一句 `· N without a folder` |
 | 空结果 | 一行「No sessions in this folder」+ 一行可点的「Show all folders」（chip 不显眼，不能只靠它） |
 | 挂载位置 | 菜单挂在 `.outline-head` **内部**：它已是定位元素（`position: sticky`），`top: 100%` 正好落在 header 下面——不量高度、没有常量偏移（pitfalls #24）。chip 与菜单是 `.outline-head-info`（`render()` 清空回填的计数容器）的**兄弟**，所以重渲染不会把它们清掉（077 的形态）。**[141] 但它必须能"溢出"浮层**：浮层 `#history` 原本是 `overflow-y: auto` 的滚动容器，而菜单的包含块（head）在它里面 ⇒ 菜单被裁成"head 底边到浮层底边"那么几行（历史列表越短它越矮，用户实测只剩两三行）。修法是把滚动**下移**到 `.outline-list`：`#history` 变成 flex column + `overflow: visible`，于是它不再裁剪任何后代，菜单高度交回自己的 `max-height` 单独控制。**只写在 `#history` 上**（`#outline` / `#cwdMenu` 里没有这种嵌套菜单，不动通用规则） |
@@ -218,7 +216,7 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 |---|---|
 | 快照存哪 | globalState `vac.openSessions.v1`：`{ sessions: [{agentName, sessionId, cwd, title}], focused }`，**顺序就是 tabOrder 的顺序**（那样恢复出来的 tab 才回到原位）。写点：`session-created` / `session-closed` / `active-session-changed`，**防抖 300ms**（focus 会因为切标签频繁发生） |
 | 不许把快照写空 | **只有"本生命周期里出现过会话"之后**才允许写空表 —— 否则重载后刚启动、一个会话都还没有的那一瞬间就会把上一次的快照抹掉（而那正是要读它的时刻）。`sawLiveSession` 就是这道闸 |
-| 端给客户端 | `pushBoot` 加两个字段：`recoverable`（快照里**当前不活**的那些，且**只保留 modern agent** —— legacy 交给旧面板会换文档）与 `restorePref`。一条都没有时不带 `recoverable` |
+| 端给客户端 | `pushBoot` 加两个字段：`recoverable`（`recoverableSessions()`：快照里**现在不活**的那些——活着的已经是 tab 了；已被答复过或设置为 `never` 时返回空）与 `restorePref`。一条可恢复的都没有时不带 `recoverable` |
 | 问不问 | 客户端：面板**空着**（无聚焦会话、无草稿）且设置不是 `never` 时才问。卡片的 `restore` 相位**压过 `ready`**（那张"Claude Code is ready"要让位）。设置项 `vac.restoreSessionsOnOpen`（ask/always/never，默认 ask），读写走 125 那套 `PanelPrefsIO` 注入缝 |
 | 谁让位 | 提问待决期间：①宿主 `handleConnectAgent` **跳过 createSession**（否则用户既拿到新空会话又被打扰）；②客户端 `connection === 'connected'` 那句 `startDraft()` 也跳过（草稿页会把提问顶掉）。按 `+`（draftIntent）例外 —— 那是用户明确要一张新草稿 |
 | 懒恢复 | 点【Restore】只做两件事：宿主把**上次聚焦的那条**现在就 `openExistingSession` 起来（面板立刻有内容），客户端把 N 条变成**本地 tab**（`tabs.ts` 的 `restoring`，形态同草稿：有 id/agent/cwd/title 但宿主里还不存在）。**其余点开才加载**（`openHistorySession … keepOthers: true`）。实测：8 个大会话若逐个 eager load，replay 是秒级到十几秒 × 8 ⇒ 这条路不能走 |
@@ -230,7 +228,7 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 | 失败不纠缠 | `startRestore` 里那条加载失败（会话在 agent 侧已经没了）⇒ 把它从快照里摘掉 + 报错，下次不再问 |
 
 **不做**：不恢复草稿页（未发出的内容只在客户端，重载即失 —— 同浏览器不恢复未提交表单）；
-不恢复 legacy agent 的会话；「未加载」的 tab 不可拖拽（顺序已由 tabOrder 决定，与草稿同规矩）。
+「未加载」的 tab 不可拖拽（顺序已由 tabOrder 决定，与草稿同规矩）。
 
 **验收**：客户端桩 5 条（卡片提问态与退场规则、两个按钮 + 勾选把回答交给 boot、待恢复 tab 的
 排序/点击/关闭、活了就让位）；宿主 6 条（设置消毒、快照写盘并端给下一个窗口、`keepOthers` 不关别的、
