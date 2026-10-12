@@ -61,7 +61,7 @@ export class ChatEditorPanel implements vscode.Disposable {
     // `attachSurface` writes the HTML, and the document's `ready` message can
     // arrive immediately after; registering late drops that first `ready` and
     // leaves the panel permanently empty (same failure class as the message
-    // guard documented in docs/arch/chat-panel.md §5.4 —
+    // guard documented in arch/chat-panel.md §5.4 —
     // nothing automated catches it).
     panel.webview.onDidReceiveMessage(message => this.host.onMessage(message, 'editor'));
     panel.onDidDispose(() => {
