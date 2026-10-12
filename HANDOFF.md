@@ -16,11 +16,12 @@
 ## 状态快照
 
 - **最近更新**：2026-10-12
-- **整体状态**：✅ 无进行中的开发任务（M1 独立化重构已交付，等待下一个需求）
-- **当前分支（必填）**：`main`。**注意：仓库当前尚无任何提交**，所有文件都是未跟踪状态；
-  接手时先看 `git status` 确认范围，**未经用户明确指示不要 commit / push**。
+- **整体状态**：✅ 无进行中的开发任务（M1 已交付并发布 v1.0.1，等待下一个需求）
+- **当前分支（必填）**：`main`，已与 `origin/main` 同步（`fe15283` 初始化 → `9a96770` 打包修复）。
+  **未经用户明确指示不要 commit / push。**
 - **最后验证状态**：`npm run lint` ✅ · `npm run typecheck` ✅ · `npm run test:unit` ✅（88 项）
-  · `npm test`（真实宿主）✅ 454 项通过 · `npm run compile` ✅（产物 `dist/extension.js` 约 2.0 MB）
+  · `npm test`（真实宿主）✅ 454 项通过 · `sh check-docs.sh` ✅ 0 警告
+  · `npx vsce package` ✅ 生成 `vscode-acp-client-1.0.1.vsix`（392 KB，已剔除 sourcemap）
 
 ---
 
@@ -57,8 +58,9 @@
    这是目前**唯一没有做过**的验收环节（其余都是类型/单测/集成测试的结论）。
 2. **P1-1 Codex 端到端**：用真实 `codex-acp` 跑通连接与一次会话；核对
    `src/dashboard/usage/CodexUsageSource.ts` 的用量口径。
-3. **P1-3 打包瘦身**：`dist/extension.js` 约 2 MB，主要来自 ACP SDK 全量引入。
-4. **P1-4 发布准备**：注册 publisher、图标与截图、把 CHANGELOG 归档到 v1.0.1。
+3. **P1-3 打包瘦身**：`dist/extension.js` 1.42 MB（压缩后），主要来自 ACP SDK 全量引入；
+   注意 `.vscodeignore` 的忽略**不支持通配嵌套路径**，排除 dist 下的文件要写精确路径。
+4. **P2-5 上架 Marketplace**：注册 publisher、准备图标（`resources/icon.png` 已有）与截图。
 5. 用户若指定新需求：按 `ARCHITECTURE.md` §0.5 定范围 → 定位函数 → 实施 → 文档同步。
 
 ---
@@ -75,6 +77,9 @@
 ---
 
 ## 关键决策记录（Key Decisions）
+
+- **v1.0.1 已发布**：GitHub Release <https://github.com/zouv/vscode-acp-client/releases/tag/v1.0.1>
+  附 `vscode-acp-client-1.0.1.vsix`。`.vsix` 不进 git（`.gitignore` 已忽略），只作为 Release 资产。
 
 - **出处处理**：前身基线（`vendor/main`）中存在过的文件一律**重写**，不搬运原文；
   基线中不存在的自写文件（Chat 面板子系统、两个桥、`CustomModels`、`BuildInfo`、Dashboard 设计）直接沿用。
