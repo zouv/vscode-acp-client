@@ -16,18 +16,16 @@
 ## 状态快照
 
 - **最近更新**：2026-10-13
-- **整体状态**：✅ 无进行中的开发任务。**v1.0.3 已发布**（GitHub Release 附
-  `vscode-acp-client-1.0.3.vsix`）。工作区有**未提交改动**（三块，均已记入 `CHANGELOG [未发布]`）：
-  ① 默认 Claude Code 适配器换源（`npx -y github:zouv/claude-agent-acp`）；
-  ② 全仓库去前项目痕迹（身份表述 + 历史叙述中性化 + 过期日志路径订正）；
-  ③ 会话 tab 目录徽标可读性（字号按字母数分档 / 圆角 6px / tooltip 显示完整目录），
-  以及随之修掉的**无头预览 `--vscode-font-size` 基准**问题（见 `docs/pitfalls.md` #66）。
-  等用户决定何时提交。
+- **整体状态**：✅ 无进行中的开发任务。**v1.0.4 已发布**（GitHub Release 附
+  `vscode-acp-client-1.0.4.vsix`），工作区干净。本轮的默认适配器换源、去前项目痕迹、
+  tab 目录徽标优化（含随之修掉的预览 `--vscode-font-size` 基准问题，见 `docs/pitfalls.md` #66）
+  均已记入 `CHANGELOG [1.0.4]`。
 - **当前分支（必填）**：`main`，与 `origin/main` 同步。
   **未经用户明确指示不要 commit / push。**
-- **最后验证状态**（2026-10-13，①②③ 全部）：`npm run lint` ✅ · `npm run typecheck` ✅ ·
+- **最后验证状态**（2026-10-13，v1.0.4 发布前）：`npm run lint` ✅ · `npm run typecheck` ✅ ·
   `npm run test:unit` ✅（90 项）· `npm test`（真实宿主）✅ **457 项**通过
-  （含新增用例 `the directory badge declares its letter count and shows the full path on hover`）。
+  （含新增用例 `the directory badge declares its letter count and shows the full path on hover`）
+  · `sh check-docs.sh` ✅ · `npm run vsix` ✅ 生成 `release/vscode-acp-client-1.0.4.vsix`。
   无头探针 `#tabsprobe` ✅：`baseFont` = 13px、`data-len` 1/2/3/4 → 9.1 / 7.8 / 7 / 6.5px、
   圆角 6px、3 个字母的 `letterRows` 由 2 变 1、`title` = 完整 cwd。
   **未做** `npm run dev:host` 宿主实测——改的是 webview 的 CSS 与客户端脚本，无头档与宿主同一

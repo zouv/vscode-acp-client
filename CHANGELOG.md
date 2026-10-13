@@ -13,6 +13,19 @@
 
 ## [未发布]
 
+### 新增
+-
+
+### 变更
+-
+
+### 修复
+-
+
+---
+
+## [1.0.4] - 2026-10-13
+
 ### 变更
 
 - **默认 Claude Code 适配器换源**：`vac.agents` 的默认值由 `@agentclientprotocol/claude-agent-acp@latest`
@@ -129,5 +142,7 @@
 ---
 
 [未发布]: ./CHANGELOG.md
+[1.0.4]: ./CHANGELOG.md
+[1.0.3]: ./CHANGELOG.md
 [1.0.2]: ./CHANGELOG.md
 [1.0.1]: ./CHANGELOG.md
