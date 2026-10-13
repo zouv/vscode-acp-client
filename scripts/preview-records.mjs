@@ -339,11 +339,14 @@ function driver() {
       row('s10', '单词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/pavilion' }),
       row('s11', '双词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/story-myriad' }),
     ]);
-    // [CUSTOM-20261009-226/227，20261013-228] 探针：完成态（s1，无状态类）下背景与文字必须是**对比色**，
+    // [CUSTOM-20261009-226/227，20261013-228/229] 探针：完成态（s1，无状态类）下背景与文字必须是**对比色**，
     // 不能同色撞车 —— 226 修的就是这个（背景被 currentColor 吃成灰、文字近黑 ⇒ 看不见）。
     // 227 追加：缩写要取**最底层目录名**（不是整条路径）。
-    // 228 追加：字号按字母数分档（styles.ts 的 .tab-dot[data-len]）、圆角、dot 的 tooltip，
-    // 并记下每个字母的实测几何 —— letterRows 是"折成了几行"的唯一判据（3 个字母必须 1 行）。
+    // 228 追加：字号按字母数分档（styles.ts 的 .tab-dot[data-len]）、圆角、dot 的 tooltip。
+    // 229 追加：3 个字母改「上 2 下 1」、4 个折 2x2 且两列贴紧 —— letterRows 是"折成了几行"
+    // 的唯一判据（3 和 4 都必须是 2），letters 的 l/w 用来算中缝（相邻两列的间隙约等于 column-gap 1px）。
+    // 另：dot 的 tooltip 从"只有 cwd"变成两行带标签（Dir: / State:），title 读数里会有换行。
+    // ⚠️ 本函数体是模板串：注释里**不能出现反引号**（写进去就是把模板提前终止）。
     if (location.hash.indexOf('probe') >= 0) {
       var dotEls = document.querySelectorAll('.tab-dot');
       var dots = [];
@@ -776,8 +779,13 @@ function driver() {
       fields: [
         { name: 'question_0', kind: 'select', title: '功能位置',
           options: [
-            { value: 'in-repo', title: '就在当前项目（ai-vibe-creator）', description: '和现有脚本放在一起，共用一套配置。' },
-            { value: 'sibling', title: '同工作区的另一个项目', description: '跨仓库引用，需要额外的依赖声明。' },
+            { value: 'in-repo', title: '就在当前项目（ai-vibe-creator）', description: '和现有脚本放在一起，共用一套配置。',
+              // [CUSTOM-231 选项预览：adapter 把 preview 放在选项的 _meta 里，宿主读出来放进
+              // options[].preview。这里照抄它的形状（多行 + 对齐的 ASCII 框图）——
+              // white-space: pre 一旦失效，这张图立刻会散架，所以它同时是那条样式的试纸。
+              preview: 'n=1   0.70em = 9.1px   圆角 5px\\n\\n   ┌──────┐\\n   │  V   │\\n   └──────┘\\n\\n每个字母一个 span，结构不变' },
+            { value: 'sibling', title: '同工作区的另一个项目', description: '跨仓库引用，需要额外的依赖声明。',
+              preview: 'n=4   0.50em = 6.5px   圆角 5px\\n\\n   ┌──┬──┐\\n   │VA│CD│\\n   └──┴──┘' },
             { value: 'elsewhere', title: '在别的目录的项目', description: '与当前工作区无关，导出时才拉取。' }
           ] },
         { name: 'question_0_custom', kind: 'text', title: 'Other', customFor: 'question_0' },
@@ -818,9 +826,25 @@ function driver() {
         ]
       };
     }
-    // 钉住大纲栏那一档：抽屉必须与输入卡**同一条中线**（用户报的"没居中"）。
-    // 输入卡的中心是"面板宽 − --vac-aside-w"再居中，所以这一档没有它根本量不出来。
-    // 记录层：hydrate 一条 pending 的表单记录 —— 内联那行"待回答"就是它画的。
+    // [CUSTOM-231 'settled' 档：**已答态**。231 之前 #elic* 十档全是 pending，
+    // 回执卡（标出所选 / 折起来 / 题数）**从来没有被截过图** —— 而它正是最该看的那一面。
+    // 这一档把一条 accepted 的记录喂给记录区；'free' 子档把单选答案换成一个对不上任何选项的
+    // 自拟值，看它有没有单独长出一行（231 前的实现里这种回答在卡上根本不存在）。
+    if (location.hash.indexOf('settled') >= 0) {
+      elicState = {
+        promptId: 'preview:settled',
+        sessionId: SESSION,
+        status: 'accepted',
+        message: elicState.message,
+        fields: elicState.fields,
+        summary: 'question_0: 同工作区的另一个项目 · question_1: new, deploy',
+        answers: location.hash.indexOf('free') >= 0
+          ? { question_0: '我自己写的方案', question_1: ['new', 'deploy'] }
+          : { question_0: 'sibling', question_1: ['new', 'deploy'] }
+      };
+    }
+    // 记录层：hydrate 一条表单记录 —— pending 时内联那行"待回答"就是它画的，
+    // settled 时画的则是回执卡（同一个渲染入口，两种态）。
     try {
       NS.transcriptView.hydrate({
         sessionId: SESSION,
@@ -863,6 +887,55 @@ function driver() {
       var firstRadio = document.querySelector('.elic-option-row input');
       if (firstRadio) { firstRadio.click(); }
     }
+  }
+  // [CUSTOM-231 本轮两个新面的探针。读数写进一个 id 为 elicprobe 的 pre，用 --dump-dom 读 ——
+  // 与 #tabsprobe 同一套路：这类东西**只靠看截图是判不准的**（字重、间距、有没有折起来，
+  // 都要数字）。三项：选项预览（就地展开、同一时刻只一个、等宽 pre）、
+  // 回执卡（标出所选 / 题数 / 折起来）、折叠后正文真的被藏住。
+  if (hash.indexOf('settled') >= 0 || hash.indexOf('previewpick') >= 0) {
+    var pre231 = document.createElement('pre');
+    pre231.id = 'elicprobe';
+    document.body.appendChild(pre231);
+    var out231 = { kind: 'elic-231' };
+    var previewEls = document.querySelectorAll('.elic-preview');
+    out231.preview = [];
+    for (var pv = 0; pv < previewEls.length; pv++) {
+      var pcs = getComputedStyle(previewEls[pv]);
+      var prc = previewEls[pv].getBoundingClientRect();
+      out231.preview.push({
+        hidden: previewEls[pv].hidden,
+        display: pcs.display,
+        whiteSpace: pcs.whiteSpace,
+        font: pcs.fontFamily,
+        w: Math.round(prc.width), h: Math.round(prc.height),
+        scrollW: Math.round(previewEls[pv].scrollWidth)
+      });
+    }
+    var pickedEls = document.querySelectorAll('.elic-option.picked');
+    out231.picked = [];
+    for (var pk = 0; pk < pickedEls.length; pk++) {
+      var pkl = pickedEls[pk].querySelector('.elic-option-label');
+      out231.picked.push(pkl ? pkl.textContent : null);
+    }
+    out231.optionTotal = document.querySelectorAll('.elic-option.static').length;
+    var countEl2 = document.querySelector('.elic-count');
+    out231.count = countEl2 ? countEl2.textContent : null;
+    var foldEl = document.querySelector('.elic-fold');
+    out231.foldOpen = foldEl ? foldEl.open : null;
+    var noteEl = document.querySelector('.elic-note');
+    out231.note = noteEl ? noteEl.textContent : null;
+    // 'folded' 子档：**真点一下 summary**（原生 details 的行为），证明"能折"不是脚本摆出来的。
+    // ⚠️ 判据只能是**卡片自己的高度**。折叠态下正文既不是 display: none（计算值仍是作者写的
+    // flex），rect 高度也**照旧**报 252 —— 浏览器是在渲染层把它藏起来的（115 那条注释说的就是
+    // 这件事）。只有 .elic 的高度（319 → 61）会跟着变，所以它是唯一不会骗人的读数。
+    if (hash.indexOf('folded') >= 0 && foldEl) {
+      var cardEl = document.querySelector('.elic');
+      out231.cardHBefore = Math.round(cardEl.getBoundingClientRect().height);
+      foldEl.querySelector('summary').click();
+      out231.foldOpenAfterClick = foldEl.open;
+      out231.cardHAfter = Math.round(cardEl.getBoundingClientRect().height);
+    }
+    pre231.textContent = JSON.stringify(out231);
   }
   // 权限抽屉：记录区只留一行（⏳ + 标题 + Review），作答按钮在输入框
   // 上方的浮层里 —— 形状与表单抽屉一致（用户要求"跟选项弹框类似"）。
@@ -2540,6 +2613,13 @@ const SHOTS = [
   ['#elicbottomstuckprobe', 'bottom-stuck', '1440,1000'],
   ['#elicreal', 'elic-real', '1440,1000'],
   ['#elicrealpick', 'elic-real-pick', '1440,1000'],
+  // [CUSTOM-231 两个新面：**选项预览**（就地展开在被选行下方）与**已答回执卡**
+  // （标出所选 / 题数 / 折起来）。231 之前 #elic* 十档全是 pending —— 已答态从没被截过图，
+  // 而它恰恰是"看不出答了什么"的那个面。
+  ['#elicpreviewpick', 'elic-preview', '1440,1000'],
+  ['#elicsettled', 'elic-settled', '1440,900'],
+  ['#elicsettledfree', 'elic-settled-free', '1440,900'],
+  ['#elicsettledfolded', 'elic-settled-folded', '1440,900'],
   // 钉住大纲栏：抽屉与输入卡必须同一条中线（asideW/2 = 120px 的偏移就是用户看到的"没居中"）。
   // 表单里打字掉不掉焦点（真 Chromium 量，不推）。
   ['#elicfocusprobe', 'elic-focus', '1440,900'],

@@ -3,12 +3,18 @@ export interface DashboardHtmlOptions {
   nonce: string;
 }
 
-export const DASHBOARD_COMMANDS = ['vac.newConversation', 'vac.openChatInEditor', 'vac.connectAgent', 'vac.refreshDashboard'] as const;
+// [CUSTOM-230 Dashboard 页面上的按钮 === 这份白名单，两边一一对应（spec 钉住）：
+// 页面里能点的命令只能是这里列出的。**两条都不在这里**：
+// · `vac.refreshDashboard` —— 刷新在视图标题栏那颗 ⭯（view/title 的 `when: view == vac-dashboard`），
+//   而面板每次可见又会自己 refresh（`DashboardViewProvider.setVisible`），页面里再放一颗就是第三个入口；
+// · `vac.openChatInEditor` —— 它的入口是**标题栏 ↻ 左侧那颗图标**（`package.json` 的 view/title，
+//   与 Agents 面板同一颗），页面上不再放第二颗（用户 2026-10-13 确认）。
+export const DASHBOARD_COMMANDS = ['vac.newConversation', 'vac.connectAgent'] as const;
 
 const CLIENT_SCRIPT = [
   '(function () {',
   "  var api = acquireVsCodeApi();",
-  "  var COMMANDS = ['vac.newConversation','vac.openChatInEditor','vac.connectAgent','vac.refreshDashboard'];",
+  "  var COMMANDS = ['vac.newConversation','vac.connectAgent'];",
   '  function slot(id) { return document.getElementById(id); }',
   "  function esc(s) { return String(s === null || s === undefined ? '' : s).replace(/[&<>\"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]; }); }",
   "  function tok(n) { n = n || 0; if (n >= 1e9) { return (n / 1e9).toFixed(2) + 'B'; } if (n >= 1e6) { return (n / 1e6).toFixed(2) + 'M'; } if (n >= 1e3) { return (n / 1e3).toFixed(1) + 'k'; } return String(n); }",
@@ -138,11 +144,12 @@ export function renderDashboardHtml(opts: DashboardHtmlOptions): string {
     '</style>',
     '</head>',
     '<body>',
+    // [CUSTOM-230 行动区只剩两颗文字按钮，各带一条悬停说明。
+    // 「打开到编辑区」**不在页面上**：它是视图标题栏里 ↻ 左侧那颗图标（见 DashboardHtml 顶部的
+    // 白名单注释），页面里再放一颗就是同一个命令的第二个入口。
     '<div class="actions">',
-    '<button data-command="vac.newConversation">New conversation</button>',
-    '<button data-command="vac.openChatInEditor">Open chat in editor</button>',
-    '<button data-command="vac.connectAgent">Connect agent</button>',
-    '<button data-command="vac.refreshDashboard">Refresh</button>',
+    '<button data-command="vac.newConversation" title="Start a new conversation (connects an agent first if none is active)">New conversation</button>',
+    '<button data-command="vac.connectAgent" title="Connect to an agent (starts its CLI process)">Connect agent</button>',
     '</div>',
     '<div class="section"><div class="h">Connections</div><div id="connections" class="dim">Loading\u2026</div></div>',
     '<div class="section"><div class="h">Usage</div><div id="cards"></div></div>',

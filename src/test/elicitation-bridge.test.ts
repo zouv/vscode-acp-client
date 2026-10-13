@@ -73,7 +73,23 @@ suite('elicitation bridge: outcomes, ownership, lifecycle', () => {
       'a second answer must be ignored (double click / both surfaces)');
     assert.deepStrictEqual(await pending, { action: 'accept', content: { question_0: 'Astro official' } });
     assert.deepStrictEqual(presenter.updated.map(s => s.status), ['accepted'], 'the card settles');
+    assert.deepStrictEqual(presenter.updated[0].answers, { question_0: 'Astro official' },
+      'the settled card also gets the structured answer — the summary line alone cannot say WHICH option');
     assert.strictEqual(bridge.pendingCount, 0);
+  });
+
+  // [CUSTOM-231 The receipt marks the picked option out of the structured map, so the map has to
+  // carry every shape the panel can send: a scalar for a single pick, an array for a multi pick,
+  // a number for a numeric field. And nothing at all when there is no answer to record.
+  test('the structured answer keeps its shape — and is absent when nothing was answered', async () => {
+    const bridge = new ElicitationBridge();
+    const presenter = new RecordingPresenter();
+    bridge.setPresenter(presenter);
+    bridge.request(askRequest(), never);
+    bridge.submit('s1:1', 'accept', { question_0: ['Astro official', 'a note'], question_0_custom: 'typed', count: 3 });
+    assert.deepStrictEqual(presenter.updated[0].answers,
+      { question_0: ['Astro official', 'a note'], question_0_custom: 'typed', count: 3 },
+      'arrays and scalars ride through untouched');
   });
 
   test('skip is a decline, not a cancel — and neither carries content', async () => {
@@ -90,6 +106,8 @@ suite('elicitation bridge: outcomes, ownership, lifecycle', () => {
     bridge2.submit('s2:1', 'cancel');
     assert.deepStrictEqual(await cancelled, { action: 'cancel' });
     assert.deepStrictEqual(presenter2.updated.map(s => s.status), ['cancelled']);
+    assert.strictEqual(presenter2.updated[0].answers, undefined,
+      'nothing was answered, so there is no structured answer to draw');
   });
 
   test('no presentable panel → the dialog answers instead, one at a time', async () => {

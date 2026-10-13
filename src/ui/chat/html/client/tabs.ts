@@ -268,6 +268,19 @@ export const tabsClient = `
   }
 
   /**
+   * [CUSTOM-229 dot 用**颜色**说状态，而颜色是读不出名字的（且没有图例）。所以把同一份
+   * 状态**也说给 tooltip**：悬停时除了目录路径，还要能读到"这个色块现在是什么意思"。
+   * 优先级与 dotClass 逐条对齐 —— 两处一旦不一致，颜色和文字就会互相打脸。
+   */
+  function dotStatusText(summary) {
+    if (summary.waiting) { return 'Waiting for your answer'; }
+    if (summary.running) { return 'Turn in progress'; }
+    if (summary.loading) { return 'Loading history'; }
+    if (summary.unread) { return 'New output in the background'; }
+    return 'Idle';
+  }
+
+  /**
    * [CUSTOM- The index in the COMBINED tab list that a keydown
    * originated from, or -1. Replaces the session-only lookup: a focused draft
    * would otherwise make every real tab unreachable by arrow key.
@@ -501,10 +514,10 @@ export const tabsClient = `
             : label + '\\n' + model.id);
 
         // [CUSTOM- 目录标识：dot 里写目录缩写，一个字母一个 span
-        // （2x2 布局靠它换行），背景色保留状态色。
-        // 228：字母数写进 data-len —— styles.ts 按它分档字号，并决定 1~3 个字母走单行、
-        // 4 个才折 2x2。dot 自己没有 tooltip，而 tab 的 tooltip 只有标题与会话 id，
-        // 字母看不清时没有第二条路，所以把完整目录挂到 dot 上。
+        // （3 个走「上 2 下 1」、4 个走 2x2，靠 styles.ts 那套两列网格排）。
+        // 228：字母数写进 data-len —— styles.ts 按它分档字号、并决定走单行还是两行网格。
+        // 229：dot 同时承载状态色，所以 tooltip 是**两行、各带标签**：目录路径 + 当前状态
+        // （颜色读不出名字，得让悬停能问）。没有 cwd 的会话只留状态那一行。
         var dot = NS.dom.el('span', isDraft ? 'tab-dot draft'
           : (isRestore ? 'tab-dot restore' : dotClass(model.summary)));
         if (!isDraft && !isRestore) {
@@ -513,7 +526,8 @@ export const tabsClient = `
           for (var li = 0; li < abbrev.length; li++) {
             dot.appendChild(NS.dom.el('span', 'dir-letter', abbrev[li]));
           }
-          if (model.summary.cwd) { dot.title = model.summary.cwd; }
+          dot.title = (model.summary.cwd ? 'Dir: ' + model.summary.cwd + '\\n' : '')
+            + 'State: ' + dotStatusText(model.summary);
         }
         tab.appendChild(dot);
         tab.appendChild(NS.dom.el('span', 'tab-label', label));

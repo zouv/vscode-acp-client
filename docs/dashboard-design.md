@@ -58,8 +58,17 @@
 
 ## UI 分区
 
-1. **快捷操作**：New conversation（`vac.newConversation`）、Open chat in editor（`vac.openChatInEditor`）、
-   Connect agent（`vac.connectAgent`）、Refresh（`vac.refreshDashboard`）。
+1. **快捷操作**：页面上只有**两颗文字按钮**，各带一条悬停说明 —— New conversation
+   （`vac.newConversation`）、Connect agent（`vac.connectAgent`）。另外两条命令**不在页面上，
+   只在视图标题栏**：
+   - **Open chat in editor area**（`vac.openChatInEditor`，图标 `$(open-preview)`）——
+     标题栏里 **↻ 左侧**那颗，与 Agents 面板（`vac-sessions`）是同一颗；由 `package.json` 的
+     `view/title` 贡献，`navigation@0` 因此排在 ↻ 的 `navigation@1` 左边。
+   - **Refresh** —— 只有标题栏那颗 ↻：面板每次变为可见又会自己重扫一遍
+     （`DashboardViewProvider.setVisible`），页面上再放一颗就是第三个入口。
+
+   所以 `DASHBOARD_COMMANDS`（webview → 宿主的命令白名单）**就是这页面上的两颗按钮**：
+   `vac.refreshDashboard` 与 `vac.openChatInEditor` 都不在里面 —— 白名单是"页面",不是"扩展能做的全部"。
 2. **Connections**：每个 agent 一行，带状态点与已开会话数。
 3. **用量卡片**：Today / 7d / 30d / all-time——in/out/cache token，`est. $` 带 tooltip。
 4. **30 天趋势图**：内联 SVG 柱，`currentColor` + VS Code 图表变量，带 `<title>`/`<desc>`。
@@ -67,7 +76,7 @@
 6. **Recent sessions**：点击发 `{type:'openSession', agentName, sessionId}` → `vac.openSession`。
 7. **状态行**：首扫期间显示 "scanning…"，否则显示文件计数或最近一次数据源错误；一个转录都没找到时给友好的空态。
 
-**webview → 宿主**的消息：`{type:'command', id}`（id 按四个命令 id 白名单校验，其它一律丢弃）、
+**webview → 宿主**的消息：`{type:'command', id}`（id 按两个命令 id 白名单校验，其它一律丢弃）、
 `{type:'openSession', …}`、`{type:'refresh'}`。**宿主 → webview**：`{type:'snapshot', usage, connections, sessions}`，
 **只在视图可见时投递**；视图变为可见会触发一次新扫描并投递。严格 CSP（`default-src 'none'`、
 内联脚本带 nonce、`style-src` 限定到 webview 源），**不用远程资源，只用 VS Code 变量**。

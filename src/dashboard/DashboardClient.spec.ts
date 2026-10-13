@@ -144,7 +144,7 @@ describe('dashboard client script', () => {
     const click = h.documentListeners[0];
     click({ target: { closest: (sel: string) => (sel === '[data-command]' ? { getAttribute: () => 'vac.newConversation' } : null) } });
     click({ target: { closest: (sel: string) => (sel === '[data-command]' ? { getAttribute: () => 'vac.evil' } : null) } });
-    click({ target: { closest: (sel: string) => (sel === '[data-command]' ? { getAttribute: () => 'vac.refreshDashboard' } : null) } });
+    click({ target: { closest: (sel: string) => (sel === '[data-command]' ? { getAttribute: () => 'vac.connectAgent' } : null) } });
     click({
       target: {
         closest: (sel: string) =>
@@ -155,14 +155,14 @@ describe('dashboard client script', () => {
     });
     expect(h.posted.slice(1)).toEqual([
       { type: 'command', id: 'vac.newConversation' },
-      { type: 'command', id: 'vac.refreshDashboard' },
+      { type: 'command', id: 'vac.connectAgent' },
       { type: 'openSession', agentName: 'Claude Code', sessionId: 'sess-42' },
     ]);
   });
 
-  it('whitelists exactly the four quick-action commands in html and script', () => {
+  it('whitelists exactly the two quick-action commands in html and script', () => {
     const h = boot();
-    expect(DASHBOARD_COMMANDS).toHaveLength(4);
+    expect(DASHBOARD_COMMANDS).toHaveLength(2);
     for (const id of DASHBOARD_COMMANDS) {
       expect(h.html).toContain("'" + id + "'");
     }
