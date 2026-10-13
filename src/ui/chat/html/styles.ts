@@ -161,13 +161,19 @@ export function styles(): string {
      于是完成态（无状态类）时 color 是 descriptionForeground（灰）、背景灰、文字近黑 ⇒ 看不见。
      现在的分工：状态色 → background（外圈跟它走），文字色 → color（固定在 editor-background）。
      方形不是矩形：宽高都 16px（226 从 18 缩到 16，用户报"可以稍微小一些"）。
-     2x2 布局（227）：4 个字母排两行两列 —— flex-wrap + 字号压到半格，行高 1 让两行正好占满。 */
+     2x2 布局（227）：4 个字母排两行两列 —— flex-wrap + 行高 1 让两行正好占满。
+     228 把 227 的"字号压到半格"换成了**按字母数分档**（见下面三条 [data-len]），
+     并让 1~3 个字母走单行。 */
   .tab-dot {
     position: relative;
-    width: 16px; height: 16px; border-radius: 4px; flex: 0 0 auto;
+    width: 16px; height: 16px; border-radius: 6px; flex: 0 0 auto;
     display: inline-flex; align-items: center; justify-content: center;
     flex-wrap: wrap; align-content: center;
-    font-size: 0.42em; font-weight: 700; line-height: 1; letter-spacing: 0;
+    /* [CUSTOM-228 字号按字母数分档（下面三条 [data-len]），这里是 4 个字母的档。
+       写成 min(em, px)：方块是**固定 16px**，字却是相对字号 —— 用户把工作区字号调到
+       16px 以上时，4 个字母的两行会顶破方块、被 overflow 削掉。min() 让默认字号下取等值、
+       大字号下不再长大。6px 圆角是四档的共同上限：2x2 的角格有字，再圆就削到笔画。 */
+    font-size: min(0.5em, 6.5px); font-weight: 700; line-height: 1; letter-spacing: 0;
     /* 文字色：固定、不随状态变（否则完成态背景灰+文字深灰就看不清了）。 */
     color: var(--vscode-editor-background);
     /* 背景色：默认空闲态的灰；下面的状态类**只覆盖这一个属性**。 */
@@ -175,11 +181,19 @@ export function styles(): string {
     padding: 0;
     overflow: hidden;
   }
-  /* [CUSTOM- 每个字母一个 span，227 的 2x2 布局靠它换行。
-     宽度 50% 让两个字母占一行；1-2 个字母时（T / AV）不硬拆，让它们自然居中。 */
+  /* [CUSTOM-228 字母越少给得越大。1~3 个字母一律**单行居中**，只有 4 个才折 2x2。
+     227 原想"1-3 个字母不硬拆、自然居中"，但那条 :nth-child(-n+2):nth-last-child(-n+2)
+     对 3 个字母只有**中间那个**成立 ⇒ 宽度成了 [50%, auto, 50%]，第 3 个被挤到第二行。
+     改成按 data-len 分档（宽度规则见下），3 个字母才真的单行。 */
+  .tab-dot[data-len="1"] { font-size: min(0.7em, 9.1px); }
+  .tab-dot[data-len="2"] { font-size: min(0.6em, 7.8px); }
+  .tab-dot[data-len="3"] { font-size: min(0.54em, 7px); }
+  /* [CUSTOM- 每个字母一个 span，2x2 布局靠它换行：宽度 50% 让 4 个字母排两行两列。
+     1~3 个字母给 auto 宽度，让它们在同一行里自然居中。 */
   .tab-dot .dir-letter { width: 50%; text-align: center; }
-  .tab-dot .dir-letter:nth-child(-n+2):nth-last-child(-n+2),
-  .tab-dot .dir-letter:only-child { width: auto; }
+  .tab-dot[data-len="1"] .dir-letter,
+  .tab-dot[data-len="2"] .dir-letter,
+  .tab-dot[data-len="3"] .dir-letter { width: auto; }
   /* 优先级：等人回答 > 轮次在跑 > 载入历史 > 后台有新输出 > 平常。
      每条只改 background-color —— color 不动，文字永远保持对比色。 */
   .tab-dot.waiting { background-color: var(--vscode-charts-orange, var(--vscode-charts-yellow)); }

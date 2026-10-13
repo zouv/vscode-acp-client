@@ -17,13 +17,21 @@
 
 - **最近更新**：2026-10-13
 - **整体状态**：✅ 无进行中的开发任务。**v1.0.3 已发布**（GitHub Release 附
-  `vscode-acp-client-1.0.3.vsix`），工作区干净。
+  `vscode-acp-client-1.0.3.vsix`）。工作区有**未提交改动**（三块，均已记入 `CHANGELOG [未发布]`）：
+  ① 默认 Claude Code 适配器换源（`npx -y github:zouv/claude-agent-acp`）；
+  ② 全仓库去前项目痕迹（身份表述 + 历史叙述中性化 + 过期日志路径订正）；
+  ③ 会话 tab 目录徽标可读性（字号按字母数分档 / 圆角 6px / tooltip 显示完整目录），
+  以及随之修掉的**无头预览 `--vscode-font-size` 基准**问题（见 `docs/pitfalls.md` #66）。
+  等用户决定何时提交。
 - **当前分支（必填）**：`main`，与 `origin/main` 同步。
   **未经用户明确指示不要 commit / push。**
-- **最后验证状态**：`npm run lint` ✅ · `npm run typecheck` ✅ · `npm run test:unit` ✅（90 项）
-  · `npm test`（真实宿主）✅ 456 项通过 · `sh check-docs.sh` ✅（1 项警告：上一次提交改了源码未动 CHANGELOG，属启发式误报）
-  · 无头截图档 `#historyfilter` ✅ 探针 `menuOnTop` 由 `false` 翻成 `true`（改前 / 改后各截一张对照）
-  · `npm run vsix` ✅ 生成 `release/vscode-acp-client-1.0.3.vsix`（含 `resources/icon.*` 与重写后的 README）
+- **最后验证状态**（2026-10-13，①②③ 全部）：`npm run lint` ✅ · `npm run typecheck` ✅ ·
+  `npm run test:unit` ✅（90 项）· `npm test`（真实宿主）✅ **457 项**通过
+  （含新增用例 `the directory badge declares its letter count and shows the full path on hover`）。
+  无头探针 `#tabsprobe` ✅：`baseFont` = 13px、`data-len` 1/2/3/4 → 9.1 / 7.8 / 7 / 6.5px、
+  圆角 6px、3 个字母的 `letterRows` 由 2 变 1、`title` = 完整 cwd。
+  **未做** `npm run dev:host` 宿主实测——改的是 webview 的 CSS 与客户端脚本，无头档与宿主同一
+  渲染引擎，结论应当一致，但真机的 `--vscode-font-size` 值得眼过一遍（并入下面「下一步」第 1 条）。
 
 ---
 
@@ -59,6 +67,8 @@
 1. **P1-2 宿主实测验收**：`npm run dev:host` 打开宿主，目视确认 Dashboard 的统计数字与
    连接状态、以及聊天面板（发消息 → 流式 → 工具调用 → 权限卡片）的实际表现；
    **顺带确认图标三处到位**（活动栏 VAC 容器 / 编辑区聊天标签页）、
+   **会话 tab 的目录徽标**（`data-len` 四档的字号与圆角、悬停显示完整路径、
+   3 个字母是否单行 —— 无头读数已过，但真机的基准字号是 `--vscode-font-size`）、
    以及**目录筛选菜单在真宿主里的层叠**（无头档只能证明 Chrome 的绘制顺序，
    宿主 webview 同一套引擎、结论应当一致，但没在宿主里眼过）。
    这是目前**唯一没有做过**的验收环节（其余都是类型/单测/集成测试的结论）。
@@ -100,9 +110,6 @@
   的「谁画在上面」一行与 `styles.ts` 那条注释。
 - **PNG 必须按二进制提交**：`.gitattributes` 的 `*.png binary` 是这道防线；1.0.3 之前的
   `resources/icon.png` 就是被换行符转换洗坏的（签名的 `0x0D` 被剥掉），务必别退回去。
-- **出处处理**：前身基线（`vendor/main`）中存在过的文件一律**重写**，不搬运原文；
-  基线中不存在的自写文件（Chat 面板子系统、两个桥、`CustomModels`、`BuildInfo`、Dashboard 设计）直接沿用。
-  这样仓库只保留本项目自己的 MIT 版权，不需要保留上游署名。
 - **继续走 ACP**：不用 Anthropic 专有 SDK，保持通用 ACP 客户端；当前只接 Claude 与 Codex。
 - **agent 差异集中**：新增 agent 只动 `agents/AgentProfile.ts` 与配置，**不往 UI 加分支**。
 - **构建换成 esbuild**、**测试分两层**（vitest 纯逻辑 + mocha 真实宿主）。

@@ -501,14 +501,19 @@ export const tabsClient = `
             : label + '\\n' + model.id);
 
         // [CUSTOM- 目录标识：dot 里写目录缩写，一个字母一个 span
-        // （227 的 2x2 布局靠它换行），背景色保留状态色。
+        // （2x2 布局靠它换行），背景色保留状态色。
+        // 228：字母数写进 data-len —— styles.ts 按它分档字号，并决定 1~3 个字母走单行、
+        // 4 个才折 2x2。dot 自己没有 tooltip，而 tab 的 tooltip 只有标题与会话 id，
+        // 字母看不清时没有第二条路，所以把完整目录挂到 dot 上。
         var dot = NS.dom.el('span', isDraft ? 'tab-dot draft'
           : (isRestore ? 'tab-dot restore' : dotClass(model.summary)));
         if (!isDraft && !isRestore) {
           var abbrev = directoryAbbrev(model.summary.cwd);
+          if (abbrev.length > 0) { dot.setAttribute('data-len', String(abbrev.length)); }
           for (var li = 0; li < abbrev.length; li++) {
             dot.appendChild(NS.dom.el('span', 'dir-letter', abbrev[li]));
           }
+          if (model.summary.cwd) { dot.title = model.summary.cwd; }
         }
         tab.appendChild(dot);
         tab.appendChild(NS.dom.el('span', 'tab-label', label));

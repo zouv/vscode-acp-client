@@ -27,7 +27,7 @@
 
 ## 5. 新 Chat 面板子系统（`src/ui/chat/`，CUSTOM-20260923-011）
 
-> 上游**没有**这一整棵树，所以它不参与任何上游合并冲突。入口是 `index.ts`，
+> 这一整棵树是自建的，与其它模块无耦合，因此不参与任何合并冲突。入口是 `index.ts`，
 > 外部只依赖它导出的 `ChatViewProvider`（侧边栏视图）与 `ChatPanelHost`（面板宿主）。
 
 ### 5.1 文件职责
@@ -114,7 +114,7 @@
 （助手气泡只显示原始 markdown 文本，代码块/复制按钮/链接全都没有），而所有自动化检查都是绿的——
 因为 tsc/lint/webpack 都看不到「消息被运行时守卫丢掉」。见 `CUSTOM-20260923-012`。
 
-### 5.5 fork 侧的安全约定
+### 5.5 webview 侧的安全约定
 
 - CSP：`script-src` **只有 nonce**（无 `'unsafe-inline'`），`img-src` 额外允许 `data:`（非文本内容的 base64 图片）。
 - 链接：markdown 渲染出的 `<a>` **不带真实 href**。点击分两条通道：可放行协议（仅 `http`/`https`/`mailto`）
@@ -195,7 +195,7 @@
 
 ### 5.8 面板内权限卡（CUSTOM-20260924-020）
 
-**三条会挂死 agent 的泄漏路径**（改这块之前必须知道，上游一条都没堵）：
+**三条会挂死 agent 的泄漏路径**（改这块之前必须知道，三条都得自己堵）：
 
 1. **SDK 对 `session/request_permission` 没有超时**——呈现不出来就是永久等待。
    所以 `canPresent` 里的 `surface.reveal(true)` 不是锦上添花，是"让 agent 继续跑"的必要动作。

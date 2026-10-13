@@ -997,6 +997,45 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     assert.strictEqual(dotFor({ unread: true }).className, 'tab-dot attention');
   });
 
+  // [CUSTOM-228 The number of letters is the ONLY input to the badge's type size and to
+  // whether it wraps (styles.ts keys off [data-len]), so the count has to ride on the dot.
+  // The full path rides on the dot's tooltip as well: the tab's own tooltip carries only the
+  // title and the session id, so before this there was no way to read the directory back —
+  // and when 5px letters are unreadable, that is the only other channel there is.
+  // What a stub DOM CANNOT check is the layout itself (5.46px vs 9.1px, one row vs two):
+  // that is `scripts/preview-records.mjs` #tabsprobe's job — see its `letterRows`/`fontSize`.
+  test('the directory badge declares its letter count and shows the full path on hover', () => {
+    const { NS, els } = tabStrip();
+    const dotFor = (cwd: string) => {
+      NS.tabs.setSessions([{ ...summary('s1'), cwd }]);
+      return els.tabs.querySelector('.tab-dot') as StubNode;
+    };
+    // The four tiers the CSS defines, one fixture each.
+    const one = dotFor('/git/pavilion');
+    assert.strictEqual(one.textContent, 'P');
+    assert.strictEqual(one.getAttribute('data-len'), '1');
+    assert.strictEqual(one.title, '/git/pavilion');
+
+    const two = dotFor('/git/story-myriad');
+    assert.strictEqual(two.textContent, 'SM');
+    assert.strictEqual(two.getAttribute('data-len'), '2');
+
+    const three = dotFor('/git/story-myriad-pavilion');
+    assert.strictEqual(three.textContent, 'SMP');
+    assert.strictEqual(three.getAttribute('data-len'), '3');
+
+    const four = dotFor('/git/alpha-beta-gamma-delta');
+    assert.strictEqual(four.textContent, 'ABGD');
+    assert.strictEqual(four.getAttribute('data-len'), '4');
+
+    // No directory to abbreviate => no tier at all, so the dot keeps the default size
+    // instead of claiming a tier it has no letters for. (Draft and restore dots take the
+    // same branch — they carry no letters either.)
+    const none = dotFor('');
+    assert.strictEqual(none.textContent, '');
+    assert.strictEqual(none.getAttribute('data-len'), null);
+  });
+
   test('the close button is out of the tab order; exactly one tab is tabbable', () => {
     const { NS, els } = tabStrip();
     NS.tabs.setSessions([summary('s1'), summary('s2'), summary('s3')]);

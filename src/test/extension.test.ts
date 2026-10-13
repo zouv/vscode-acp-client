@@ -39,7 +39,7 @@ suite('extension', () => {
     }
   });
 
-  test('rejects commands from the upstream namespace', async () => {
+  test('rejects commands from the legacy namespace', async () => {
     const registered = new Set(await vscode.commands.getCommands(true));
     assert.ok(!registered.has('acp.connectAgent'), 'the acp.* namespace must not be re-exported');
     assert.ok(!registered.has('acpc.connectAgent'), 'the acpc.* namespace must not be re-exported');

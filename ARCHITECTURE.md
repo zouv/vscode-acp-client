@@ -330,4 +330,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 - **会话早到的通知要缓冲**：`session/new` 响应解析与通知派发之间存在微任务竞态（`PendingSessionState`）。
 - **换行符一律 LF**：`.gitattributes` 已钉住；写入 CRLF 会让整文件产生伪差异。
 - **`vac.turnInProgress` 必须与 `isTurnInFlight` 同步**，否则 Escape 要么失效要么常亮。
-- 本仓库与上游 fork 的关系、以及出处处理原则，见 [`README.md`](README.md) 的「出处与上游」。
+- **webview 的字号/布局改动要先确认预览基准，再谈结论**：`preview-records.mjs` 的预览主题
+  缺 `--vscode-font-size` 这类**非配色** token 时，页内 `em` 的解析基准会静默跑偏
+  （实测放大 ~1.79×），真机的问题在截图里复现不出来、"看着挺好"是假绿。
+  `#tabsprobe` 读数里的 `baseFont` 必须是 13px —— 见 `docs/pitfalls.md` #66。

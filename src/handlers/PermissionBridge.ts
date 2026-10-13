@@ -1,5 +1,5 @@
 // 权限请求桥（面板内提示 + 弹框兜底）：新增文件。
-// 上游的 `PermissionHandler` 直接 `showQuickPick`，本仓库把它改成：能进面板就进面板，
+// 早期实现的 `PermissionHandler` 直接 `showQuickPick`，本仓库把它改成：能进面板就进面板，
 // 进不去才退回弹框。桥的职责是把「ACP 请求 → 用户决定 → ACP 响应」这条链路的**所有出口**
 // 收在一处，因为这条链有三条必须逐条堵住的泄漏路径：
 //
@@ -8,8 +8,8 @@
 // 要么把卡片状态改成 deferred 并说明去哪答。
 // 2. **轮次被取消时必须回答 `cancelled`**。ACP 契约明确要求：会话被 cancel 时，
 // 客户端必须把待决的权限请求以 `{ outcome: 'cancelled' }` 结束，否则 agent 永久挂起。
-// 上游实现里这条完全缺失（`SessionManager.cancelTurn` 只发 `session/cancel`）。
-// 3. **同时多个请求**。上游是并发的 QuickPick，两个会话同时请求会叠出两个分不清归属的弹框；
+// 早期实现里这条完全缺失（`SessionManager.cancelTurn` 只发 `session/cancel`）。
+// 3. **同时多个请求**。早期实现是并发的 QuickPick，两个会话同时请求会叠出两个分不清归属的弹框；
 // 这里改成全局 FIFO，一次只弹一个，且标题带会话标识。
 //
 // 本文件**不 import vscode 的 UI 类型**，只认 `PermissionPresenter` 接口，因此可以被单测直接驱动。
