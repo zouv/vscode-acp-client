@@ -288,7 +288,16 @@ export function styles(): string {
      只写在 #history 上、不动 .outline 的通用规则 —— #outline / #cwdMenu 里没有这种嵌套菜单。
      head 的 background: inherit 与 sticky 都保留（后者仍是菜单的定位锚）。 */
   #history { display: flex; flex-direction: column; overflow: visible; }
-  #history .outline-head { flex: none; }
+  /* 目录过滤菜单还必须是**画在上面**的那一个：head 上要有正的 z-index。
+     因果链：历史行外套的那层 .session-row 是 position: relative（悬停图标要一个定位祖先）
+     ⇒ 每一行都是"定位元素、z-index: auto"，与同样 z-index: auto 的 .outline-head 落在
+     **同一个绘制步**里；同一步内按 DOM 顺序画，而列表排在 head 之后 ⇒ 行画在 head 之上。
+     菜单自己的 z-index: 20 **救不了**：position: sticky 让 head 自成层叠上下文，菜单被封在里面
+     （把它抬到 999 也照样被盖）。只有抬 head 这一层才行——整棵子树（chip + 菜单）随之进入
+     "z-index > 0"那一步、画在所有 auto 的行之上。
+     只写 #history（沿用上面那条的口径）：#outline / #cwdMenu 里没有 .session-row，没有这个竞争。
+     验收档 #historyfilter 用 elementFromPoint 量"那一点上最上面是谁"，不靠肉眼。 */
+  #history .outline-head { flex: none; z-index: 2; }
   #history .outline-list { flex: 1; min-height: 0; overflow-y: auto; }
   /* --- 时间显示（）------------------------------------
      每条记录的时刻。元素**始终在 DOM 里**，可见性由 #messages 上的一个类决定

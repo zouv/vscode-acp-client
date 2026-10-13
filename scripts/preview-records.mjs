@@ -225,6 +225,16 @@ const THEME = `:root {
   --vscode-focusBorder: #0078d4;
   --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
   --vscode-input-background: #313131;
+  /* 浮层（下拉 / 抽屉 / 历史浮层）那一套 token。真主题里一定有，这份预览主题原先没写 ——
+     .outline / .picker-menu / .picker-btn 的 background 全是 var(--vscode-dropdown-background)，
+     缺了就等于**没有背景**（透明）：于是"菜单压没压住列表"这类问题在截图里根本看不出来
+     （两边都透着底），而 .picker-item.active 的选中态同样量不到。补齐，让预览与真机一致。 */
+  --vscode-dropdown-background: #3c3c3c;
+  --vscode-dropdown-foreground: #f0f0f0;
+  --vscode-dropdown-border: #3c3c3c;
+  --vscode-editorWidget-background: #252526;
+  --vscode-list-activeSelectionBackground: #094771;
+  --vscode-list-activeSelectionForeground: #ffffff;
   --vscode-editor-font-family: Consolas, monospace;
 }`;
 
@@ -942,25 +952,90 @@ function driver() {
   }
   // 目录过滤菜单：它挂在历史浮层内部的 .outline-head 里，而浮层原先
   // 是个 overflow: auto 的滚动容器 ⇒ 绝对定位的菜单会被裁成几行（历史列表越短越矮）。
-  // 这一档手动搭出那个嵌套结构（渲染逻辑由桩 DOM 测试覆盖，这里只看**布局**：溢出有没有被裁）。
+  // 同一个嵌套结构后来还暴露了第二个问题：**菜单会被列表里的历史行盖住**（绘制顺序，不是尺寸）。
+  // 这一档因此走**真路径**建行（真 boot → 真 ↺ → 宿主形状的 history 回复 + 真点击 chip），
+  // 列表里是生产形状的 .session-row 行。旧版本手搭的是裸 .outline-item —— 静态元素、
+  // z-index 无从谈起，永远压不住菜单，所以这个 bug 它在结构上就测不出来（夹具形状不对）。
+  // 判据也不靠肉眼：在菜单与行重叠的那个点上问 elementFromPoint「最上面是谁」。
   if (location.hash.indexOf('historyfilter') >= 0) {
-    var drawerEl2 = document.getElementById('history');
-    var listEl2 = drawerEl2 ? drawerEl2.querySelector('.outline-list') : null;
-    var chipEl = document.getElementById('historyFilter');
-    var filterMenuEl2 = document.getElementById('historyFilterMenu');
-    if (drawerEl2 && listEl2 && filterMenuEl2) {
-      drawerEl2.hidden = false;
-      if (chipEl) { chipEl.hidden = false; chipEl.textContent = 'ai-gateway-viewer'; }
-      // 历史列表只放 4 行：修好之前，菜单的可见高度 = head 底边到浮层底边，短得只剩两三行。
-      for (var si = 0; si < 4; si++) {
-        listEl2.appendChild(NS.dom.el('div', 'outline-item', '会话记录 ' + (si + 1)));
+    var hfRun = function () {
+      var hfSummary = { sessionId: 's1', agentName: 'Claude Code', title: 'here', cwd: 'D:/Git/alpha',
+        createdAt: '2026-09-20T00:00:00Z', loading: false, running: false, unread: false };
+      NS.tabs.setSessions([hfSummary]);
+      NS.tabs.setFocus(hfSummary);
+      document.getElementById('historyBtn').click();
+      // 六个目录、十二条会话：行要够多、菜单要够高（6+1 项），重叠区才压得住一个探针点。
+      var hfDirs = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'];
+      var hfSessions = [];
+      for (var hf = 0; hf < 12; hf++) {
+        var hfDir = hfDirs[hf % hfDirs.length];
+        // 长标题是**故意**的：行若画在菜单之上，伸进菜单那块区域的文字就会盖在菜单文字上
+        // （肉眼看得到），短标题全缩在左边，两张截图会长得一模一样（第一版就是这样）。
+        var hfTitle = hf % 4 === 3
+          ? '会话记录 ' + (hf + 1) + ' · 这条标题很长很长很长很长很长很长，会长到伸进右侧菜单占的那块区域'
+          : '会话记录 ' + (hf + 1);
+        hfSessions.push({ sessionId: 'hf' + hf, title: hfTitle,
+          cwd: 'D:/Git/' + hfDir, dirKey: 'd:/git/' + hfDir, updatedAt: '2026-09-20T00:00:00Z' });
       }
-      // 菜单 20 行：内容高度远超它自己的 max-height（260px），所以"显示不完整"只可能是被裁。
-      for (var di = 0; di < 20; di++) {
-        filterMenuEl2.appendChild(NS.dom.el('div', 'picker-item filter-item', 'folder-' + (di + 1)));
+      NS.sessionMenu.setHistory({
+        type: 'history', agentName: 'Claude Code', source: 'agent',
+        sessions: hfSessions,
+        directories: hfDirs.map(function (name, idx) {
+          return { key: 'd:/git/' + name, cwd: 'D:/Git/' + name, name: name, label: name,
+            count: 2, current: idx === 0 };
+        }),
+      });
+      var hfChip = document.getElementById('historyFilter');
+      var hfMenu = document.getElementById('historyFilterMenu');
+      var hfList = document.querySelector('#history .outline-list');
+      if (!hfChip || !hfMenu || !hfList) { return; }
+      hfChip.click();
+      // 默认筛的是**当前目录**，只剩两行 —— 而菜单有 7 项（174px）比它还高，探针点会落到行外面
+      // （第一版就是这么量出个假的 menuOnTop）。先点菜单里的 "All folders" 把 12 行放出来：
+      // 按设计挑完一项菜单**不关**（见 applyFilter 的注释），于是"菜单压着一堆行"这个现场才成立。
+      var hfAll = hfMenu.querySelector('[data-filter-key=""]');
+      if (hfAll) { hfAll.click(); }
+      // 静态截图拍不出 :hover，而用户**正是在鼠标停到行上时**被盖住的：那一刻行会填上悬停底色、
+      // 右端的 Archive / Rename 图标也会现身，两者都正落在菜单底下（.row-actions 是 absolute
+      // right: 6px，菜单是 right: 0 —— 同一块区域）。这里把那两个 hover 效果用内联样式摆出来：
+      // 等价于真悬停，只是不靠鼠标（判据仍是下面那行 elementFromPoint，不靠这张图）。
+      var hfRows = document.querySelectorAll('#history .session-row');
+      var hfHoverBg = getComputedStyle(document.documentElement)
+        .getPropertyValue('--vscode-list-hoverBackground');
+      for (var hr = 4; hr < 8 && hr < hfRows.length; hr++) {
+        var hfItem = hfRows[hr].querySelector('.outline-item');
+        var hfActions = hfRows[hr].querySelector('.row-actions');
+        if (hfItem && hfHoverBg) { hfItem.style.background = hfHoverBg; }
+        if (hfActions) { hfActions.style.opacity = '1'; hfActions.style.pointerEvents = 'auto'; }
       }
-      filterMenuEl2.className = 'picker-menu down filter-menu open';
-    }
+      var hfRect = hfMenu.getBoundingClientRect();
+      // 量点取菜单下半段（一定压在列表前几行上）、水平取菜单中心。
+      var hfX = Math.round(hfRect.left + hfRect.width / 2);
+      var hfY = Math.round(hfRect.top + hfRect.height * 0.75);
+      var hfHit = document.elementFromPoint(hfX, hfY);
+      var hfPre = document.getElementById('history-filter-order-probe') || (function () {
+        var el = document.createElement('pre');
+        el.id = 'history-filter-order-probe';
+        el.style.cssText = 'position:fixed;left:0;bottom:0;margin:0;z-index:99999;'
+          + 'background:#000;color:#0f0;font:11px Consolas,monospace;padding:2px 4px';
+        document.body.appendChild(el);
+        return el;
+      })();
+      hfPre.textContent = JSON.stringify({
+        kind: 'history-filter-order',
+        rows: document.querySelectorAll('#history .session-row').length,
+        menuH: Math.round(hfRect.height),
+        at: hfX + ',' + hfY,
+        // true = 菜单画在上面（对的样子）；false = 被历史行盖住（用户报的 bug）。
+        menuOnTop: !!(hfHit && hfMenu.contains(hfHit)),
+        hit: hfHit ? (String(hfHit.className || '') || hfHit.tagName) : null,
+        overlapsRows: hfRect.bottom > hfList.getBoundingClientRect().top,
+      });
+    };
+    // 与 historydefault 同一理由：必须等**真的** load —— 早于它，sessionMenu.init 的第二遍
+    // 收尾一次 close() 会把刚打开的抽屉关掉（数字对、图里却没有东西）。
+    if (document.readyState === 'complete') { hfRun(); }
+    else { window.addEventListener('load', hfRun); }
   }
   // 历史会话的**默认筛选**：走真路径（真 boot → 真 ↺ → 宿主形状的
   // history 回复 → 真标记 #history/#historyFilter），桩 DOM 测试测的是逻辑、这里测的是
