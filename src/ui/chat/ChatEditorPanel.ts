@@ -56,6 +56,8 @@ export class ChatEditorPanel implements vscode.Disposable {
       },
     );
     this.panel = panel;
+    // Tab strip icon: without it the tab falls back to a generic editor glyph.
+    panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'resources', 'icon.png');
 
     // ORDER MATTERS: the listeners must exist BEFORE the surface attaches.
     // `attachSurface` writes the HTML, and the document's `ready` message can
