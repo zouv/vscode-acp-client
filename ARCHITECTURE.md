@@ -60,6 +60,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | agent 默认列表 / 设置项 schema / 新 agent 接入 | `package.json(contributes.configuration)` + `config/AgentConfig.ts` + `agents/AgentProfile.ts` | 全部业务代码 | §2.8 |
 | Dashboard 用量统计 / 指标 | `src/dashboard/**`（数据层在 `usage/`） | 聊天面板 | §2.9 |
 | 打包 / 发布 | `scripts/build.mjs`、`.vscodeignore`、`package.json(scripts)` | 全部业务代码 | §6 |
+| 图标 / 品牌资源（侧边栏、插件徽标、编辑区标签页） | `scripts/make-icon.mjs`（唯一几何源）+ `resources/` + `package.json(icon, viewsContainers)` + `ui/chat/ChatEditorPanel.ts(iconPath)` | 全部业务代码 | §6 |
 | **记录区布局 / 观感**（折叠形状、占几行、有没有重复内容） | `scripts/preview-records.mjs`（真 Chromium 无头截图，**自己看，别推理**）＋ `html/styles.ts` | core、tree、协议代码 | §5 |
 
 > 定位优先级：**函数名 grep > 本表**。表过期时以代码为准并顺手订正本表。
@@ -103,6 +104,9 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/utils/BuildInfo.ts` | 构建指纹（版本·git sha·打包时间·bundle 哈希）；`readPackageVersion()` 也被 `ConnectionManager` 用作 `clientInfo.version` | 日志身份标识 |
 | `src/test/*.test.ts` | 真实 Extension Host 的 mocha 测试（**用 Tab 缩进**） | 改扩展 id / 命令前缀 / 面板协议 |
 | `src/**/*.spec.ts` | vitest 纯逻辑测试（2 空格，禁 import `vscode`） | 改对应纯逻辑模块 |
+| `resources/icon.svg` | 活动栏容器图标（24×24 单色 `currentColor`，`viewsContainers.activitybar`） | 改侧边栏图标外观 |
+| `resources/icon.png` | 128×128 插件徽标（`package.json` 的 `icon`）＋编辑区标签页图标（`ChatEditorPanel` 的 `iconPath`） | 改徽标外观 |
+| `scripts/make-icon.mjs` | **图标的唯一几何源**：一份几何同时产出 `icon.svg` 与 `icon.png`（SDF 光栅化 + zlib 手写 PNG，零依赖）；`npm run icon`，`--preview` 另出多尺寸预览图到系统临时目录 | 改图标外观 |
 
 ---
 
@@ -309,6 +313,10 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 - 文档体检：`sh check-docs.sh`。
 - 开发宿主：`npm run dev:host`（`scripts/dev-host.mjs`，不挂调试器）；断点调试走 `.vscode/launch.json`。
 - 无头截图验收：`npm run compile-tests` 后 `node scripts/preview-records.mjs`。
+- **图标**：`npm run icon`（`scripts/make-icon.mjs`）。`resources/icon.svg` 与 `resources/icon.png`
+  **都是生成物，不要手改**——几何写在脚本顶部的 `MARKS`，改那里再重跑。
+  自动生成的图标必须按 `.gitattributes` 的 `*.png binary` 走，否则换行符转换会把 PNG 洗坏
+  （v1.0.2 之前的 `icon.png` 就是这么废掉的：0x0D 被剥掉、头部尺寸读成 32768）。
 
 ---
 
