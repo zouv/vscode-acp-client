@@ -21,6 +21,11 @@
 
 ## ✅ 已交付里程碑
 
+### M2 · 上架前打磨（2026-10-13）
+
+v1.0.3：修「目录筛选菜单被会话行盖住」（绘制顺序）、插件正式图标（侧边栏 / 徽标 / 编辑区标签页
+三处，此前 `resources/icon.png` 是坏文件）、README 重写为开源项目门面。细节见 `CHANGELOG [1.0.3]`。
+
 ### M1 · 独立仓库 + 底层重构 + Dashboard 骨架（2026-10-12）
 
 从上游 fork 脱钩，重建为自主演进的仓库：底层按性能与扩展性重写，双渲染路径合并为单一
@@ -57,4 +62,4 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 | P2-2 | 价格表校验 | `dashboard/usage/pricing.ts` 的 `PRICING_AS_OF` 与各档价格需按官方口径复核 |
 | P2-3 | 更多 agent 接入 | 保持「加 agent 只动 `agents/AgentProfile.ts` + 配置」这一约束不被破坏 |
 | P2-4 | 记录区长对话性能 | 虚拟列表 / 流式 markdown 只重绘尾块（当前依赖合并 postMessage 缓解） |
-| P2-5 | 上架 VS Code Marketplace | 注册 publisher、准备图标与截图、按 vsce publish 流程发布 |
+| P2-5 | 上架 VS Code Marketplace | 注册 publisher、准备图标与截图、按 vsce publish 流程发布。**图标已就绪**（2026-10-13，`resources/icon.{svg,png}` 由 `npm run icon` 生成）；截图待补 |
