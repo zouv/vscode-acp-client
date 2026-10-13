@@ -169,11 +169,13 @@ export function styles(): string {
     width: 16px; height: 16px; border-radius: 6px; flex: 0 0 auto;
     display: inline-flex; align-items: center; justify-content: center;
     flex-wrap: wrap; align-content: center;
-    /* [CUSTOM-228 字号按字母数分档（下面三条 [data-len]），这里是 4 个字母的档。
+    /* [CUSTOM-228/229 字号按字母数分档（下面两条 [data-len]），这里是**两行**那一档
+       （3 个字母走「上 2 下 1」、4 个走 2x2，都是两行）。
        写成 min(em, px)：方块是**固定 16px**，字却是相对字号 —— 用户把工作区字号调到
-       16px 以上时，4 个字母的两行会顶破方块、被 overflow 削掉。min() 让默认字号下取等值、
-       大字号下不再长大。6px 圆角是四档的共同上限：2x2 的角格有字，再圆就削到笔画。 */
-    font-size: min(0.5em, 6.5px); font-weight: 700; line-height: 1; letter-spacing: 0;
+       16px 以上时，两行会顶破方块、被 overflow 削掉。min() 让默认字号下取等值、
+       大字号下不再长大。7px 是两行档的上限（两行的行盒 2×7=14px，方块里还剩 2px 余量）。
+       6px 圆角是四档的共同上限：2x2 的角格有字，再圆就削到笔画。 */
+    font-size: min(0.54em, 7px); font-weight: 700; line-height: 1; letter-spacing: 0;
     /* 文字色：固定、不随状态变（否则完成态背景灰+文字深灰就看不清了）。 */
     color: var(--vscode-editor-background);
     /* 背景色：默认空闲态的灰；下面的状态类**只覆盖这一个属性**。 */
@@ -181,19 +183,24 @@ export function styles(): string {
     padding: 0;
     overflow: hidden;
   }
-  /* [CUSTOM-228 字母越少给得越大。1~3 个字母一律**单行居中**，只有 4 个才折 2x2。
-     227 原想"1-3 个字母不硬拆、自然居中"，但那条 :nth-child(-n+2):nth-last-child(-n+2)
-     对 3 个字母只有**中间那个**成立 ⇒ 宽度成了 [50%, auto, 50%]，第 3 个被挤到第二行。
-     改成按 data-len 分档（宽度规则见下），3 个字母才真的单行。 */
+  /* [CUSTOM-228 字母越少给得越大。1~2 个字母走**单行居中**（弹性那套，宽度随字形走）。 */
   .tab-dot[data-len="1"] { font-size: min(0.7em, 9.1px); }
   .tab-dot[data-len="2"] { font-size: min(0.6em, 7.8px); }
-  .tab-dot[data-len="3"] { font-size: min(0.54em, 7px); }
-  /* [CUSTOM- 每个字母一个 span，2x2 布局靠它换行：宽度 50% 让 4 个字母排两行两列。
-     1~3 个字母给 auto 宽度，让它们在同一行里自然居中。 */
-  .tab-dot .dir-letter { width: 50%; text-align: center; }
-  .tab-dot[data-len="1"] .dir-letter,
-  .tab-dot[data-len="2"] .dir-letter,
-  .tab-dot[data-len="3"] .dir-letter { width: auto; }
+  /* [CUSTOM-229 3/4 个字母改用**紧凑两列网格**：列宽随字形走（auto），整块再在方块里居中。
+     227/228 的等分格（width: 50%）把每个字母居中在自己的 8px 格里 —— 4 个字母的墨迹因此被推到
+     方块四角、中间空出一大块；而 3 个字母挤成单行时墨迹占满 15/16px、首尾贴到圆角上。
+     现在两档共用这套网格：4 个自然排成 2x2，3 个是「上 2 下 1」（第 3 个跨两列居中）。 */
+  .tab-dot[data-len="3"],
+  .tab-dot[data-len="4"] {
+    display: grid;
+    grid-template-columns: repeat(2, auto);
+    justify-content: center;
+    align-content: center;
+    column-gap: 1px;
+  }
+  .tab-dot[data-len="3"] .dir-letter:nth-child(3) { grid-column: 1 / -1; }
+  /* [CUSTOM- 每个字母一个 span。宽度随字形走：3 个字母跨两列靠它居中，2x2 靠网格列宽贴紧。 */
+  .tab-dot .dir-letter { text-align: center; }
   /* 优先级：等人回答 > 轮次在跑 > 载入历史 > 后台有新输出 > 平常。
      每条只改 background-color —— color 不动，文字永远保持对比色。 */
   .tab-dot.waiting { background-color: var(--vscode-charts-orange, var(--vscode-charts-yellow)); }
@@ -964,6 +971,46 @@ export function styles(): string {
   .elic-btn:disabled { cursor: default; opacity: 0.5; }
   .elic-note { font-size: 0.88em; color: var(--vscode-descriptionForeground); }
   .elic-note:empty { display: none; }
+
+  /* --- [CUSTOM-231 已答回执卡（标出所选 / 可折叠）------------------------ */
+  /* 标题行就是折叠区。折起来走**原生 details**——与记录区的消息 / Thought 同一套机制，
+     三角直接复用 .fold-caret（它的方向由 details[open] 驱动，不需要 JS）。默认展开
+     （见 elicitationView.fill 的 fold.open = true）：这张卡的意义就是让人一眼看到答了什么。 */
+  .elic-fold > summary {
+    display: flex; align-items: baseline; gap: 8px; cursor: pointer;
+    list-style: none; user-select: none;
+  }
+  .elic-fold > summary::-webkit-details-marker { display: none; }
+  .elic-fold > summary .elic-title { flex: 1; min-width: 0; }
+  .elic-count { flex: none; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+  .elic-fold > .elic-body { margin-top: 6px; }
+  /* [CUSTOM-231 每个选项前面画一个单选圈：未选空心、选中实心并加粗 —— 左列因此对齐，
+     只看卡片就能读出答了哪个，不必回头去读底下那行 summary。圈自己是 flex 项，
+     用 align-self 挪到标签那一行的高度（.elic-option 是 baseline 对齐的）。 */
+  .elic-option.static::before {
+    content: ''; flex: none; align-self: flex-start; margin-top: 0.3em;
+    width: 9px; height: 9px; box-sizing: border-box;
+    border: 1px solid var(--vscode-descriptionForeground); border-radius: 50%;
+  }
+  .elic-option.static.picked::before {
+    background: var(--vscode-focusBorder, var(--vscode-charts-blue));
+    border-color: var(--vscode-focusBorder, var(--vscode-charts-blue));
+  }
+  .elic-option.static.picked .elic-option-label { font-weight: 600; }
+  /* 非选项字段（文本 / 数字 / 布尔）的答案，以及自拟答案那一行。 */
+  .elic-answer { font-size: 0.95em; }
+  /* [CUSTOM-231 选项预览：**就地展开在被选行下方**（不是 Claude 那种右侧分栏 —— 这个面板的
+     宽度就是侧栏宽度）。等宽 + white-space: pre：preview 里是 ASCII 框图，一个空格的宽度都得
+     留住，所以不换行、放不下就横向滚。缩进与自拟框对齐（22px）。 */
+  .elic-preview {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 0.85em; line-height: 1.35;
+    white-space: pre; overflow: auto; max-height: 220px;
+    margin: 4px 0 2px 22px; padding: 6px 8px;
+    background: var(--vscode-textCodeBlock-background);
+    border: 1px solid var(--vscode-panel-border); border-radius: 4px;
+  }
+  .elic-preview[hidden] { display: none; }
 
   /* --- [CUSTOM- 记录里的"待回答"条 --------------------------- */
   /* [CUSTOM- 权限的记录行与它逐条同构（同一个形状、同一份样式），

@@ -503,21 +503,38 @@ applyAction 摘行换标签且不重置过滤）；真 Chromium 的 `#historyrow
 动作落在行内且纵向居中、图标画出来、点击发出 `archiveSession`、回执后行数 -1；
 截图档 `history-row-actions.png` 第一行是"悬停后"的摆法 —— 无头里触发不了真 :hover）。
 
-### 5.51 会话 tab 的目录标识（CUSTOM-20261009-225，修订 226/227）
+### 5.51 会话 tab 的目录标识（CUSTOM-20261009-225，修订 226/227/228/229）
 
 状态圆点（7px 圆点）改造成 16px **方形**圆角块，里面写目录缩写（最多 4 个字母，按非字母数字 + 驼峰边界拆词取首字母，大写）。
 
 **取最底层目录名（227 修订，用户报"DGAD 不对"）**：首版 `cwd.split(/[\\/]/)` 在模板串里求值后客户端拿到 `/[\/]/`（只匹配正斜杠），Windows 路径（`D:\Git\…`）整条不拆 ⇒ 整条路径进拆词 ⇒ DGAD。修法：模板串里写**四个**反斜杠（`/[\\\\/]/`），客户端拿到 `/[\\/]/`（同时匹配两种分隔符）⇒ 取到最后一段目录名再拆词。
 
-**2x2 布局与单行分档（227，228 修订）**：`NS.dom.el(tag, cls, text)` 把缩写当一个文本节点，一行排不下才换行 ⇒ 4 个字母挤一行。修法：每个字母一个 `<span class="dir-letter">`（宽度 50%），4 字母自然排成 2x2 两行。
-**228**：1~3 个字母改成**单行居中**（宽度 auto），只有 4 个才折 2x2 —— 227 原想让 1-3 个自然居中，但那条 `:nth-child(-n+2):nth-last-child(-n+2)` 对 3 个字母**只有中间那个**成立，实际宽度是 `[50%, auto, 50%]`，第 3 个被挤到第二行（探针 `letterRows` 量到 2，设计意图是 1）。现在改由 dot 上的 **`data-len`** 分档，选择器不再靠猜元素位置。
+**布局分档（227 → 228 → 229 三次修订）**：`NS.dom.el(tag, cls, text)` 把缩写当一个文本节点，一行排不下才换行 ⇒ 4 个字母挤一行。227 改成每个字母一个 `<span class="dir-letter">`、宽度 50%，让 4 字母排成 2x2。228 让 1~3 个字母走单行居中（宽度 auto）、只有 4 个才折 2x2，并改由 dot 上的 **`data-len`** 分档（选择器不再靠猜元素位置）。
+**229（用户报"3 字母并排挤、4 字母中间空"）**：`width: 50%` 的等分格把每个字母居中在自己的 8px 格里 —— 4 字母的墨迹因此被推到方块四角、中缝 3.5px；3 个字母挤成单行时墨迹占满 **15/16px**、首尾贴到圆角上。现在 **3/4 两档共用一套紧凑两列网格**（`grid-template-columns: repeat(2, auto)` + `justify-content`/`align-content: center` + `column-gap: 1px`）：4 个自然排成 2x2（中缝 1.0px、整块 11.0px 居中），3 个是「上 2 下 1」（第 3 个 `grid-column: 1 / -1` 跨两列居中）。1/2 个字母不变，仍走弹性单行。
 
-**字号分档与圆角（228，用户报"字母太小"）**：字号原先是写死的 `0.42em`，真机（`--vscode-font-size` 默认 13px）只有 **≈5.5px**。现在按字母数分档：1 个 `min(0.7em, 9.1px)` / 2 个 `min(0.6em, 7.8px)` / 3 个 `min(0.54em, 7px)` / 4 个 `min(0.5em, 6.5px)`；圆角 `4px` → `6px`。写成 `min(em, px)` 是因为**方块固定 16px 而字号是相对的**：不封顶的话用户把工作区字号调到 16px 以上，4 个字母的两行会顶破方块、被 `overflow: hidden` 削掉。6px 是四档的共同上限 —— 2x2 的角格里有字，再圆就削到笔画；3 个字母单行时墨迹占满 15px，是四档里最紧的一档。
+**字号分档与圆角（228，229 修订）**：字号原先是写死的 `0.42em`，真机（`--vscode-font-size` 默认 13px）只有 **≈5.5px**。228 起按字母数分档；**229 起两行档同字号**：1 个 `min(0.7em, 9.1px)` / 2 个 `min(0.6em, 7.8px)` / **3、4 个 `min(0.54em, 7px)`**（229 把 4 个从 `min(0.5em, 6.5px)` 提上来：网格收紧后两行的行盒 2×7 = 14px，方块里还剩 2px 余量；6.5px 是旧布局为"被等分格浪费掉的空间"付的代价）。圆角 `4px` → `6px`；6px 是四档的共同上限 —— 2x2 的角格里有字，再圆就削到笔画。写成 `min(em, px)` 是因为**方块固定 16px 而字号是相对的**：不封顶的话用户把工作区字号调到 16px 以上，两行会顶破方块、被 `overflow: hidden` 削掉。
 
-**dot 的 tooltip（228）**：`title` = 完整 cwd。tab 自己的 tooltip 只有「标题 + 会话 id」（`tabs.ts` 的 `tab.title`），字母看不清时没有第二条路可查。
+**dot 的 tooltip（228，229 补状态）**：`title` = **两行、各带标签**：`Dir: <完整 cwd>` + `State: <会话状态>`
+（228 只有 cwd；229 加状态与标签 —— 标签是必要的，两行裸值悬停时分不清哪行是路径哪行是状态）。229 的依据：dot 同时用**颜色**表达状态，而颜色没有名字、标签栏也没有图例 —— 悬停是唯一能"问出来"的地方。状态文案与 `dotClass` 的优先级**逐条对齐**（`tabs.ts:dotStatusText`：等人回答 > 轮次在跑 > 载入历史 > 后台有新输出 > Idle）；两处一旦漂移，颜色与文字就会对同一个会话各说各话。没有 cwd 的会话只有 `State:` 那一行。
 
 **颜色分工（226 修订，用户报"完成态看不见"）**：首版把状态色写在 `color:` 上，而 `background: currentColor` 会把 color 当背景用 —— 完成态（无状态类）时 color 是 `descriptionForeground`（灰）、背景灰、文字近黑 ⇒ 看不见。现在**状态色只给 background-color，文字色固定在 color 上**（不再吃状态类）；外圈单独读 `--tab-dot-state` 自定义属性（background-color 不能给 currentColor 用）。
 
 缩写规则：'story-myriad-pavilion' → 'SMP'，'AbcDeFg' → 'ADF'，'abc-de-fg' → 'ADF'。
 
 **踩坑**：拆词不用正则 lookbehind（本文件要走 check-webview-client.mjs 的 new Function 解析，lookbehind 在它的目标解析里会报 Unexpected token）—— 用两轮拆分（先按非字母数字切，再按驼峰边界切）。预览主题里原先没有 `--vscode-charts-orange/yellow/blue` 三个 token，waiting/loading/attention 三态的 background-color 算出来是透明 —— 补齐后探针才验得出对比色。
+
+### 5.52 表单回执卡：标出所选 + 可折叠（CUSTOM-20261013-231）
+
+**为什么在"记录区"分册**：抽屉（待答态）归 `chat-panel-input.md` §5.33，而**已答态是记录区的事** ——
+它是历史、跟消息一起滚、不在抽屉里。231 之前这张卡只有"题面 + 曾提供的选项 + 底下一行 summary"，
+**每个选项画出来一模一样**，答案只活在那一行拼接串里（`Answered · question_0: … · question_1: …`）。
+
+| 关注点 | 规则 |
+|---|---|
+| 结构 | 结算态 = `<details class="elic-fold">`（`summary` = 标题 + `Answered · N questions` + `.fold-caret`）+ `.elic-body`（逐题）+ `.elic-note`。**折叠走原生 `<details>`**，与消息 / Thought 同一机制（`.fold-caret` 的方向由 `details[open]` 驱动，不需要 JS）；**默认展开**（`fill` 里显式 `fold.open = true`）—— 这张卡的意义就是让人一眼看到答了什么 |
+| 题数 | `Answered · N questions` 里的 N = `groupsOf(state).length`（`_custom` 字段已并回父题，不会被多算）。不用 `Object.keys(answers).length`：弹框路径会多带一个 `_custom` 键 |
+| 标出所选 | 每个选项前画一个单选圈（`.elic-option.static::before`）：未选空心、选中实心（`--vscode-focusBorder`）并把标签加粗 —— 与 Claude 的回执同形，左列对齐。**命中判据要同时认三种答案形状**（`optionMatches`，见 pitfalls #67）：面板无补充框 = `option.value`、面板带补充框 = `"<选项标题> — <说明>"`、弹框兜底 = `option.value`。对不上任何选项的值（"Other" 里打的字、多选追加的那一项）**单独合成一行** `.picked.elic-other` —— 否则这次回答在卡上凭空消失 |
+| 非选项字段 | 文本 / 数字直接显示答案；**布尔没勾时答案里根本没有这个键**，只在"整张表是 accepted"时才读作 `No`（declined/cancelled 显示 `—`，不然等于替用户编答案）。231 之前这三种一律只画一个破折号 |
+| 分组的来源 | 回执卡与抽屉**同一个 `groupsOf(state)`**（`fill` 里不再裸遍历 `state.fields`）—— 两处若用不同分组，自拟框的位置就会一边对一边错 |
+| 已知代价 | 折叠态**不持久**：`applyState` 对结算态每次 revise/快照都会 `fill` 重建，`open` 回到默认。要持久得仿 `userCollapsed` 按 entryId 记账 —— 目前不做（历史卡从简，默认态就是想要的态） |
+| 验收 | 无头档 `#elicsettled` / `#elicsettledfree` / `#elicsettledfolded`（`elic-settled*.png`）+ 探针 `elicprobe`。**折叠的判据只能是卡片自身的高度**（319 → 61）：折叠态下正文的 `getComputedStyle(...).display` 仍是作者写的 `flex`、`getBoundingClientRect()` 也照旧报 252 —— 浏览器在渲染层藏它，这两个读数都会骗人 |

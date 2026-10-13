@@ -30,12 +30,26 @@ describe('renderDashboardHtml', () => {
     expect(styles).toContain('var(--vscode-foreground)');
   });
 
-  it('renders the four quick actions as whitelisted command ids', () => {
+  it('renders the two quick actions as whitelisted command ids', () => {
     const html = renderDashboardHtml(OPTS);
     for (const id of DASHBOARD_COMMANDS) {
       expect(html).toContain('data-command="' + id + '"');
     }
     expect(html).toContain("{ type: 'openSession', agentName: row.getAttribute('data-agent'), sessionId: row.getAttribute('data-session') }");
+  });
+
+  // [CUSTOM-230 The page carries ONLY those two buttons. Refresh lives in the view title
+  // (view/title `when: view == vac-dashboard`) and the panel re-scans itself whenever it
+  // becomes visible (`DashboardViewProvider.setVisible`); "open in editor area" is the icon
+  // sitting to the left of it. Either one on the page would be a second entry point for a
+  // command that already has one elsewhere — the whitelist above is the page, not a menu of
+  // everything the extension can do. The buttons that remain explain themselves on hover.
+  it('keeps the page down to two labelled buttons — no refresh, no editor-area twin', () => {
+    const html = renderDashboardHtml(OPTS);
+    expect(html).not.toContain('vac.refreshDashboard');
+    expect(html).not.toContain('vac.openChatInEditor');
+    expect(html).toContain('title="Start a new conversation (connects an agent first if none is active)"');
+    expect(html).toContain('title="Connect to an agent (starts its CLI process)"');
   });
 
   it('lets the webview request a refresh on load', () => {

@@ -90,7 +90,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/utils/TailBuffer.ts` | 限长尾部缓冲（增量计字节，读取时才拼字符串）。**纯逻辑** | 终端输出裁剪 |
 | `src/handlers/PermissionHandler.ts` | 自动批准分支（`vac.autoApprovePermissions`）+ 交给 `PermissionBridge` | 权限弹窗策略 |
 | `src/handlers/PermissionBridge.ts` | 权限请求的唯一出口：面板卡片 vs 弹框、FIFO、`cancelSession`/`cancelAll` 保证每个请求恰好被回答一次 | 权限策略 / 并发 / 超时 |
-| `src/handlers/ElicitationBridge.ts` | 表单请求（AskUserQuestion）的唯一出口，与权限桥同构；`fieldsOf()` 把 JSON Schema 扁平化成五种字段 | 表单行为 / schema 形状 |
+| `src/handlers/ElicitationBridge.ts` | 表单请求（AskUserQuestion）的唯一出口，与权限桥同构；`fieldsOf()` 把 JSON Schema 扁平化成五种字段，`optionOf()` 保留选项的 description 与 preview；结算时写回 `summary` + **结构化的 `answers`**（回执卡据此标出所选） | 表单行为 / schema 形状 |
 | `src/handlers/ElicitationHandler.ts` | 表单策略层 + 逐字段弹框兜底 | 弹框兜底行为 |
 | `src/handlers/SessionUpdateHandler.ts` | `session/update` 通知扇出（单订阅者异常隔离） | 流式更新丢事件 |
 | `src/ui/chat/` | Chat 面板子系统（宿主侧 host/surface/transcript + webview 客户端脚本）；入口 `index.ts` 只导出 `ChatViewProvider`/`ChatPanelHost` | 聊天 UI / 渲染 |
@@ -181,7 +181,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 终端创建/输出/结束 | `TerminalHandler.createTerminal` / `readOutput` / `waitForTerminalExit` | `readOutput` 不抛异常，供面板调用 |
 | 权限自动批准 | `PermissionHandler.requestPermission` | 读 `vac.autoApprovePermissions` |
 | 权限面板/弹框分流 | `PermissionBridge.request` / `canPresent` | presenter 只对「屏幕上的会话」返回 true |
-| 表单字段扁平化 | `ElicitationBridge.fieldsOf` | JSON Schema → 五种字段 |
+| 表单字段扁平化 | `ElicitationBridge.fieldsOf` / `optionOf` | JSON Schema → 五种字段；选项的 description 与 preview 都保留 |
 
 ### 2.7 侧边栏树（`src/ui/SessionTreeProvider.ts`）
 

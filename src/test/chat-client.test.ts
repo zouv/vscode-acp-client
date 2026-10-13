@@ -998,13 +998,12 @@ suite('chat client logic: tab strip (stub DOM)', () => {
   });
 
   // [CUSTOM-228 The number of letters is the ONLY input to the badge's type size and to
-  // whether it wraps (styles.ts keys off [data-len]), so the count has to ride on the dot.
-  // The full path rides on the dot's tooltip as well: the tab's own tooltip carries only the
-  // title and the session id, so before this there was no way to read the directory back —
-  // and when 5px letters are unreadable, that is the only other channel there is.
-  // What a stub DOM CANNOT check is the layout itself (5.46px vs 9.1px, one row vs two):
-  // that is `scripts/preview-records.mjs` #tabsprobe's job — see its `letterRows`/`fontSize`.
-  test('the directory badge declares its letter count and shows the full path on hover', () => {
+  // how the letters are arranged (styles.ts keys off [data-len]), so the count has to ride
+  // on the dot. 229: the dot carries the STATE colour as well, and a colour has no name —
+  // so the tooltip is two lines, the path and the state in words.
+  // What a stub DOM CANNOT check is the layout itself (9.1px vs 7px, one row vs a 2-column
+  // grid): that is `scripts/preview-records.mjs` #tabsprobe's job — see `letterRows`.
+  test('the directory badge declares its letter count and shows the path on hover', () => {
     const { NS, els } = tabStrip();
     const dotFor = (cwd: string) => {
       NS.tabs.setSessions([{ ...summary('s1'), cwd }]);
@@ -1014,7 +1013,7 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     const one = dotFor('/git/pavilion');
     assert.strictEqual(one.textContent, 'P');
     assert.strictEqual(one.getAttribute('data-len'), '1');
-    assert.strictEqual(one.title, '/git/pavilion');
+    assert.strictEqual(one.title, 'Dir: /git/pavilion\nState: Idle');
 
     const two = dotFor('/git/story-myriad');
     assert.strictEqual(two.textContent, 'SM');
@@ -1030,10 +1029,33 @@ suite('chat client logic: tab strip (stub DOM)', () => {
 
     // No directory to abbreviate => no tier at all, so the dot keeps the default size
     // instead of claiming a tier it has no letters for. (Draft and restore dots take the
-    // same branch — they carry no letters either.)
+    // same branch — they carry no letters either.) The state still gets its own line: a
+    // dot with no tooltip at all would be a badge that explains nothing.
     const none = dotFor('');
     assert.strictEqual(none.textContent, '');
     assert.strictEqual(none.getAttribute('data-len'), null);
+    assert.strictEqual(none.title, 'State: Idle');
+  });
+
+  // [CUSTOM-229 The colour says the state, but a colour has no name and the strip has no
+  // legend — so the same state is repeated in words on the tooltip. The mapping has to
+  // agree with dotClass line for line: if the two ever drift, the colour and the text
+  // contradict each other about the same session.
+  test('the badge tooltip names the state, ranked like the colour', () => {
+    const { NS, els } = tabStrip();
+    const dotFor = (over: Record<string, unknown>) => {
+      NS.tabs.setSessions([{ ...summary('s1'), cwd: '/git/pavilion', ...over }]);
+      return els.tabs.querySelector('.tab-dot') as StubNode;
+    };
+    assert.strictEqual(dotFor({}).title, 'Dir: /git/pavilion\nState: Idle');
+    assert.strictEqual(dotFor({ running: true }).title, 'Dir: /git/pavilion\nState: Turn in progress');
+    // Waiting outranks running: the turn is alive either way, and only this one is stuck on
+    // the reader — the colour ranks them the same way.
+    assert.strictEqual(
+      dotFor({ running: true, waiting: true }).title,
+      'Dir: /git/pavilion\nState: Waiting for your answer');
+    assert.strictEqual(dotFor({ loading: true }).title, 'Dir: /git/pavilion\nState: Loading history');
+    assert.strictEqual(dotFor({ unread: true }).title, 'Dir: /git/pavilion\nState: New output in the background');
   });
 
   test('the close button is out of the tab order; exactly one tab is tabbable', () => {
@@ -3505,6 +3527,100 @@ suite('chat client logic: form record + drawer (stub DOM, 60930-152)', () => {
     assert.strictEqual(card.querySelector('.elic-actions'), null);
     assert.match(card.querySelector('.elic-note')!.textContent!, /dialog/,
       'a disabled form with no explanation looks broken');
+  });
+
+  // [CUSTOM-231 回执卡要**标出所选**：修之前每个选项画出来一模一样，答案只活在底下那行
+  // summary 里（得读完一整串 `key: value · …` 才知道选了什么）。
+  test('a settled form marks WHICH option was picked (231)', () => {
+    const { NS, messages } = mount();
+    NS.transcriptView.patch('e0', {
+      elicitation: {
+        ...SINGLE, status: 'accepted', summary: 'question_0: 使用现成主题',
+        answers: { question_0: '使用现成主题' },
+      },
+    });
+    NS.elicitationView.sync();
+
+    const record = messages.querySelector('.elic')!;
+    const rows = record.querySelectorAll('.elic-option');
+    assert.strictEqual(rows.length, 2, 'every option it offered is still listed');
+    assert.ok(!rows[0].className.includes('picked'), 'the one NOT picked stays plain');
+    assert.ok(rows[1].className.includes('picked'), 'the picked one is marked');
+    assert.match(record.querySelector('.elic-count')!.textContent!, /Answered · 1 question/,
+      'the header says how many questions were answered');
+    assert.strictEqual(record.querySelector('.elic-fold')!.open, true, 'the receipt starts expanded');
+  });
+
+  // [CUSTOM-231 自拟答案（"Other" 里打的字）对不上任何选项 —— 它必须单独有一行，
+  // 否则这次回答在卡上就凭空消失了。
+  test('a free-form answer gets a marked row of its own (231)', () => {
+    const { NS, messages } = mount();
+    NS.transcriptView.patch('e0', {
+      elicitation: { ...SINGLE, status: 'accepted', answers: { question_0: '我自己写的方案' } },
+    });
+    NS.elicitationView.sync();
+    const rows = messages.querySelector('.elic')!.querySelectorAll('.elic-option');
+    assert.strictEqual(rows.length, 3, 'two options + the free-form answer');
+    assert.ok(rows[2].className.includes('picked'), 'and it is the marked one');
+    assert.strictEqual(rows[2].querySelector('.elic-option-label')!.textContent, '我自己写的方案');
+  });
+
+  // [CUSTOM-231 每一种答案形状都要画得出来：多选是数组（逐个标）、文本/数字直接显示、
+  // 布尔没勾 = 答案里根本没有这个键 ⇒ 读作 No。修之前非选项字段一律只画一个破折号。
+  test('the card renders every answer shape: multi, text, number, boolean (231)', () => {
+    const { NS } = mount();
+    const card = NS.elicitationView.render({
+      promptId: 's1:3', sessionId: 's1', message: 'All shapes', status: 'accepted',
+      fields: [
+        {
+          name: 'q_multi', kind: 'multi', title: 'Multi',
+          options: [{ value: 'a', title: 'A' }, { value: 'b', title: 'B' }, { value: 'c', title: 'C' }],
+        },
+        { name: 'q_text', kind: 'text', title: 'Text' },
+        { name: 'q_num', kind: 'number', title: 'Num' },
+        { name: 'q_bool', kind: 'boolean', title: 'Bool' },
+      ],
+      answers: { q_multi: ['a', 'c'], q_text: 'typed', q_num: 7, q_bool: true },
+    });
+    const picked = card.querySelectorAll('.elic-option').filter((r: StubNode) => r.className.includes('picked'));
+    assert.deepStrictEqual(picked.map((r: StubNode) => r.querySelector('.elic-option-label')!.textContent), ['A', 'C']);
+    const answers = card.querySelectorAll('.elic-answer').map((n: StubNode) => n.textContent);
+    assert.deepStrictEqual(answers, ['typed', '7', 'Yes']);
+  });
+
+  // [CUSTOM-231 选项预览：**就地展开在被选行下方**，同一时刻只有被选中的那一行露出来
+  // （多选则各自展开）。切换选择要把上一行的收回去 —— 否则点一圈下来满屏都是框图。
+  test('an option preview shows under the picked row, and only there (231)', () => {
+    const withPreview = {
+      ...SINGLE,
+      fields: [
+        {
+          name: 'question_0', kind: 'select', title: '基础方案',
+          options: [
+            { value: 'a', title: 'A', preview: 'n=1\n[ V ]' },
+            { value: 'b', title: 'B', preview: 'n=2\n[ VA ]' },
+          ],
+        },
+        { name: 'question_0_custom', kind: 'text', title: 'Other', customFor: 'question_0' },
+      ],
+    };
+    const { drawer } = mount([withPreview]);
+    const rows = drawer.querySelectorAll('.elic-option-row');
+    const previews = drawer.querySelectorAll('.elic-preview');
+    assert.strictEqual(previews.length, 2, 'one block per option that has a preview');
+    assert.strictEqual(previews[0].textContent, 'n=1\n[ V ]', 'the text is kept verbatim');
+    assert.strictEqual(previews[0].hidden, true, 'nothing is picked yet');
+
+    pickRow(rows[0]);
+    assert.strictEqual(previews[0].hidden, false, 'the picked row expands');
+    assert.strictEqual(previews[1].hidden, true);
+
+    const first = previews[0];
+    pickRow(rows[1]);
+    assert.strictEqual(previews[0].hidden, true, 'switching rows puts the old one away');
+    assert.strictEqual(previews[1].hidden, false);
+    assert.strictEqual(drawer.querySelectorAll('.elic-preview')[0], first,
+      'and the block is only hidden, never rebuilt (a rebuilt node loses focus mid-typing)');
   });
 
   test('a form belonging to another session is not shown here', () => {

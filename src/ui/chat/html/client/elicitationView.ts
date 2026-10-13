@@ -198,28 +198,44 @@ export const elicitationViewClient = `
    * are unchecked explicitly on pick: a stub DOM has no native radio-group behaviour, so being
    * explicit is what makes both worlds agree.
    */
-  function selectRow(field, value, title, description) {
+  /**
+   * [CUSTOM-231 An option's own preview field (AskUserQuestion ships an ASCII mock-up per option),
+   * rendered IN PLACE under the row it belongs to. Same placement rule as the custom box: a
+   * sibling of the <label>, never inside it — clicking the preview would otherwise toggle the
+   * pick. Hidden until its row is picked (placePreviews); textContent, never innerHTML, because
+   * the preview is a string the agent controls.
+   */
+  function previewBlock(text) {
+    var pre = el('pre', 'elic-preview');
+    pre.textContent = text;
+    pre.hidden = true;
+    return pre;
+  }
+
+  function selectRow(field, option) {
     var row = el('div', 'elic-option-row');
     var label = el('label', 'elic-option');
     var radio = document.createElement('input');
     radio.type = 'radio';
     radio.name = field.name;
-    radio.value = value;
+    radio.value = option.value;
     radio.setAttribute('data-field', field.name);
     radio.setAttribute('data-kind', 'select');
-    radio.addEventListener('change', function () { onPick(field.name, value); });
+    radio.addEventListener('change', function () { onPick(field.name, option.value); });
     // [CUSTOM- 这里曾有一条"再点一次已选中的行 = 取消选择"（168 加的，当时是唯一的
     // 清除入口）。用户要求去掉：抽屉底部已经有 'Clear answer'，一个按钮做这件事比"再点同一行"
     // **可预期得多** —— 后者让"手抖点两下"静默丢掉选择，而且和别的单选控件行为不一致。
     // 现在这一行就是**原生 radio**：再点一次保持选中。（配套删掉了 data-elic-picked 记账。）
     label.appendChild(radio);
     var text = el('span', 'elic-option-text');
-    text.appendChild(el('span', 'elic-option-label', title));
-    if (description) { text.appendChild(el('span', 'elic-option-desc', description)); }
+    text.appendChild(el('span', 'elic-option-label', option.title));
+    if (option.description) { text.appendChild(el('span', 'elic-option-desc', option.description)); }
     label.appendChild(text);
     row.appendChild(label);
+    if (option.preview) { row.appendChild(previewBlock(option.preview)); }
     // The custom box is MOVED into the chosen row (see placeCustomBoxes) — inside the row wrapper
-    // but OUTSIDE the <label>, or clicking into the box would toggle the radio.
+    // but OUTSIDE the <label>, or clicking into the box would toggle the radio. The preview above
+    // is a sibling for the same reason; order under a picked row is preview → custom box.
     return row;
   }
 
@@ -229,13 +245,14 @@ export const elicitationViewClient = `
     var options = field.options || [];
     for (var i = 0; i < options.length; i++) {
       var option = options[i];
-      list.appendChild(selectRow(field, option.value, option.title, option.description));
+      list.appendChild(selectRow(field, option));
     }
     // A free-form answer is a CHOICE here, exactly like the official "Other" row: picking it means
     // "my answer is what I type", and its radio carries the empty value (an answer the adapter
-    // drops, since a typed custom answer is what travels back).
+    // drops, since a typed custom answer is what travels back). No preview: "Other" is not an
+    // option the agent offered.
     if (extras.length > 0) {
-      var other = selectRow(field, '', extras[0].title || 'Other', null);
+      var other = selectRow(field, { value: '', title: extras[0].title || 'Other' });
       other.className = 'elic-option-row elic-other-row';
       list.appendChild(other);
     }
@@ -314,6 +331,24 @@ export const elicitationViewClient = `
     }
   }
 
+  /**
+   * [CUSTOM-231 Show the previews of the picked rows only. Single-select therefore shows exactly
+   * one at a time (the row that owns it), multi-select expands each row the user ticked — same
+   * rule as the custom box: what is visible follows what is picked.
+   *
+   * Only 'hidden' is written, never appendChild: this runs on every input event, i.e. on every
+   * keystroke in a note box, and moving nodes is exactly what dropped the caret before
+   * (pitfall #50/#189).
+   */
+  function placePreviews(root) {
+    var boxes = root.querySelectorAll('.elic-preview');
+    for (var i = 0; i < boxes.length; i++) {
+      var owner = boxes[i].parentNode;
+      var input = owner && owner.querySelector ? owner.querySelector('input[data-field]') : null;
+      boxes[i].hidden = !(input && input.checked);
+    }
+  }
+
   /** Pick a single-select value: exclusive by construction, then re-place the custom boxes. */
   function onPick(fieldName, value) {
     var form = activeId ? forms[activeId] : null;
@@ -364,8 +399,10 @@ export const elicitationViewClient = `
     text.appendChild(el('span', 'elic-option-label', option.title));
     if (option.description) { text.appendChild(el('span', 'elic-option-desc', option.description)); }
     label.appendChild(text);
-    if (option.preview) { label.title = option.preview; }
     row.appendChild(label);
+    // [CUSTOM-231 预览与补充框都在 label 外面、按「预览 → 补充框」排。悬停提示（原先的
+    // label.title）去掉了：可见的预览块已经是一个更好的通道，两处都放就是同一段文字出现两遍。
+    if (option.preview) { row.appendChild(previewBlock(option.preview)); }
     row.appendChild(buildOptionNote(option.value));
     return row;
   }
@@ -560,6 +597,8 @@ export const elicitationViewClient = `
     }
     // The custom box follows the pick — after the counts, so a move never fights the tally.
     placeCustomBoxes(form, state);
+    // [CUSTOM-231 选项预览同理，但它只改 hidden（不搬节点）—— 见 placePreviews。
+    placePreviews(form);
   }
 
   function refresh(form, state) {
@@ -902,24 +941,85 @@ export const elicitationViewClient = `
       card.appendChild(el('div', 'elic-note'));
       return;
     }
-    card.appendChild(el('div', 'elic-title', state.message || 'Input needed'));
+    // [CUSTOM-231 已答卡 = 可折叠 + 题数 + **标出所选**。折叠走原生 <details>（与记录区的
+    // 消息 / Thought 折叠同一机制：三角方向由 details[open] 驱动，不需要 JS）；默认**展开** ——
+    // 这张卡存在的意义就是让人一眼看到答了什么，折起来才是意外。
+    var fold = el('details', 'elic-fold');
+    fold.open = true;
+    var head = el('summary', 'elic-summary');
+    head.appendChild(el('span', 'elic-title', state.message || 'Input needed'));
+    var groups = groupsOf(state);
+    if (status === 'accepted') {
+      head.appendChild(el('span', 'elic-count', 'Answered \\u00b7 ' + groups.length
+        + (groups.length === 1 ? ' question' : ' questions')));
+    }
+    head.appendChild(el('span', 'fold-caret'));
+    fold.appendChild(head);
     var body = el('div', 'elic-body');
-    var fields = state.fields || [];
-    for (var i = 0; i < fields.length; i++) { body.appendChild(readOnlyField(fields[i])); }
-    card.appendChild(body);
+    for (var g = 0; g < groups.length; g++) {
+      body.appendChild(readOnlyGroup(groups[g], state.answers, status === 'accepted'));
+    }
+    fold.appendChild(body);
+    card.appendChild(fold);
     card.appendChild(el('div', 'elic-note', noteText(status, state.summary)));
   }
 
-  /** A settled form, rendered as a record: the question, the options it offered, the note. */
-  function readOnlyField(field) {
+  /** The value of a non-option field (text / number / boolean), or an em dash when unanswered. */
+  function answerText(field, answer, hasAnswer) {
+    if (answer === undefined || answer === null || answer === '') {
+      // [CUSTOM-231 An unchecked box is not in the answer at all — collect() only sends true.
+      // So an absent value reads as "No", but only when the form WAS accepted: a skipped form
+      // answered nothing, and printing "No" for every box would invent answers.
+      return field.kind === 'boolean' && hasAnswer ? 'No' : '\\u2014';
+    }
+    if (field.kind === 'boolean') { return answer === true || answer === 'true' ? 'Yes' : 'No'; }
+    if (Array.isArray(answer)) { return answer.length > 0 ? answer.join(', ') : '\\u2014'; }
+    return String(answer);
+  }
+
+  /**
+   * [CUSTOM-231 Does one accepted value belong to this option?
+   *
+   * Three shapes reach the receipt and all three have to match, or it marks nothing at all:
+   * · the dialog fallback sends option.value;
+   * · the panel sends option.value too — unless that row had a note, in which case collect()
+   *   sends "option title — note" as ONE string.
+   * So both the value and the title are checked. A bare prefix test is not enough (one option
+   * title can be a prefix of another), hence the separator is part of the pattern.
+   */
+  function optionMatches(answer, option) {
+    if (answer === undefined || answer === null) { return false; }
+    var text = String(answer);
+    if (text === option.value || text === option.title) { return true; }
+    return text.indexOf(option.title + ' \\u2014 ') === 0;
+  }
+
+  /**
+   * [CUSTOM-231 One question on the settled card: what was asked, what it offered, and — new —
+   * WHICH of those the reader picked. Every option used to come out identical, so the answer
+   * existed only in the one-line summary underneath; free-form answers and typed values
+   * (text / number / boolean) were not on the card at all.
+   */
+  function readOnlyGroup(group, answers, hasAnswer) {
+    var field = group.field;
     var wrap = el('div', 'elic-field' + (field.customFor ? ' elic-other' : ''));
     if (field.title) { wrap.appendChild(el('div', 'elic-label', field.title)); }
     if (field.description) { wrap.appendChild(el('div', 'elic-help', field.description)); }
+    var answer = answers ? answers[field.name] : undefined;
+    var values = answer === undefined || answer === null
+      ? [] : (Array.isArray(answer) ? answer : [answer]);
     var options = field.options || [];
+    var used = [];
+    var i, v;
     if (options.length > 0) {
       var list = el('div', 'elic-options');
-      for (var i = 0; i < options.length; i++) {
+      for (i = 0; i < options.length; i++) {
         var row = el('div', 'elic-option static');
+        var hit = false;
+        for (v = 0; v < values.length; v++) {
+          if (optionMatches(values[v], options[i])) { hit = true; used.push(values[v]); }
+        }
+        if (hit) { row.className = 'elic-option static picked'; }
         var text = el('span', 'elic-option-text');
         text.appendChild(el('span', 'elic-option-label', options[i].title));
         if (options[i].description) {
@@ -928,10 +1028,28 @@ export const elicitationViewClient = `
         row.appendChild(text);
         list.appendChild(row);
       }
+      // [CUSTOM-231 对不上任何选项的值 = 自拟答案（"Other" 里打的字，或多选追加的那一项）：
+      // 合成一行画出来，否则这次回答在卡上就凭空消失了。**只对选项字段做** —— 文本/数字/布尔
+      // 字段的答案不是"某个选项"，它们由下面的 .elic-answer 那一行负责。
+      for (v = 0; v < values.length; v++) {
+        if (used.indexOf(values[v]) >= 0) { continue; }
+        var free = el('div', 'elic-option static picked elic-other');
+        var freeText = el('span', 'elic-option-text');
+        freeText.appendChild(el('span', 'elic-option-label', String(values[v])));
+        free.appendChild(freeText);
+        list.appendChild(free);
+      }
       wrap.appendChild(list);
-      return wrap;
     }
-    if (field.kind !== 'boolean') { wrap.appendChild(el('div', 'elic-help', '\\u2014')); }
+    // 自拟字段（弹框路径会单独回一个 _custom 键；面板路径已并进父题的答案里）：有才画。
+    for (i = 0; i < group.extras.length; i++) {
+      var extra = answers ? answers[group.extras[i].name] : undefined;
+      if (extra === undefined || extra === null || extra === '') { continue; }
+      wrap.appendChild(el('div', 'elic-answer', String(extra)));
+    }
+    if (options.length === 0) {
+      wrap.appendChild(el('div', 'elic-answer', answerText(field, answer, hasAnswer)));
+    }
     return wrap;
   }
 

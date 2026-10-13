@@ -65,6 +65,17 @@ export interface ElicitationState extends ElicitationPrompt {
   status: ElicitationStatus;
   /** Human-readable record of the decision, shown on the settled card. */
   summary?: string;
+  /**
+   * [CUSTOM-231 The accepted answer, keyed exactly like `ElicitationContent`.
+   *
+   * `summary` is a one-line human-readable fallback and stays the only thing the
+   * dialog path leaves behind; this is the structured copy the settled card needs to
+   * mark WHICH option was picked. Without it the receipt can only list the options it
+   * offered and leave the reader to parse the summary string (which is what it did).
+   * Absent whenever there is nothing to record: decline/cancel, or a panel answer that
+   * never reached this bridge. Fields the user left blank are simply missing keys.
+   */
+  answers?: ElicitationContent;
 }
 
 /**
@@ -230,8 +241,13 @@ export class ElicitationBridge {
     };
   }
 
-  private stateOf(item: Pending, status: ElicitationStatus, summary?: string): ElicitationState {
-    return { ...item.prompt, status, summary };
+  private stateOf(
+    item: Pending,
+    status: ElicitationStatus,
+    summary?: string,
+    answers?: ElicitationContent,
+  ): ElicitationState {
+    return { ...item.prompt, status, summary, answers };
   }
 
   private labelFor(sessionId: string): string {
@@ -283,7 +299,15 @@ export class ElicitationBridge {
     if (item.shown && this.presenter) {
       const status: ElicitationStatus = response.action === 'accept' ? 'accepted'
         : response.action === 'decline' ? 'declined' : 'cancelled';
-      this.presenter.update(this.stateOf(item, status, summarize(response)));
+      // [CUSTOM-231 accept 才带答案（decline/cancel 没有答案可记）。顺序不动：仍先 update 再
+      // resolve —— 结算卡要画的是"用户选了什么"，而 resolve 之后 agent 就往下走了。
+      // SDK 把 content 标成 unknown，这里只做形状确认（与 summarize 的 Object.entries 同一个
+      // 信任级别）；不补空对象：`answers` 缺失与"接受但一个字段都没填"对结算卡是同一种画法。
+      const content = response.action === 'accept' ? response.content : undefined;
+      const answers = content && typeof content === 'object'
+        ? content as ElicitationContent
+        : undefined;
+      this.presenter.update(this.stateOf(item, status, summarize(response), answers));
     }
     item.resolve(response);
   }

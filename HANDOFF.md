@@ -16,20 +16,17 @@
 ## 状态快照
 
 - **最近更新**：2026-10-13
-- **整体状态**：✅ 无进行中的开发任务。**v1.0.4 已发布**（GitHub Release 附
-  `vscode-acp-client-1.0.4.vsix`），工作区干净。本轮的默认适配器换源、去前项目痕迹、
-  tab 目录徽标优化（含随之修掉的预览 `--vscode-font-size` 基准问题，见 `docs/pitfalls.md` #66）
-  均已记入 `CHANGELOG [1.0.4]`。
+- **整体状态**：✅ 无进行中的开发任务。**v1.1.0 已发布**（GitHub Release 附
+  `vscode-acp-client-1.1.0.vsix`），工作区干净。本轮 = **231**（表单：选项预览 / 已答回执卡 /
+  结构化答案落库）+ **229/230**（会话 tab 目录徽标排版、Dashboard 入口搬进视图标题栏），
+  已归档到 `CHANGELOG [1.1.0]`。
 - **当前分支（必填）**：`main`，与 `origin/main` 同步。
   **未经用户明确指示不要 commit / push。**
-- **最后验证状态**（2026-10-13，v1.0.4 发布前）：`npm run lint` ✅ · `npm run typecheck` ✅ ·
-  `npm run test:unit` ✅（90 项）· `npm test`（真实宿主）✅ **457 项**通过
-  （含新增用例 `the directory badge declares its letter count and shows the full path on hover`）
-  · `sh check-docs.sh` ✅ · `npm run vsix` ✅ 生成 `release/vscode-acp-client-1.0.4.vsix`。
-  无头探针 `#tabsprobe` ✅：`baseFont` = 13px、`data-len` 1/2/3/4 → 9.1 / 7.8 / 7 / 6.5px、
-  圆角 6px、3 个字母的 `letterRows` 由 2 变 1、`title` = 完整 cwd。
-  **未做** `npm run dev:host` 宿主实测——改的是 webview 的 CSS 与客户端脚本，无头档与宿主同一
-  渲染引擎，结论应当一致，但真机的 `--vscode-font-size` 值得眼过一遍（并入下面「下一步」第 1 条）。
+- **最后验证状态**（2026-10-13，v1.1.0 发布前）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（91 项）·
+  `npm test`（真实宿主）✅ **463 项** · `sh check-docs.sh` ✅ · `npm run vsix` ✅ 生成
+  `release/vscode-acp-client-1.1.0.vsix`。无头四档 + 探针 `elicprobe` 读数已核
+  （预览只露被选行、回执卡 `picked` 三条、折叠后卡片高度 319 → 61）。
+  ⚠️ **仍未做 `npm run dev:host` 真机实测** —— 唯一没验过的环节，见「下一步」第 1 条。
 
 ---
 
@@ -39,7 +36,8 @@
 - **范围 / 涉及文件**：—
 - **完成定义（Definition of Done）**：—
 
-> 本轮任务（目录筛选菜单层叠修复 + 图标 + README 重写）已完成、记入 `CHANGELOG [1.0.3]` 并**已发布**。
+> **231**（表单：选项预览 / 已答回执卡标出所选 / 结构化答案落库）与 **229/230**（会话 tab 目录徽标
+> 排版 + Dashboard 入口搬进视图标题栏）均已完成，已归档到 `CHANGELOG [1.1.0]` 并**已发布**。
 
 ---
 
@@ -65,8 +63,15 @@
 1. **P1-2 宿主实测验收**：`npm run dev:host` 打开宿主，目视确认 Dashboard 的统计数字与
    连接状态、以及聊天面板（发消息 → 流式 → 工具调用 → 权限卡片）的实际表现；
    **顺带确认图标三处到位**（活动栏 VAC 容器 / 编辑区聊天标签页）、
-   **会话 tab 的目录徽标**（`data-len` 四档的字号与圆角、悬停显示完整路径、
-   3 个字母是否单行 —— 无头读数已过，但真机的基准字号是 `--vscode-font-size`）、
+   **会话 tab 的目录徽标**（1/2 个字母单行；3 个字母应为**上 2 下 1**、4 个为贴紧的 2x2；
+   悬停应是**两行带标签**：`Dir:` + `State:` —— 无头读数已过，但真机的基准字号是
+   `--vscode-font-size`）、
+   **Dashboard 的标题栏**（`view == vac-dashboard` 应有两颗：**↗ 在 ↻ 左侧** ——
+   这是本轮唯一没被任何自动检查覆盖的点，菜单贡献只有真宿主渲染得出来）、
+   **Dashboard 页面**（行动区只剩 New conversation / Connect agent 两颗，各带悬停说明）、
+   **表单（231）**：让 agent 用 AskUserQuestion 问一次 —— 带 preview 的选项选中时应就地展开预览、
+   换选时上一块收走；答完之后记录里那张卡应能折叠、标出所选（实心圈）、给出 `Answered · N questions`
+   （这四档无头读数已过，但**真机的字号/配色**没在宿主里眼过）、
    以及**目录筛选菜单在真宿主里的层叠**（无头档只能证明 Chrome 的绘制顺序，
    宿主 webview 同一套引擎、结论应当一致，但没在宿主里眼过）。
    这是目前**唯一没有做过**的验收环节（其余都是类型/单测/集成测试的结论）。
@@ -108,6 +113,10 @@
   的「谁画在上面」一行与 `styles.ts` 那条注释。
 - **PNG 必须按二进制提交**：`.gitattributes` 的 `*.png binary` 是这道防线；1.0.3 之前的
   `resources/icon.png` 就是被换行符转换洗坏的（签名的 `0x0D` 被剥掉），务必别退回去。
+- **命令的入口只在标题栏，不在 webview 页面里重复**（230）：Dashboard 的「在编辑区打开聊天」
+  与「刷新」都只由 `package.json` 的 `view/title` 贡献（`navigation@0` 排在 `navigation@1` 的左边），
+  页面里再放一颗就是同一个命令的第二个入口。`DASHBOARD_COMMANDS` 是**页面的白名单**
+  （＝页面上那两颗按钮），不是"扩展能做的全部"—— spec 钉住两边一一对应，收紧白名单时要一起改。
 - **继续走 ACP**：不用 Anthropic 专有 SDK，保持通用 ACP 客户端；当前只接 Claude 与 Codex。
 - **agent 差异集中**：新增 agent 只动 `agents/AgentProfile.ts` 与配置，**不往 UI 加分支**。
 - **构建换成 esbuild**、**测试分两层**（vitest 纯逻辑 + mocha 真实宿主）。
