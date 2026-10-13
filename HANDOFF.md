@@ -15,13 +15,15 @@
 
 ## 状态快照
 
-- **最近更新**：2026-10-12
-- **整体状态**：✅ 无进行中的开发任务（v1.0.2 已发布，等待下一个需求）
+- **最近更新**：2026-10-13
+- **整体状态**：✅ 无进行中的开发任务。**v1.0.3 已发布**（GitHub Release 附
+  `vscode-acp-client-1.0.3.vsix`），工作区干净。
 - **当前分支（必填）**：`main`，与 `origin/main` 同步。
   **未经用户明确指示不要 commit / push。**
 - **最后验证状态**：`npm run lint` ✅ · `npm run typecheck` ✅ · `npm run test:unit` ✅（90 项）
-  · `npm test`（真实宿主）✅ 456 项通过 · `sh check-docs.sh` ✅ 0 警告
-  · `npm run vsix` ✅ 生成 `release/vscode-acp-client-1.0.2.vsix`（打包产物固定落在 `release/`）
+  · `npm test`（真实宿主）✅ 456 项通过 · `sh check-docs.sh` ✅（1 项警告：上一次提交改了源码未动 CHANGELOG，属启发式误报）
+  · 无头截图档 `#historyfilter` ✅ 探针 `menuOnTop` 由 `false` 翻成 `true`（改前 / 改后各截一张对照）
+  · `npm run vsix` ✅ 生成 `release/vscode-acp-client-1.0.3.vsix`（含 `resources/icon.*` 与重写后的 README）
 
 ---
 
@@ -31,7 +33,7 @@
 - **范围 / 涉及文件**：—
 - **完成定义（Definition of Done）**：—
 
-> 当前：无进行中的任务，等待下一个开发需求。
+> 本轮任务（目录筛选菜单层叠修复 + 图标 + README 重写）已完成、记入 `CHANGELOG [1.0.3]` 并**已发布**。
 
 ---
 
@@ -45,7 +47,8 @@
 
 ## 阻塞 / 待决策（Blockers）
 
-- （无。）
+- **上架前的截图**：README 与 Marketplace 列表都还没有截图（`ROADMAP.md` P2-5 待办项之一）。
+  准备放 `docs/images/` 并在 README「特性」上方引用。
 
 ---
 
@@ -54,13 +57,16 @@
 > 均来自 `ROADMAP.md` 的近期规划；接手时按用户实际指定挑一条，先按 §0.5 定范围再动手。
 
 1. **P1-2 宿主实测验收**：`npm run dev:host` 打开宿主，目视确认 Dashboard 的统计数字与
-   连接状态、以及聊天面板（发消息 → 流式 → 工具调用 → 权限卡片）的实际表现。
+   连接状态、以及聊天面板（发消息 → 流式 → 工具调用 → 权限卡片）的实际表现；
+   **顺带确认图标三处到位**（活动栏 VAC 容器 / 编辑区聊天标签页）、
+   以及**目录筛选菜单在真宿主里的层叠**（无头档只能证明 Chrome 的绘制顺序，
+   宿主 webview 同一套引擎、结论应当一致，但没在宿主里眼过）。
    这是目前**唯一没有做过**的验收环节（其余都是类型/单测/集成测试的结论）。
 2. **P1-1 Codex 端到端**：用真实 `codex-acp` 跑通连接与一次会话；核对
    `src/dashboard/usage/CodexUsageSource.ts` 的用量口径。
 3. **P1-3 打包瘦身**：`dist/extension.js` 1.42 MB（压缩后），主要来自 ACP SDK 全量引入；
    注意 `.vscodeignore` 的忽略**不支持通配嵌套路径**，排除 dist 下的文件要写精确路径。
-4. **P2-5 上架 Marketplace**：注册 publisher、准备图标（`resources/icon.png` 已有）与截图。
+4. **P2-5 上架 Marketplace**：已具备图标（`npm run icon` 生成）；剩余注册 publisher、准备截图、发布。
 5. 用户若指定新需求：按 `ARCHITECTURE.md` §0.5 定范围 → 定位函数 → 实施 → 文档同步。
 
 ---
@@ -69,6 +75,8 @@
 
 - 运行（开发宿主）：`npm run dev:host`（宿主窗口内 `Ctrl+R` 重载生效）
 - 构建：`npm run compile`；生产打包：`npm run package`；打 `.vsix`：`npm run vsix`（产物落 `release/`）
+- **图标**：`npm run icon`（改 `scripts/make-icon.mjs` 顶部的 `MARKS` 几何后重跑；
+  `--preview` 另出多尺寸预览图到系统临时目录）。`resources/icon.*` 是生成物，不要手改。
 - 校验/测试：`npm run test:unit`（vitest，秒级）· `npm test`（编译 + lint + 真实宿主测试）
 - lint / 类型：`npm run lint` · `npm run typecheck`
 - 文档体检：`sh check-docs.sh`
@@ -78,10 +86,20 @@
 
 ## 关键决策记录（Key Decisions）
 
-- **v1.0.2 已发布**：GitHub Release <https://github.com/zouv/vscode-acp-client/releases/tag/v1.0.2>
-  附 `vscode-acp-client-1.0.2.vsix`。`.vsix` 不进 git（`.gitignore` 已忽略），只作为 Release 资产——
-  打包产物固定落 `release/`，由 `npm run vsix` 生成（见 `scripts/package-vsix.mjs`）。
-
+- **v1.0.3 已发布**：GitHub Release <https://github.com/zouv/vscode-acp-client/releases/tag/v1.0.3>
+  附 `vscode-acp-client-1.0.3.vsix`。版本号取 patch：本轮是「两个修复 + 图标 + README」的打磨，
+  没有新增能力面（用户 2026-10-13 在 1.0.3 与 1.1.0 之间选了前者）。
+  `.vsix` 不进 git（`.gitignore` 已忽略），只作为 Release 资产——打包产物固定落 `release/`，
+  由 `npm run vsix` 生成（见 `scripts/package-vsix.mjs`）。
+- **图标只有一个几何源**：`scripts/make-icon.mjs` 里的 `MARKS` 同时产出单色 SVG（活动栏，24×24，
+  单色 `currentColor`）与 128×128 徽标 PNG（Marketplace + 编辑区标签页）。改外观改脚本、重跑，
+  不手改产物。图形为「对话气泡 + 终端提示符 `>_`」。
+- **列表里"谁画在上面"只能靠抬 head 那一层**：目录筛选菜单要压住历史行，就得给
+  `#history .outline-head` 正的 `z-index`（`position: sticky` 让它自成层叠上下文，
+  菜单自己的 `z-index: 20` 被它封住、抬到 999 也没用）。详见 `arch/chat-panel-sessions.md` §5.24
+  的「谁画在上面」一行与 `styles.ts` 那条注释。
+- **PNG 必须按二进制提交**：`.gitattributes` 的 `*.png binary` 是这道防线；1.0.3 之前的
+  `resources/icon.png` 就是被换行符转换洗坏的（签名的 `0x0D` 被剥掉），务必别退回去。
 - **出处处理**：前身基线（`vendor/main`）中存在过的文件一律**重写**，不搬运原文；
   基线中不存在的自写文件（Chat 面板子系统、两个桥、`CustomModels`、`BuildInfo`、Dashboard 设计）直接沿用。
   这样仓库只保留本项目自己的 MIT 版权，不需要保留上游署名。
@@ -97,4 +115,4 @@
 - Dashboard 的价格表（`PRICING_AS_OF = '2026-01'`）需要按官方口径复核。
 - 是否要在首个发布版本里保留 `vac.restoreSessionsOnOpen` 的默认 `ask` 行为。
 - `doc-audit` skill 的扫描范围仍是「5 份根文档 + `docs/00-目录.md`」，**未覆盖 `arch/*.md`**——
-  这次分册的漂移正是靠人工扫出来的（本次用户选择先不改 skill）。
+  上次分册的漂移正是靠人工扫出来的（此前用户选择先不改 skill）。
