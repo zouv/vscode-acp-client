@@ -20,7 +20,7 @@ npm run dev:host -- "F:\path\to\xxx.code-workspace"   # 指定 .code-workspace �
 ```
 
 > 用**项目自己的工作区**做真机验收（比如对着实际要用的多根工作区跑）就走最后一条：宿主窗口用你
-> 日常的配置与已装扩展启动，只是多加载了本仓库这份开发中的扩展（命名空间 `vac.*`，与上游同装不冲突）。
+> 日常的配置与已装扩展启动，只是多加载了本仓库这份开发中的扩展（命名空间 `vac.*`，与同类扩展同装不冲突）。
 > 路径含空格时整体加引号。
 
 默认**先编译再启动**是有意的：忘了编译就会测到旧产物，那是"改了半天没生效"最常见的来源。
@@ -80,7 +80,7 @@ npm run compile && code --new-window --extensionDevelopmentPath="D:/Git/zgithub/
 宿主 `src/utils/Logger.ts` 的 `log()` / `logTraffic()` 除了写输出通道，还会**异步追加**到：
 
 ```
-~/.claude/acp-client-custom.log        # Windows: %USERPROFILE%\.claude\acp-client-custom.log
+~/.vac/vac.log        # Windows: %USERPROFILE%\.vac\vac.log
 ```
 
 - **webview 客户端的 `console.warn` / `console.error` 也在里面**（经 `clientLog` 消息转发给宿主的 `log()`），前缀是 `chat-panel: client(warn):`。所以面板里的运行时问题（markdown 不渲染、布局改动没生效、消息被丢弃……）**都能在这里找到证据**。

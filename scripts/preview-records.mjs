@@ -198,6 +198,14 @@ const FIXTURES = [
 
 const THEME = `:root {
   --vscode-editor-background: #1f1f1f;
+  /* [CUSTOM-20261013-228] 这条不是"缺个配色"，是**结构性的**缺：
+     app CSS 的 body 写着 font-size: var(--vscode-font-size)，变量没定义 ⇒ 该声明在
+     "计算值阶段"失效，而 Blink 在 body 之下解析 em 时用的是**错误的基准**
+     （实测：0.42em 算成 12px，父级 getComputedStyle 却报 16px；把 body 的 font-size
+     显式钉住，同一个 0.42em 立刻回到正确的 6.72px）。后果是预览里所有 em 字号都被放大，
+     tab-dot 的字母因此在截图里看着挺大 —— 而真机（VS Code 默认 13px）只有 5.5px，
+     用户报的"字母太小"在预览里根本复现不出来。补上它，预览才与真机同基准。 */
+  --vscode-font-size: 13px;
   --vscode-sideBar-background: #181818;
   --vscode-panel-border: #2b2b2b;
   --vscode-foreground: #cccccc;
@@ -326,11 +334,16 @@ function driver() {
       row('s7', '驼峰目录', { cwd: 'd:/Git/zgame/zgame-ai-design/AbcDeFg' }),
       row('s8', '短横线目录', { cwd: 'd:/Git/zgame/zgame-ai-design/abc-de-fg' }),
       row('s9', '四词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/alpha-beta-gamma-delta' }),
+      // [CUSTOM-20261013-228] 补齐 1/2 个字母两档：原来只有 SMP(3)/ADF(3)/ABGD(4)，
+      // 而 228 的字号是**按字母数分档**的，缺了这两档就等于有一半没验过。
+      row('s10', '单词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/pavilion' }),
+      row('s11', '双词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/story-myriad' }),
     ]);
-    // [CUSTOM-20261009-226/227] 探针：完成态（s1，无状态类）下背景与文字必须是**对比色**，
+    // [CUSTOM-20261009-226/227，20261013-228] 探针：完成态（s1，无状态类）下背景与文字必须是**对比色**，
     // 不能同色撞车 —— 226 修的就是这个（背景被 currentColor 吃成灰、文字近黑 ⇒ 看不见）。
-    // 227 追加：缩写要取**最底层目录名**（不是整条路径），且 4 个字母要排成 2x2 两行
-    // （每个字母一个 span，宽度 50% 换行）。
+    // 227 追加：缩写要取**最底层目录名**（不是整条路径）。
+    // 228 追加：字号按字母数分档（styles.ts 的 .tab-dot[data-len]）、圆角、dot 的 tooltip，
+    // 并记下每个字母的实测几何 —— letterRows 是"折成了几行"的唯一判据（3 个字母必须 1 行）。
     if (location.hash.indexOf('probe') >= 0) {
       var dotEls = document.querySelectorAll('.tab-dot');
       var dots = [];
@@ -338,8 +351,15 @@ function driver() {
         var cs = getComputedStyle(dotEls[d]);
         var letterEls = dotEls[d].querySelectorAll('.dir-letter');
         var letterTops = [];
+        var letters = [];
         for (var le = 0; le < letterEls.length; le++) {
-          letterTops.push(Math.round(letterEls[le].getBoundingClientRect().top));
+          var lr = letterEls[le].getBoundingClientRect();
+          letterTops.push(Math.round(lr.top));
+          letters.push({
+            t: letterEls[le].textContent,
+            w: Number(lr.width.toFixed(1)),
+            l: Number(lr.left.toFixed(1)),
+          });
         }
         dots.push({
           text: dotEls[d].textContent,
@@ -347,16 +367,27 @@ function driver() {
           fg: cs.color,
           w: Math.round(dotEls[d].getBoundingClientRect().width),
           h: Math.round(dotEls[d].getBoundingClientRect().height),
-          // 227：4 个字母（如 SMP→SM P? 不，SMP 是 3 个）的 top 值集合 —— 相同 top 数=行数。
-          // SMP: 3 个字母，前两一行、第三个第二行（或都一行）—— 看实际渲染。
-          // 227 的目标是 4 字母（如 ABCD）排 2x2。这里的夹具有 SMP(3)/ADF(3)。
+          len: dotEls[d].getAttribute('data-len'),
+          fontSize: cs.fontSize,
+          radius: cs.borderRadius,
+          title: dotEls[d].title,
+          letters: letters,
           letterRows: letterTops.length > 0 ? (new Set(letterTops)).size : 0,
         });
       }
+      // 228：把**字号基准**也记进读数。预览主题一旦漏掉 --vscode-font-size，
+      // app CSS 的 body 那条 font-size: var(...) 就在"计算值阶段"失效，Blink 在 body
+      // 之下解析 em 的基准会跑偏（实测 0.42em 算成 12px、而父级 getComputedStyle 报 16px），
+      // 于是预览里所有 em 字号都被放大 —— 228 之前 tab-dot 的字母因此在截图里看着挺大，
+      // 用户报的"字母太小"根本复现不出来。baseFont 就是这道闸门：它必须是 13px。
       var tabPre = document.getElementById('probe') || (function () {
         var el = document.createElement('pre'); el.id = 'probe'; document.body.appendChild(el); return el;
       })();
-      tabPre.textContent = JSON.stringify({ kind: 'tabdots', dots: dots });
+      tabPre.textContent = JSON.stringify({
+        kind: 'tabdots',
+        baseFont: getComputedStyle(document.body).fontSize,
+        dots: dots,
+      });
     }
   }
   // #times：打开每条记录的时刻（真面板里由 header 的 Times 开关切，
@@ -760,7 +791,7 @@ function driver() {
       ]
     };
     // 'real' 档：**照抄 2026-10-01 那次真机请求**（日志
-    // ~/.claude/acp-client-custom.log 里的 'elicitation/create'）—— 用来复现用户报的两个现象：
+    // ~/.vac/vac.log 里的 'elicitation/create'）—— 用来复现用户报的两个现象：
     //   · 选项**带描述**（真 schema 里 4 个选项都有 description）；
     //   · 那个自由文本框**没有** _meta 标记 ⇒ 宿主算不出 customFor ⇒ 它成了独立的一题
     //     "Other"，问题块里因此看不到追加输入框（用户报的"缺少自定义内容"）。

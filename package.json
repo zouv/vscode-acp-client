@@ -312,7 +312,8 @@
               "kind": "claude",
               "command": "npx",
               "args": [
-                "@agentclientprotocol/claude-agent-acp@latest"
+                "-y",
+                "github:zouv/claude-agent-acp"
               ],
               "env": {}
             },

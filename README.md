@@ -74,7 +74,7 @@ npm run dev:host      # 编译 + 打开 Extension Development Host
 
 | 名称 | `kind` | 命令 |
 |---|---|---|
-| Claude Code | `claude` | `npx @agentclientprotocol/claude-agent-acp@latest` |
+| Claude Code | `claude` | `npx -y github:zouv/claude-agent-acp` |
 | Codex CLI | `codex` | `npx @zed-industries/codex-acp@latest` |
 
 要接别的 agent，加一条 `vac.agents` 配置即可（`kind` 可省略，会按名称/命令自动推断）。
@@ -260,9 +260,3 @@ agent 支持 `session/list` 时以 agent 为准；否则用本机缓存，而缓
 ## 许可证
 
 [MIT](LICENSE) © 2026 zouv
-
-## 出处
-
-本仓库以 [`formulahendry/vscode-acp`](https://github.com/formulahendry/vscode-acp) 的 fork 起步，
-现已**完全脱钩、自主演进**：凡在前身基线中存在过的文件一律重写，因此仓库只保留本项目自己的 MIT 版权。
-全局标识符命名空间为 `vac.*`（命令 / 配置键 / 视图 id / 上下文键 / Memento key）。

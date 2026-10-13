@@ -3,7 +3,7 @@
 > **这是什么**：本仓库（vscode-acp-client）开发与排查中**踩过的坑**的沉淀。新会话动手前先扫一眼标题，
 > 避免重复踩坑。每条写清：现象 → 根因 → 解法 → 验证方式。
 >
-> **读的时候注意**：条目按日期累积。2026-10-12（M1 独立化）之前的条目属前身仓库时期——
+> **读的时候注意**：条目按日期累积。2026-10-12（M1 独立化）之前的条目来自早期开发阶段——
 > 其中的 `acpc.*` 即今天的 `vac.*`，而 `webpack` 构建、`src/ui/ChatWebviewProvider.ts`（旧面板）、
 > `CUSTOMIZATIONS/` 账本等**已随 M1 删除**；这类标识符一律按历史记录读，不要照着做。
 >
@@ -12,35 +12,35 @@
 
 ---
 
-## 1. 上游没有任何版本 tag → "按 tag 定基线"的机制直接失效
+## 1. 基线仓库没有任何版本 tag → "按 tag 定基线"的机制直接失效
 
 - **日期**：2026-09-23（初始配置）
-- **现象**：照搬 chatbox 的初始化脚本（`git tag -l "v*" --sort=-v:refname | head -1` 取最新 tag 作为
+- **现象**：照搬移植来的初始化脚本（`git tag -l "v*" --sort=-v:refname | head -1` 取最新 tag 作为
   vendor 基线）会拿到**空字符串**；`registry.md` 的 `current_upstream_version` 无值可填，
   `vendor/vX.Y.x` 分支名 fallback 逻辑也失去意义。
-- **根因**：`formulahendry/vscode-acp` 从建仓至今**从未打过 tag**，只有 `main` 分支。
-  chatbox 的整套机制建立在上游有稳定 tag 的假设上。
+- **根因**：作为移植基线的那个仓库从建仓至今**从未打过 tag**，只有 `main` 分支。
+  整套机制建立在该仓库有稳定 tag 的假设上。
 - **解法**：
   1. vendor 基线分支固定为 **`vendor/main`**（不再按 `vX.Y.x` 建线）；
-  2. `current_upstream_version` 取**上游 `package.json` 的 `version` 字段**（如 `0.2.0`）——
+  2. `current_upstream_version` 取**基线 `package.json` 的 `version` 字段**（如 `0.2.0`）——
      它只表达语义版本，**不足以定位代码**；
-  3. 唯一定位靠 `current_upstream_commit`（上游 `main` 的 commit hash），两者必须同时准确。
-- **教训**：跨仓库移植一套机制前，**先用 `git ls-remote --tags <upstream>` 验证机制依赖的前提**
+  3. 唯一定位靠 `current_upstream_commit`（基线 `main` 的 commit hash），两者必须同时准确。
+- **教训**：跨仓库移植一套机制前，**先用 `git ls-remote --tags <repo>` 验证机制依赖的前提**
   （有没有 tag、有没有 release、默认分支叫什么），别假设另一个仓库的约定成立。
 - **验证**：`git rev-parse upstream/main` 与 registry frontmatter 一致；
   `pwsh scripts/init-repo.ps1` 可重复执行不报错。
 
-## 2. 命令 id / 视图 id / 配置键是**全局命名空间** → 改 publisher 不足以让 fork 与上游并存
+## 2. 命令 id / 视图 id / 配置键是**全局命名空间** → 改 publisher 不足以让两个扩展并存
 
 - **日期**：2026-09-23（初始配置，CUSTOM-20260923-001）
-- **现象**：改掉 `package.json` 的 `publisher`/`name`（扩展 id 变成 `zouv.acp-client-custom`）后，
-  与上游 `formulahendry.acp-client` 同时安装仍然冲突：命令面板出现重复命令、
-  开发者工具报 command already exists、配置项互相覆盖。
+- **现象**：改掉 `package.json` 的 `publisher`/`name`（扩展 id 换成别的）后，
+  与另一个同样提供 ACP 客户端、且沿用了 `acp.*` 命名空间的扩展同时安装仍然冲突：
+  命令面板出现重复命令、开发者工具报 command already exists、配置项互相覆盖。
 - **根因**：VS Code 的 **command id、view id、viewContainer id、configuration section key**
   都在**整个 IDE 实例内全局唯一**，与"哪个扩展贡献的"无关。扩展 id 只决定扩展身份，不决定这些命名空间。
-  上游用了 `acp.*` 前缀，fork 原样沿用就必然撞车。
+  旧实现用了 `acp.*` 前缀，原样沿用就必然撞车。
 - **解法**：全量重命名 `acp.*` → `vac.*`，覆盖：
-  - `package.json`：21 个命令 id、视图容器 id（`acp-client`→`acp-client-custom`）、
+  - `package.json`：21 个命令 id、视图容器 id、
     视图 id（`vac-sessions`/`vac-chat`）、配置段（`vac.agents` 等 4 项）、上下文键（`vac.turnInProgress`）
   - `src/`：`registerCommand` / `executeCommand` 的字符串字面量、`getConfiguration('acp')`、
     `createTreeView` / `viewType`、`createOutputChannel` 的名称
@@ -48,9 +48,9 @@
 - **教训**：
   1. **TypeScript 编译器不检查字符串字面量**——`npm run compile` 全绿**不代表改干净了**，
      必须 `grep -rn` 反向复核残留；
-  2. fork 一个 VS Code 扩展前，第一件事是列出它占用的**全局命名空间清单**，而不是先改 publisher。
+  2. 改造一个 VS Code 扩展前，第一件事是列出它占用的**全局命名空间清单**，而不是先改 publisher。
 - **验证**：`grep -rn "acp\.\|acp-sessions\|acp-chat" src/ package.json` 无（非故意保留的）残留；
-  两个扩展同时安装后控制台无冲突告警。详见 `registry.md` 的 CUSTOM-20260923-001。
+  两个扩展同时安装后控制台无冲突告警。详见 CUSTOM-20260923-001。
 
 ## 3. 批量替换的模式边界：太紧会漏、太松会误伤（同一类错误，两个方向都踩过）
 
@@ -81,7 +81,7 @@
   2. `src/core/ConnectionManager.ts` 的 `clientInfo.name = 'vscode-acp-client'`
 - **根因**：
   1. `STATE_KEY` 是 `workspaceState` 的 **Memento key**，作用域是**当前扩展自己**，
-     不与上游冲突；**改了它 = 既有用户的会话历史全部读不出来（等于丢失）**。
+     不与其它扩展冲突；**改了它 = 既有用户的会话历史全部读不出来（等于丢失）**。
   2. `clientInfo.name` 是 ACP `initialize` 握手时**上报给 agent 的客户端标识**，属协议元数据，
      不参与 VS Code 命名空间，改不改都不冲突。
 - **解法**：两者**保持原值**，并在 `architecture.md §4` 明确写"故意保留，勿顺手修"。
@@ -96,7 +96,7 @@
   本条作为历史保留：可复用的一课是**先分清"全局可冲突标识符"与"扩展内作用域 / 协议元数据"**这个判据，
   而不是当时得出的那句"别改"。
 
-## 5. 上游 `vac.turnInProgress` 上下文键从未 `setContext` → Escape 取消是死绑定
+## 5. `vac.turnInProgress` 上下文键从未 `setContext` → Escape 取消是死绑定
 
 - **日期**：2026-09-23（初始配置扫描时发现，**尚未修复**）
 - **现象**：`package.json` 里两处依赖 `vac.turnInProgress`（改名前的 `acp.turnInProgress`）：
@@ -105,7 +105,7 @@
 
   但 `grep -rn "setContext" src/` **没有任何结果**——这个上下文键从来没有人设置过，
   因此上述两条的 `when` 恒为 false：**Escape 键取消不了当前轮次，取消按钮也不显示**。
-- **根因**：上游遗留——贡献点声明了上下文键，但实现里漏了
+- **根因**：早期实现遗留——贡献点声明了上下文键，但实现里漏了
   `vscode.commands.executeCommand('setContext', 'vac.turnInProgress', <bool>)`。
 - **解法**：**本次未修**（超出"初始配置"范围）。修复方向：在 `SessionManager` 的
   `promptStart`/`promptEnd`（或对应事件）回调里设置该上下文键，与
@@ -133,50 +133,50 @@
   这些**开发机制文件会全部进入 `.vsix`**（vsce 默认打包仓库里除忽略项外的一切），
   安装包体积变大，且把内部开发文档、改动账本、坑点库发给终端用户。
 - **根因**：`.vscodeignore` 是**白名单式的反向排除**（列出"不打包什么"），
-  上游只排除了它自己知道的路径；新增顶层目录不会自动被排除。
+  旧配置只排除了当时已知的路径；新增顶层目录不会自动被排除。
 - **解法**：每新增一个顶层目录/文件，同步往 `.vscodeignore` 加一条；本次加了
   `**`、`.agents/**`、`.claude/**`、`AGENTS.md`、`release/**`、`.github/**`。
 - **教训**：`.vscodeignore` 和顶层目录是**联动契约**——架构变更（加目录）时容易忘。
   打包后用 `npx @vscode/vsce ls --tree` 验证产物清单。
 - **验证**：`npx @vscode/vsce ls --tree | grep -i "customiz\|agents\|AGENTS"` 无输出。
 
-## 7. 上游以 CRLF 入库 + 本机 `core.autocrlf=true` → 编辑一次就整文件伪差异
+## 7. 基线以 CRLF 入库 + 本机 `core.autocrlf=true` → 编辑一次就整文件伪差异
 
 - **日期**：2026-09-23（首次提交前发现，差点带着 14000 行伪差异提交）
 - **现象**：准备提交时 `git diff --stat` 显示 `src/ui/ChatWebviewProvider.ts | 5121 +-`、
   `package.json | 852 +-`——但实际只改了几行；整仓统计 14339 插入 / 12788 删除。
 - **根因**：
-  1. 上游 `formulahendry/vscode-acp` 的 blob **以 CRLF 入库**（仓库里**没有 `.gitattributes`**，
-     推测作者在 Windows 上未开 autocrlf 直接提交）；
+  1. 基线代码的 blob **以 CRLF 入库**（当时仓库里**没有 `.gitattributes`**，
+     推测是在 Windows 上未开 autocrlf 直接提交的）；
   2. 本机 `core.autocrlf=true`（`C:/Program Files/Git/etc/gitconfig` 与 `~/.gitconfig` 都设了），
      但 autocrlf 对**已是 CRLF 的 blob** 不做归一化，两边就这么"相安无事"地一致着；
   3. 编辑工具一介入就打破平衡：**`sed -i`、`Write` 工具、`npm install` 都产出 LF**，
      而 `Edit` 工具会保留文件原有换行。于是一部分文件被转成 LF，与 CRLF blob 逐行不等 → 整文件 diff。
-- **危害**：不只是 diff 难看——**后续每次合并上游都会变成全文件冲突**，三方合并能力彻底丧失。
+- **危害**：不只是 diff 难看——**后续每次与基线合并都会变成全文件冲突**，三方合并能力彻底丧失。
 - **解法**（三层）：
   1. 加 `.gitattributes` 写 `* -text`：关闭 git 的换行转换，按字节原样存取，
-     保证本地 blob 与上游 blob 逐字节可比对（`-text` 只关 EOL 转换，不影响 diff/merge）；
+     保证本地 blob 与基线 blob 逐字节可比对（`-text` 只关 EOL 转换，不影响 diff/merge）；
   2. `scripts/normalize-eol.mjs` 做批量归一化 + `--check` 只读自检；
   3. 自检接入 `check-registry.mjs` §4；`release-vsix.sh` 在 `npm install` 之后自动把 `package-lock.json` 转回 CRLF。
 - **判据（两类文件，别一刀切）**——修的过程中踩到的第二个坑：
 
   | 类别 | 路径 | 换行 | 理由 |
   |---|---|---|---|
-  | **上游共有** | `src/`、`package*.json`、`.github/`、`.gitignore`、`.vscodeignore`、`tsconfig.json` … | **CRLF** | 与上游 blob 逐行可比，否则合并全冲突 |
-  | **纯自定义** | ``、`.agents/`、`AGENTS.md`、`.gitattributes` | **LF** | 不与上游同名，无冲突风险 |
+  | **基线共有** | `src/`、`package*.json`、`.github/`、`.gitignore`、`.vscodeignore`、`tsconfig.json` … | **CRLF** | 与基线 blob 逐行可比，否则合并全冲突 |
+  | **纯自定义** | ``、`.agents/`、`AGENTS.md`、`.gitattributes` | **LF** | 不与基线同名，无冲突风险 |
 
   **纯自定义文件必须保持 LF——尤其是 `.sh`**：带 CRLF 的 shell 脚本在 Linux/macOS 上会因
   shebang / 命令解析带上 `\r` 而直接执行失败。第一版 `normalize-eol.mjs` 把"所有已跟踪文件"
   一刀切成 CRLF，提交后自检立刻抓到 `sync-vendor.ps1` 被误判——**同一份规则里，两个方向都错得起来**。
 - **教训**：
-  1. **fork 一个仓库、动手改之前，先确认它的换行符约定**——`git ls-files --eol` 或
+  1. **接手一个仓库、动手改之前，先确认它的换行符约定**——`git ls-files --eol` 或
      `git cat-file blob HEAD:<file> | xxd | head` 看一眼真实字节，别等提交时才发现；
   2. **测量换行符不要用 Git Bash 的 `grep -U`**——它可能仍走文本模式，读数会骗人；
      用 node/python 直接读字节才准（本次就被误导过一次）；
   3. 判断"有没有真改动"看 `git diff --numstat` 的数字，数值离谱基本就是换行符问题；
   4. **写"归一化"类工具时先想清楚分类**，别默认全局一个规则——本次先过度归一（把 .sh 转 CRLF），
      才补上 CUSTOM_ONLY 判据。好在自检脚本在提交后立刻暴露了它。
-- **验证**：`node scripts/normalize-eol.mjs --check` 报"全部 36 个上游共有文件一致（CRLF）"；
+- **验证**：`node scripts/normalize-eol.mjs --check` 报"全部 36 个基线共有文件一致（CRLF）"；
   `git diff --numstat src/extension.ts` 从 `544/544` 降到真实改动量。
 
 ## 8. macOS 自带 bash 3.2 → `declare -A` 报 "invalid option"（本地永远复现不了）
@@ -207,7 +207,7 @@
 - **验证**：`node scripts/check-registry.mjs` 输出与 bash 版一致（12 个含标记文件）；
   CI 三平台的 job 全部通过（macOS 的测试步骤另见 #9）。
 
-## 9. macOS runner 上 `npm test` 必失败 → 上游既有问题，别去修
+## 9. macOS runner 上 `npm test` 必失败 → 既有工具链问题，别去修
 
 - **日期**：2026-09-23（修完 #8 后 CI 仍红，追查到是另一回事，CUSTOM-20260923-009）
 - **现象**：macos-latest 的 `npm test` 报
@@ -218,19 +218,19 @@
   ```
 - **根因**：**299 MB 不可能 12 秒下完**——"Downloaded" 是假的，**解压静默失败**，
   所以 Electron 二进制根本不存在。属 `@vscode/test-electron` 在 macOS arm64 runner 上的工具链问题。
-- **关键证据（决定了"不该自己修"）**：查上游仓库的 CI 历史——
-  `gh run list -R formulahendry/vscode-acp` 里**没有一次成功**，全是 `failure` / `action_required`。
-  说明这是上游既有的问题，不是本仓库引入的，也不该由本仓库去修。
+- **关键证据（决定了"不该自己修"）**：查基线仓库的 CI 历史——
+  `gh run list -R <基线仓库>` 里**没有一次成功**，全是 `failure` / `action_required`。
+  说明这是既有问题，不是本仓库引入的，也不该由本仓库去修。
 - **解法**：**不修**。macOS 上仍然跑机制自检与打包（跨平台自检覆盖必须保留——
   正是它在 macOS 上抓出了 #8 的 bash 3.2 问题），只跳过启动 VS Code 的测试步骤：
   ```yaml
   - run: npm test
     if: runner.os == 'Windows'     # Linux 走 xvfb-run，macOS 跳过
   ```
-  等上游/工具链修好后再放开。
+  等工具链修好后再放开。
 - **教训**：
-  1. **CI 红了先分清"谁的问题"**——查上游仓库的 CI 历史（`gh run list -R <upstream>`）是一分钟的事，
-     能立刻区分"我引入的"与"上游既有的"，避免一头扎进去修不属于自己的坑；
+  1. **CI 红了先分清"谁的问题"**——查基线仓库的 CI 历史（`gh run list -R <repo>`）是一分钟的事，
+     能立刻区分"我引入的"与"既有的"，避免一头扎进去修不属于自己的坑；
   2. **不要用 `continue-on-error` 掩盖**——那会让 build 显示绿、实际有失败，掩盖真问题。
      要用显式的 `if` 跳过 + 注释写清楚原因与证据；
   3. 判断"跨平台检查要不要保留"时看**它有没有真的抓到过东西**：
@@ -245,7 +245,7 @@
 - **日期**：2026-09-23（Chat 面板重写 Phase 2 新增 `src/ui/chat/` 25 个文件时发现，CUSTOM-20260923-011）
 - **现象**：25 个新建的 `.ts` 文件实际是 **LF**（Write 工具产出），但
   `node scripts/normalize-eol.mjs` 报
-  `所有文件已是 CRLF，无需修正`，`--check` 也报 `[OK] 全部 36 个上游共有文件换行符一致`。
+  `所有文件已是 CRLF，无需修正`，`--check` 也报 `[OK] 全部 36 个基线共有文件换行符一致`。
   **检查通过了，但事实是错的。**
 - **根因**：`normalize-eol.mjs` 用
   ```js
@@ -458,7 +458,7 @@
 - **契约**：ACP 的 `session/request_permission` 是一个 **JSON-RPC 请求**，客户端必须回答。
   SDK 文档注释明确要求：**会话被取消时，客户端必须把每个待决的权限请求以
   `{ outcome: 'cancelled' }` 结束**；而 SDK 侧**没有任何超时**（`grep setTimeout` 在权限路径上零命中）。
-- **上游实现的缺口**：`SessionManager.cancelTurn` 只发 `session/cancel`，从不解决那个 promise；
+- **早期实现的缺口**：`SessionManager.cancelTurn` 只发 `session/cancel`，从不解决那个 promise；
   `PermissionHandler` 的 QuickPick 又带 `ignoreFocusOut: true`，会一直挂着。
   在"只有弹框"的年代这个缺口表现不明显（用户总能在弹框里点一下），
   一旦把提示搬进面板就会立刻显形：卡片点不了（面板关了、或切到了别的会话）而 agent 在等。
@@ -1073,7 +1073,7 @@
 ## 35. 已有的排查能力被自己遗忘 → 让用户手工搬数据
 
 - **日期**：2026-09-30（排查"最后一条助手消息不渲染 markdown"）
-- **现象**：同一个问题反复三轮，我每次都请用户"打开输出面板 → 搜 `[vac]` → 把日志发我"；而这份日志**早就自动落盘**了 —— `~/.claude/acp-client-custom.log`，由 CUSTOM-20260928-095 加的，代码注释里写的正是
+- **现象**：同一个问题反复三轮，我每次都请用户"打开输出面板 → 搜 `[vac]` → 把日志发我"；而这份日志**早就自动落盘**了 —— `~/.vac/vac.log`，由 CUSTOM-20260928-095 加的，代码注释里写的正是
   "让 AI 排查时能直接读文件而不必用户手动贴日志"。
 - **根因**：这个能力**是我自己加的**，但排查时没想到去读它。知识写在了 `Logger.ts` 的注释里，
   而排查的入口在**文档与长期记忆**里 —— 两处不重合，等于没记。
@@ -1645,7 +1645,7 @@ zod 的 object 默认**丢弃未声明的键**，于是 adapter 明明发了说�
 
 - **日期**：2026-10-09（`CUSTOM-20261009-210`）
 - **现象**：用户报「滚动条已触底、消息却没拉到底部」（截图 11:15 那一刻），去读
-  `~/.claude/acp-client-custom.log` 时 11:15–11:16 的现场——整个——没了：文件只剩 11:40 以后的。
+  `~/.vac/vac.log` 时 11:15–11:16 的现场——整个——没了：文件只剩 11:40 以后的。
 - **根因**：Logger 的超限处置是 **truncate 到 0**，且只在**每个扩展进程的第一次写日志**时执行
   （`_logFileReady` 闸门）。11:40:33 那次激活的第一条日志正好把 11:15–11:40 的全部内容清零。
   旁证（这条例证本身也很值得记）：侧边栏 webview 的诊断序号在清零后的第一条是 `scroll#225` ——
@@ -1738,7 +1738,7 @@ python -c "import subprocess;b=subprocess.run(['git','show','HEAD:路径'],captu
 ```
 写入时**对齐原样**：`io.open(f,'w',encoding='utf-8',newline='')` 会原样保留读进来的换行符；只用 `newline=''` 读 + `newline=''` 写，不要在中间做 `splitlines()`/`join()`。
 
-**注意 `normalize-eol.mjs` 不覆盖这里**：它按「上游共有文件 vs 纯自定义文件」分类，`` 全算自定义、**不强制 CRLF**，所以它不会报错、也不会替你修——这正是本次伪差异能溜过闸门的原因（`check-registry.mjs` 同样是全绿）。
+**注意 `normalize-eol.mjs` 不覆盖这里**：它按「基线共有文件 vs 纯自定义文件」分类，`` 全算自定义、**不强制 CRLF**，所以它不会报错、也不会替你修——这正是本次伪差异能溜过闸门的原因（`check-registry.mjs` 同样是全绿）。
 
 **教训**：`-text` 仓库里，"换个换行符"和"改内容"在 git 眼里没有区别；动文档前先量一下它的 EOL，事后再用 `git diff --stat` 复核（数字远大于改动量 = 中招了）。
 
@@ -1774,3 +1774,43 @@ python -c "import subprocess;b=subprocess.run(['git','show','HEAD:路径'],captu
      才知道测试真的钉住了这个缺陷（本次做过）。
 - **验证**：`npm test` 里那两条 `real notification chain` / `beats registration` 用例；
   关掉 `sessionUpdateHandler.addListener(...)` 后它们必须失败。
+
+## 66. 预览主题漏一个**非配色** token → 整个预览的 `em` 基准跑偏，真机的问题在截图里复现不出来
+
+- **日期**：2026-10-13（改 tab 目录徽标的字号时发现，`CUSTOM-20261013-228`）
+- **现象**：用户报会话 tab 的目录徽标**字母太小**（真机截图里约 5.5px）。动手前先跑
+  `preview-records.mjs` 的 `#tabs` 截图对基线 —— **字母又大又清楚**，和用户的截图完全对不上。
+  探针一量：dot 的 `font-size` 是 **12px**，而 CSS 里明明写着 `font-size: 0.42em`、父级 `.tab` 是 16px
+  （0.42 × 16 = **6.72px**，差得离谱）。
+- **排查过程（为什么难）**：
+  1. 先怀疑浏览器把过小的字号"抬"到最小值。做最小复现页：`0.42em` 正确算出 6.72px、
+     `1px` 也老实算 1px ⇒ **没有最小字号钳制**，假设被证伪。
+  2. 再用 `document.styleSheets` 遍历"命中该元素的全部规则"：只有 `.tab-dot { font-size: 0.42em }`
+     一条，父级 `getComputedStyle` 也确认是 16px ⇒ 按 CSS 语义**不可能**算出 12px。
+     （这一步自己的诊断代码还先翻了一次车：`CSSStyleRule.cssRules` 在现代 Chrome 里**恒为真值**
+     （CSS 嵌套），`if (rule.cssRules) continue` 把所有样式规则都跳过了，`matched` 空得像是"没有规则"。）
+  3. 决定性对照：同一个 `0.42em`，挂在 `document.body` 下算 **12px**，挂在一个显式 `font-size: 16px`
+     的 `<div>` 下算 **6.72px** —— 差别只在父级。进而把 `document.body.style.fontSize = '16px'`
+     显式钉住，那个 12px **立刻**回到 6.72px。
+- **根因**：`body { font-size: var(--vscode-font-size) }`，而**预览主题的 `:root` 里没定义
+  `--vscode-font-size`**（真主题里一定有）。变量缺失 ⇒ 该声明在**计算值阶段**失效
+  （invalid at computed-value time）⇒  `getComputedStyle(body)` 报 16px 看着正常，
+  但 Blink 在 body 之下解析 `em` 时用了一个**错误的基准**（实测折算 ≈28.57px，即 12/0.42）。
+  也就是说：**预览里所有 `em` 字号都被放大了**，而这个放大又不体现在 `getComputedStyle` 的读数上。
+- **危害（比"截图不准"更严重）**：预览是"记录区布局/观感"改动**唯一的自动验收手段**（§0.5 路由表
+  那一行就写着"自己看，别推理"）。基准一偏，**真机的问题在截图里复现不出来**，验收会给出"看着挺好"的
+  假绿；而两个方向的误判都发生过——226/227 的 tab-dot 就是这么被"验过"的。
+- **解法**：给预览主题补 `--vscode-font-size: 13px`（VS Code 工作区 UI 的默认字号）。
+  它属于该主题既有的维护套路（226 补 `--vscode-charts-*` 是同一类），但注意**这条不是配色**：
+  配色 token 缺了只是颜色算不出来，这条缺了会**改变所有 em 尺寸的解析结果**。
+  另外把 `baseFont` 写进 `#tabsprobe` 的读数，让"基准跑偏"变成一条可断言的读数（应为 `13px`）。
+- **教训**：
+  1. **预览主题缺 token 有两种，危害不是一个量级**：配色 token 缺了看得见（透明 / 撞色），
+     而 `font-size`、`line-height` 这类**承重 token** 缺了是**静默**的——它改变的是解析基准，
+     读数甚至还是"正常"的。审查预览主题时，先把**非配色**的 token 挑出来单独看一眼。
+  2. **`getComputedStyle` 报的值与"浏览器解析 em 用的基准"可以不是同一个数**。
+     判断 em 是否正常，要靠**对照**（同一 `em` 挂在两种父级下比一比），而不是读父级的 computed 值。
+  3. 症状与真机不符时，**先信真机**：用户的截图是对的，预览是错的 —— 反过来的默认假设
+     （"预览是标准环境，是我推理错了"）会让人在错误的基准上做设计。
+- **验证**：`#tabsprobe` 读数里 `baseFont` = `13px`、`0.42em` 档的 dot 应为 `5.46px`；
+  改后 `data-len="1"` 应为 `9.1px`。修复前后各截一张 `#tabs`。
