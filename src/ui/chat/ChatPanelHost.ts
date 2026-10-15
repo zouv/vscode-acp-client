@@ -406,8 +406,15 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     on('agent-connected', refresh);
     on('agent-disconnected', refresh);
     on('session-info-changed', refresh);
-    on('session-load-start', refresh);
+    on('session-load-start', (sessionId: string, agentName: string) => {
+      // [CUSTOM- 回放开始：本会话 append 的记录改成 0 起的相对时刻（拿不到转录
+      // 真实时刻时不再用 Date.now() 冒充墙钟），命中真实时刻的由 stampReplayTime 覆盖。
+      this.transcripts.beginReplay(sessionId, agentName);
+      refresh();
+    });
     on('session-load-end', (sessionId: string) => {
+      // [CUSTOM- 回放结束：之后的记录回到墙钟。
+      this.transcripts.endReplay(sessionId);
       // [CUSTOM- A replay is a FINITE recorded stream, so once it
       // ends nothing can still be streaming — but nothing else closes the
       // entries it created: `finalizeTurn` only runs for a prompt WE sent, and a
@@ -1621,10 +1628,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * the store's OWN object (`append*` returns a live reference), so correcting `at` here
    * also fixes every later snapshot — the client is handed the same object.
    */
-  private stampReplayTime(sessionId: string, entry: { at: number } | null, messageId: unknown): void {
+  private stampReplayTime(sessionId: string, entry: { at: number; atIsElapsed?: boolean } | null, messageId: unknown): void {
     if (!entry) { return; }
     const at = this.replayTimeFor(sessionId, messageId);
-    if (at !== undefined) { entry.at = at; }
+    if (at !== undefined) { entry.at = at; entry.atIsElapsed = false; }
   }
 
   /**

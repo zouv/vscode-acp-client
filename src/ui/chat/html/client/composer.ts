@@ -12,6 +12,8 @@ export const composerClient = `
   'use strict';
 
   var input = null;
+  // [CUSTOM- '/' 命令按钮（#slashBtn）：效果同「在输入框输入 /」。
+  var slashBtn = null;
   var sendBtn = null;
   // [CUSTOM- 停止确认条（#stopConfirm）。
   var stopConfirmEl = null;
@@ -134,8 +136,12 @@ export const composerClient = `
     addPicker = NS.dom.qs('addPicker');
     addBtn = NS.dom.qs('addBtn');
     addMenu = NS.dom.qs('addMenu');
+    slashBtn = NS.dom.qs('slashBtn');
 
     input.addEventListener('keydown', onKeyDown);
+    // [CUSTOM- IME（中文输入法）合成结束再量一次：合成期间 textarea 的 scrollHeight
+    // 可能没跟上合成文本，偶现"输入了不增高"（autoGrow 依赖 scrollHeight）。
+    input.addEventListener('compositionend', autoGrow);
     input.addEventListener('input', function () {
       stashDraft();
       persistDraftsSoon();
@@ -204,6 +210,13 @@ export const composerClient = `
         toggleAdditionalDirectory(path);
       });
     }
+    // [CUSTOM- '/' 命令入口：效果同「在输入框输入 /」——把 '/' 写进输入框并弹出命令列表。
+    if (slashBtn) {
+      slashBtn.addEventListener('click', function (event) {
+        event.stopPropagation();
+        openSlash();
+      });
+    }
     // [CUSTOM- 底栏浮起来了，消息区要靠这个高度才知道该留多少底部空间。
     watchHeight();
   }
@@ -231,7 +244,15 @@ export const composerClient = `
     // 与禁用态，那条说明的显隐是独立的一件事，不该被它们跳过。
     refreshSteerHint();
     var enabled = canCompose();
+    // [CUSTOM- 没有会话也没有草稿（真正的空态）时，整个底栏都不该显示：露一个
+    // "看得见却打不了字"的框只会让人以为它坏了。body[data-phase] 管"没连上"（stateCard），
+    // 这条管"连上了但没有会话"——写 body 上的 data-composer，CSS 据此 display:none。
+    var hasSessionOrDraft = !!(state.sessionId || state.draft);
+    if (document.body && document.body.setAttribute) {
+      document.body.setAttribute('data-composer', hasSessionOrDraft ? 'on' : 'off');
+    }
     input.disabled = !enabled;
+    if (slashBtn) { slashBtn.disabled = !enabled; }
     sendBtn.disabled = !enabled && !state.running;
     sendBtn.className = 'send-stop ' + (state.running ? 'stop' : 'send');
     if (state.draftPending) {
@@ -408,7 +429,7 @@ export const composerClient = `
   /** Grow the textarea with its content, between sane bounds. */
   function autoGrow() {
     input.style.height = 'auto';
-    // [CUSTOM- 下限从 60px 放开：默认就占**一行**，随内容长高。
+    // [CUSTOM- 下限从 60px 放开：默认就占**两行**，随内容长高。
     // 空内容 / JS 未跑时的保底高度交给 CSS 的 min-height（.prompt-input）；
     // 上限仍是 320，而"面板再高也不许超过屏幕 38%"那条由 CSS 的 max-height 夹 ——
     // 两者同时存在时浏览器取小的那个，所以这里不需要知道视口有多高。
@@ -661,6 +682,19 @@ export const composerClient = `
     slashPopup.hidden = true;
     state.slashMatches = [];
     state.slashIndex = 0;
+  }
+
+  /**
+   * [CUSTOM- '/' 按钮：打开命令列表，但**不往输入框里写 '/'**（用户要求）——
+   * 直接聚焦输入框并渲染全部命令；选中的命令才由 acceptSlash 落成 '/name '。
+   */
+  function openSlash() {
+    if (!input || input.disabled) { return; }
+    if (state.commands.length === 0) { return; }
+    input.focus();
+    state.slashMatches = state.commands.slice();
+    state.slashIndex = 0;
+    renderSlash();
   }
 
   // --- Config pickers ------------------------------------------------------

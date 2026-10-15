@@ -15,6 +15,12 @@ interface EntryBase {
   id: string;
   /** Monotonic ms timestamp, used for ordering and nesting inference. */
   at: number;
+  /**
+   * [CUSTOM- true 表示 `at` 是「从回放起点 0 起的相对毫秒」，不是墙钟 epoch。
+   * 只在回放拿不到转录真实时刻时由 TranscriptStore 打上；命中真实时刻时由
+   * ChatPanelHost.stampReplayTime 清掉。客户端据此选格式（`+M:SS`）与颜色。
+   */
+  atIsElapsed?: boolean;
 }
 
 export interface UserEntry extends EntryBase {

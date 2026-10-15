@@ -348,6 +348,9 @@ export function styles(): string {
      [CUSTOM- 145 曾把它改成"也浮到右上角"来跟其它记录对齐 —— 那会挤掉标题行的
      宽度（要靠 padding-right 硬留槽位），工具卡本来就工整的一行反而散了，**已回退**。 */
   .tool-head .rec-time { position: static; }
+  /* [CUSTOM- 回退时刻（atIsElapsed，回放拿不到转录真实时刻）与真实时刻的区分：
+     更暗的占位灰 + 斜体，再配合 label 的 '+' 前缀，三重信号确保不靠单一颜色也能辨认。 */
+  .rec-time.elapsed { color: var(--vscode-inputPlaceholderForeground); font-style: italic; }
   /* 105 之前这里有一条 .entry-user .rec-time { text-align: right }（时刻跟着右对齐的气泡走）。
      用户消息改为靠左铺满后它没有存在理由了——留着会让时刻与正文分居两端。 */
   /* 工具耗时常显（与 Thought 的 "Thought for Ns" 同类信息，不需要开关）。 */
@@ -383,6 +386,7 @@ export function styles(): string {
     flex: none; font-size: 0.82em; font-variant-numeric: tabular-nums;
     color: var(--vscode-descriptionForeground);
   }
+  .outline-time.elapsed { color: var(--vscode-inputPlaceholderForeground); font-style: italic; }
   .outline-item.active .outline-time { color: inherit; opacity: 0.85; }
   .outline-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 历史列表行的悬停动作（Archive / Rename）。
@@ -1624,7 +1628,10 @@ export function styles(): string {
      顺带的好处：display: none 会让 ResizeObserver 把 --vac-composer-h 归零，消息区于是不再
      为一条并不存在的底栏留出底部空白。 */
   body[data-phase="disconnected"] .composer,
-  body[data-phase="connecting"] .composer { display: none; }
+  body[data-phase="connecting"] .composer,
+  /* [CUSTOM- 连上了但没有会话/草稿（真正的空态）也藏底栏：露一个灰置的框只会让人
+     以为它坏了。data-composer 由 composer.refreshControls 按「有没有会话或草稿」写。 */
+  body[data-composer="off"] .composer { display: none; }
   .composer-main { flex: 1; min-width: 0; display: flex; justify-content: center; padding-inline: 8px; }
   /* [CUSTOM- 限宽只加在这里（外墙照旧通栏），窄面板自动退化成满宽。
      它同时是 .slash-popup 的定位上下文 —— 弹层按输入卡对齐而不是按面板算
@@ -1768,10 +1775,10 @@ export function styles(): string {
     color: var(--vscode-input-foreground);
     border: none; border-radius: 0; padding: 4px 0 0;
     font-family: inherit; font-size: inherit; line-height: 1.4;
-    /* [CUSTOM- 默认只占**一行**：autoGrow 里那个 60px 的下限已放开，正常情况
+    /* [CUSTOM- 默认占**两行**：autoGrow 里那个 60px 的下限已放开，正常情况
        下高度就是内容的自然高度；这条 min-height 是"JS 还没跑 / 内容为空"时的保底，
-       数字与上面那条 1.4 的行高同源（再算上 padding-top 的 4px）。 */
-    min-height: calc(1.4em + 4px);
+       数字与上面那条 1.4 的行高同源（两行 + padding-top 的 4px）。 */
+    min-height: calc(1.4em * 2 + 4px);
     /* [CUSTOM- 视口上限；内容上限仍是 autoGrow 的 320，两者取小。 */
     max-height: var(--vac-input-max-h);
   }

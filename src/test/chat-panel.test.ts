@@ -280,6 +280,9 @@ function feed(harness: Harness, notifications: readonly FixtureNotification[]): 
  * in the product.
  */
 function feedReplay(harness: Harness, notifications: readonly FixtureNotification[]): void {
+  // [CUSTOM- session-load-start 也是生命周期的一部分：它让宿主进入「回放计时」态，
+  // 回放记录才按 0 起的相对时刻打 atIsElapsed（拿不到真实时刻时不再用 Date.now()）。
+  harness.sessionManager.emit('session-load-start', harness.sessionId, harness.agentName);
   feed(harness, notifications);
   harness.sessionManager.emit('session-load-end', harness.sessionId, harness.agentName, true);
 }
@@ -2290,6 +2293,32 @@ suite('chat panel: replay fidelity ()', () => {
       else { process.env.CLAUDE_CONFIG_DIR = previous; }
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test('a replayed record without a transcript time is elapsed from 0, not Date.now()', () => {
+    // Reported: reopened sessions without a readable transcript showed every row at
+    // `Date.now()` — one identical, misleading wall-clock second for the whole thing.
+    // Now such records are 0-based relative ms (atIsElapsed), rendered as a stopwatch.
+    const harness = makeHarness('fallback-session', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.sessionManager.emit('session-load-start', 'fallback-session', 'Claude Code');
+    harness.handler.handleUpdate({
+      sessionId: 'fallback-session',
+      update: { sessionUpdate: 'user_message_chunk', messageId: 'm-unknown', content: { type: 'text', text: 'hi' } },
+    } as any);
+    harness.sessionManager.emit('session-load-end', 'fallback-session', 'Claude Code', true);
+
+    const state = settle(harness, 'Claude Code', 'fallback-session');
+    const user = state.entries.find(e => e.kind === 'user');
+    assert.ok(user, 'the replayed user message is in the transcript');
+    assert.strictEqual(user!.atIsElapsed, true, 'no real time -> the record is elapsed, not wall-clock');
+    assert.ok(user!.at >= 0 && user!.at < 60_000,
+      `at is 0-based (${user!.at}ms), not the epoch ms Date.now() would produce`);
+
+    // Once the replay ends, a NEW record goes back to wall-clock time.
+    const live = (harness.host as any).transcripts.appendUser('fallback-session', 'after replay');
+    assert.ok(live, 'a live entry is appended');
+    assert.ok(!live.atIsElapsed, 'post-replay records are wall-clock again');
   });
 
   test('opening a session while on a draft page leaves the focused session alone', async () => {

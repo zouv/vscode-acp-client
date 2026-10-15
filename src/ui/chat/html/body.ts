@@ -15,7 +15,7 @@ import type { SurfaceKey } from '../ChatSurface';
 import { buildStamp } from '../../../utils/BuildInfo';
 
 export function body(surface: SurfaceKey = 'view'): string {
-  return `<body class="surface-${surface}" data-vac-build="${buildStamp()}">
+  return `<body class="surface-${surface}" data-vac-build="${buildStamp()}" data-composer="off">
   <div id="agentBar" class="agent-bar" hidden>
     <select id="agentSelect" class="agent-select" aria-label="Focused agent"></select>
   </div>
@@ -211,9 +211,9 @@ export function body(surface: SurfaceKey = 'view'): string {
              控件）。焦点环也从 textarea 移到卡片上（:focus-within），见 styles.ts。
              注意这一层**不能**写 overflow —— .picker-menu 与 .slash-popup 都要向上弹出。 -->
         <div class="composer-card">
-          <!-- [CUSTOM- rows="1"：默认只占一行，输入多行时才靠 autoGrow 长高
-               （composer.ts 里那个 60px 的下限已放开，高度完全交给内容与 CSS 的 min-height）。 -->
-          <textarea id="promptInput" class="prompt-input" rows="1" placeholder="Type a message…" disabled></textarea>
+          <!-- [CUSTOM- rows="2"：默认留出**两行**输入区，输入更多时才靠 autoGrow 继续长高
+               （高度完全交给内容与 CSS 的 min-height，见 styles.ts .prompt-input）。 -->
+          <textarea id="promptInput" class="prompt-input" rows="2" placeholder="Type a message…" disabled></textarea>
           <!-- 输入区重构：按钮栏（mode/model/thought）移到输入框
                下方，Send 改为图标按钮，二者与上下文进度条合并成一条置底按钮栏（pickers 靠左、
                Send 靠右）。133 起这一条整块移进 .composer-card 内（一体式卡片）。 -->
@@ -226,6 +226,11 @@ export function body(surface: SurfaceKey = 'view'): string {
               </button>
               <div id="addMenu" class="picker-menu"></div>
             </div>
+            <!-- [CUSTOM- '/' 入口：效果同「在输入框输入 /」——把 '/' 写进输入框并弹出命令列表
+                 （参考 Claude Code 官方插件的同款按钮）。命令列表 #slashPopup 在 .composer-inner 里。 -->
+            <button id="slashBtn" class="picker-btn" type="button" title="Commands" disabled>
+              <span class="picker-icon">/</span>
+            </button>
             <div id="configPickers" class="config-pickers"></div>
             <div id="contextMeter" class="context-meter" hidden title="Context usage"></div>
             <button id="sendStopBtn" class="send-stop send" disabled title="Send" aria-label="Send"></button>

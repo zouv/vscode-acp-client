@@ -64,8 +64,19 @@ export const outlineClient = `
 
   function pad(n) { return n < 10 ? '0' + n : String(n); }
 
-  function timeLabel(at) {
+  // [CUSTOM- 回退时刻（atIsElapsed）的格式：0 起的相对毫秒，前缀 '+' 读作计时。
+  function elapsedLabel(ms) {
+    var totalSec = Math.max(0, Math.round(ms / 1000));
+    var h = Math.floor(totalSec / 3600);
+    var m = Math.floor((totalSec % 3600) / 60);
+    var s = totalSec % 60;
+    if (h > 0) { return '+' + h + ':' + pad(m) + ':' + pad(s); }
+    return '+' + m + ':' + pad(s);
+  }
+
+  function timeLabel(at, elapsed) {
     if (!at) { return ''; }
+    if (elapsed) { return elapsedLabel(at); }
     var d = new Date(at);
     // [CUSTOM- 显示到秒级；时间已移到每项最右，不再抢占正文左侧空间。
     return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
@@ -153,7 +164,8 @@ export const outlineClient = `
       if (icon) { row.appendChild(icon); }
       // [CUSTOM- 时间移到最右：正文 flex:1 占满左侧，时间紧凑靠右。
       row.appendChild(NS.dom.el('span', 'outline-text', labelOf(entry)));
-      row.appendChild(NS.dom.el('span', 'outline-time', timeLabel(entry.at)));
+      // [CUSTOM- 回退时刻挂 elapsed 类换色（见 styles.ts .outline-time.elapsed）。
+      row.appendChild(NS.dom.el('span', entry.atIsElapsed ? 'outline-time elapsed' : 'outline-time', timeLabel(entry.at, entry.atIsElapsed)));
       list.appendChild(row);
     }
     tops = null;

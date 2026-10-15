@@ -204,10 +204,15 @@ export const sessionMenuClient = `
   function inMenu(node) { return !!(filterMenu && filterMenu.contains && filterMenu.contains(node)); }
 
   /** Switch the filter (null = all folders), remember the toggle, re-render locally. */
-  function applyFilter(key) {
+  function applyFilter(key, persist) {
     filterKey = key || null;
-    filterOn = filterKey !== null;
-    if (NS.boot && NS.boot.persistUi) { NS.boot.persistUi({ historyFolderFilter: filterOn }); }
+    // [CUSTOM- persist === false 是空态「Show all folders」的临时逃生口：只看一次全部，
+    // 不写 historyFolderFilter（于是下次打开仍按地址栏目录自动过滤）。菜单里的「All folders」
+    // 是显式决定，照常持久化。
+    if (persist !== false) {
+      filterOn = filterKey !== null;
+      if (NS.boot && NS.boot.persistUi) { NS.boot.persistUi({ historyFolderFilter: filterOn }); }
+    }
     // [CUSTOM- The menu STAYS OPEN. Picking a folder is usually the first
     // of several (compare two folders, or try the next one), and closing on every pick
     // turned that into "re-open, pick, re-open, pick". Everything else still refreshes
@@ -317,7 +322,9 @@ export const sessionMenuClient = `
       listEl.appendChild(NS.dom.el('div', 'outline-group', 'No sessions in this folder'));
       var showAll = NS.dom.el('button', 'outline-item', 'Show all folders');
       showAll.type = 'button';
-      showAll.setAttribute('data-filter-key', '');
+      // [CUSTOM- 空态逃生口用独立标记：click 里走 applyFilter('', false)，
+      // 只临时显示全部、不写偏好（别跟菜单里的「All folders」那个显式决定混）。
+      showAll.setAttribute('data-show-all', '');
       listEl.appendChild(showAll);
       return;
     }
@@ -525,8 +532,14 @@ export const sessionMenuClient = `
     }
     var row = event.target;
     while (row && row !== drawer) {
-      // Filter first: the menu rows and the empty state's "Show all folders" both
-      // carry this attribute and neither opens a session.
+      // [CUSTOM- 空态「Show all folders」：临时显示全部，不写持久化偏好（见 applyFilter）。
+      if (row.getAttribute && row.getAttribute('data-show-all') !== null) {
+        event.preventDefault();
+        applyFilter('', false);
+        return;
+      }
+      // Filter first: the MENU rows carry this attribute (the menu's own
+      // "All folders" included — that one persists) and none opens a session.
       if (row.getAttribute && row.getAttribute('data-filter-key') !== null) {
         event.preventDefault();
         applyFilter(row.getAttribute('data-filter-key'));

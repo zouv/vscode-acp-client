@@ -88,6 +88,16 @@ Thought 的 `Thought for Ns` 是**耗时**不是时刻。
 **时长的格式化在 `NS.dom.duration`**（最底层模块）：`toolCallView` 与记录层都要用，而模块加载顺序
 **只允许依赖指向前方**——放在 `transcriptView` 里 `toolCallView` 用不到，抄第二份又会漂（pitfalls #19）。
 
+**[回放拿不到真实时刻 → 按 0 起步（CUSTOM）]**：ACP 的 `session/update` **不带任何时间字段**（核对过
+SDK），回放记录默认全用 `Date.now()`——一个几十条的旧会话所有记录挤在同一秒，还读起来像个真实墙钟（误导）。
+修法分两层：① 回放期间（`session-load-start` → `TranscriptStore.beginReplay`，先 `ensureSession` 建桶——
+通知还没到桶可能不存在）append 的记录 `at` 写成「回放起点 0 起的相对毫秒」并打 `atIsElapsed`；命中转录真实时刻时
+（`preloadTranscriptTimes` 预读 + `stampReplayTime` 覆盖，仅 Claude Code）把 `at` 改回真实 epoch 并**清掉**标记；
+`session-load-end` → `endReplay`，之后的记录回到墙钟。② 客户端按 `atIsElapsed` 选格式与颜色：真实 = `HH:MM`
+（`descriptionForeground`），回退 = `+M:SS`（`inputPlaceholderForeground` + 斜体，前缀 `+` 读作计时）——
+颜色/字形/前缀三重信号，不靠单一颜色也能辨认真假。`finalizeStreaming` 对 `atIsElapsed` 的 thought **不产耗时**
+（没有真实起点，`Date.now() - at` 会算出巨大错数）。
+
 ### 5.18 工具输出按 markdown 渲染（066）
 
 **事实**：Claude Code 的 Bash 结果**本身就是 markdown 包装的**（抓包夹具里 12 处带 ``` 围栏），
