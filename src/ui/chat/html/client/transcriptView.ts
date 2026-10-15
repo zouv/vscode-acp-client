@@ -142,14 +142,26 @@ export const transcriptViewClient = `
 
   function pad2(n) { return n < 10 ? '0' + n : String(n); }
 
-  function clockLabel(at) {
+  // [CUSTOM- 回退时刻的格式：从回放起点 0 起的相对毫秒，读作计时而非钟点（前缀 '+'）。
+  function elapsedLabel(ms) {
+    var totalSec = Math.max(0, Math.round(ms / 1000));
+    var h = Math.floor(totalSec / 3600);
+    var m = Math.floor((totalSec % 3600) / 60);
+    var s = totalSec % 60;
+    if (h > 0) { return '+' + h + ':' + pad2(m) + ':' + pad2(s); }
+    return '+' + m + ':' + pad2(s);
+  }
+
+  function clockLabel(at, elapsed) {
     if (!at) { return ''; }
+    if (elapsed) { return elapsedLabel(at); }
     var d = new Date(at);
     return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
   }
 
-  function fullStamp(at) {
+  function fullStamp(at, elapsed) {
     if (!at) { return ''; }
+    if (elapsed) { return 'elapsed ' + elapsedLabel(at); }
     var d = new Date(at);
     return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
   }
@@ -976,7 +988,9 @@ export const transcriptViewClient = `
       // block of its own. A tool card puts it inside .tool-head, after the elapsed time, so
       // the line reads "2.2s 11:57"; every other record floats it to the top-right corner
       // (see the .rec-time rules) — which is what "no longer takes a whole line" means.
-      var stamp = NS.dom.el('span', 'rec-time', clockLabel(entry.at));
+      // [CUSTOM- 回退时刻（atIsElapsed）换格式 + 挂 elapsed 类换色，见 styles.ts。
+      var elapsed = !!entry.atIsElapsed;
+      var stamp = NS.dom.el('span', elapsed ? 'rec-time elapsed' : 'rec-time', clockLabel(entry.at, elapsed));
       // [CUSTOM- It goes in the record's TITLE ROW, which is the one part
       // that stays visible in every state: a collapsed details hides everything that is
       // not its summary, so a stamp placed beside the details would disappear exactly
@@ -994,7 +1008,7 @@ export const transcriptViewClient = `
       } else {
         node.insertBefore(stamp, node.firstChild);
       }
-      node.title = fullStamp(entry.at);
+      node.title = fullStamp(entry.at, elapsed);
     }
     // Drives the three-tier spacing ladder in the stylesheet (same-kind blocks
     // sit tight, cross-kind blocks get air, user messages start a new turn).

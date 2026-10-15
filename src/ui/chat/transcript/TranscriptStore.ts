@@ -33,6 +33,12 @@ interface SessionTranscript {
   seq: number;
   /** LRU stamp. */
   touched: number;
+  /**
+   * [CUSTOM- 回放计时起点（epoch ms）。设置后，本会话所有 append 的记录
+   * `at` 都写成「从该起点 0 起的相对毫秒」并打 `atIsElapsed`——回放拿不到转录
+   * 真实时刻时，不再用 `Date.now()` 冒充墙钟。由 beginReplay/endReplay 控制。
+   */
+  replayAnchor?: number;
 }
 
 function clampText(text: string): string {
@@ -57,6 +63,23 @@ export class TranscriptStore {
   /** Replace the live-session exemption set. Called by ChatPanelHost. */
   setLiveSessionIds(ids: Iterable<string>): void {
     this.liveSessionIds = new Set(ids);
+  }
+
+  /**
+   * [CUSTOM- 进入回放计时态：之后 append 的记录 `at` 都写成 0 起的相对毫秒。
+   * 幂等（重新打开同一会话不会重置起点）。由 ChatPanelHost 挂在 `session-load-start`。
+   * 先 ensureSession：回放通知还没到时桶可能不存在，不建桶这里就找不到会话、成了空操作。
+   */
+  beginReplay(sessionId: string, agentName: string): void {
+    this.ensureSession(sessionId, agentName);
+    const t = this.sessions.get(sessionId);
+    if (t && t.replayAnchor === undefined) { t.replayAnchor = Date.now(); }
+  }
+
+  /** [CUSTOM- 结束回放计时态：之后的记录回到墙钟。挂在 `session-load-end`。 */
+  endReplay(sessionId: string): void {
+    const t = this.sessions.get(sessionId);
+    if (t) { delete t.replayAnchor; }
   }
 
   /** Create a transcript bucket if absent. Idempotent. */
@@ -295,7 +318,9 @@ export class TranscriptStore {
       if (!entry.streaming) { continue; }
       if (opts.only && entry.kind !== opts.only) { continue; }
       entry.streaming = false;
-      if (entry.kind === 'thought' && entry.elapsedMs === undefined) {
+      // [CUSTOM- elapsed 记录（`at` 是 0 起的相对毫秒）没有真实起点，
+      // 算 `Date.now() - at` 会得到巨大的错数——直接不产耗时。
+      if (entry.kind === 'thought' && entry.elapsedMs === undefined && !entry.atIsElapsed) {
         entry.elapsedMs = Math.max(0, Date.now() - entry.at);
       }
       finalized.push(entry.id);
@@ -360,6 +385,13 @@ export class TranscriptStore {
     const t = this.sessions.get(sessionId);
     if (!t) { return null; }
     const entry = build(t);
+    // [CUSTOM- 回放计时态下，把 `at` 从 builder 写的 `Date.now()` 改成 0 起的
+    // 相对毫秒并打标记：拿不到转录真实时刻的记录不再冒充墙钟。命中真实时刻时
+    // 由 ChatPanelHost.stampReplayTime 覆盖 `at` 并清掉 `atIsElapsed`。
+    if (t.replayAnchor !== undefined) {
+      entry.at = Date.now() - t.replayAnchor;
+      entry.atIsElapsed = true;
+    }
     t.entries.push(entry);
     t.touched = ++this.clock;
     if (t.entries.length > MAX_ENTRIES_PER_SESSION) {

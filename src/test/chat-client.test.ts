@@ -2083,6 +2083,36 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
       [{ type: 'supplementHistory', cwd: '/git/beta' }]);
   });
 
+  test('the empty-state "Show all folders" shows everything without turning the filter off', () => {
+    // The escape hatch in the empty state is a TEMPORARY view, not a preference:
+    // it must NOT write historyFolderFilter, so the next open still auto-filters.
+    const { NS, docListeners, tree } = openedPicker(
+      {
+        sessions: [
+          { sessionId: 'b1', title: 'beta one', cwd: '/git/beta', dirKey: '/git/beta', updatedAt: '2026-09-18T00:00:00Z' },
+        ],
+        directories: [
+          { key: '/git/alpha', cwd: '/git/alpha', name: 'alpha', count: 0, current: true },
+          { key: '/git/beta', cwd: '/git/beta', name: 'beta', count: 1, current: false },
+        ],
+      },
+      { tabCwd: '/git/alpha' },
+    );
+    // Filtered to the (empty) address-bar directory -> the empty state with the escape.
+    const emptyRow = tree.list.querySelector('.outline-item');
+    assert.ok(emptyRow, 'the empty state offers the escape');
+    assert.ok(emptyRow!.textContent.includes('Show all folders'), 'the escape is labelled');
+
+    const patches: Array<Record<string, unknown>> = [];
+    NS.boot.persistUi = (p: Record<string, unknown>) => { patches.push(p); };
+    dispatchClick(emptyRow!, docListeners);
+
+    const rows = tree.list.querySelectorAll('.outline-item');
+    assert.strictEqual(rows.length, 1, 'the beta session is now listed');
+    assert.strictEqual(rows[0].getAttribute('data-open-session'), 'b1', 'it is the beta session');
+    assert.deepStrictEqual(patches, [], 'temporary: the filter preference is NOT written');
+  });
+
   // [CUSTOM- 行右端的悬停动作（Archive / Rename，仅悬停显示）。
   // 两个要点：①图标按钮是行按钮的**兄弟**（button 不能嵌 button，见 buildRowActions）；
   // ②点击只发消息，等宿主的 `sessionAction` 回执再改列表 —— 不做乐观更新。
@@ -2399,19 +2429,21 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
 
   function draftComposer(): {
     NS: Record<string, any>; input: StubNode; sendBtn: StubNode; pickers: StubNode;
-    slashPopup: StubNode; attachments: StubNode; posted: Array<Record<string, unknown>>;
+    slashPopup: StubNode; slashBtn: StubNode; attachments: StubNode; posted: Array<Record<string, unknown>>;
     docListeners: Record<string, Array<(event: any) => void>>;
   } {
     const input = new StubNode('textarea');
     const sendBtn = new StubNode('button');
     const pickers = new StubNode('div');
     const slashPopup = new StubNode('div');
+    const slashBtn = new StubNode('button');
     // [CUSTOM- 附件条也要拿到（草稿页粘图那条测试要断言 chip 真的出现了）。
     const attachments = new StubNode('div');
     const { NS, docListeners } = loadClient({
       promptInput: input,
       sendStopBtn: sendBtn,
       slashPopup: slashPopup,
+      slashBtn: slashBtn,
       attachments,
       configPickers: pickers,
       contextMeter: new StubNode('div'),
@@ -2420,7 +2452,7 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
     NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
     NS.bridge.postForSession = (message: Record<string, unknown>) => { posted.push(message); };
     NS.composer.init();
-    return { NS, input, sendBtn, pickers, slashPopup, attachments, posted, docListeners };
+    return { NS, input, sendBtn, pickers, slashPopup, slashBtn, attachments, posted, docListeners };
   }
 
   const draft = (id: string) => ({ draftId: id, cwd: '/tmp/x' });
@@ -2466,6 +2498,19 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
     input.dispatch('input', { target: input });
     const items = slashPopup.querySelectorAll('.slash-item');
     assert.strictEqual(items.length, 1, 'the draft page completes commands too');
+    assert.match(items[0].textContent, /compact/);
+  });
+
+  test('the "/" button opens the command list without typing "/" into the box', () => {
+    const { NS, input, slashPopup, slashBtn, docListeners } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+    NS.composer.setDraftOptions({ draftId: 'd1', ...snapshot() });
+
+    dispatchClick(slashBtn, docListeners);
+
+    assert.strictEqual(input.value, '', 'the button does NOT type "/" into the box');
+    const items = slashPopup.querySelectorAll('.slash-item');
+    assert.strictEqual(items.length, 1, 'the command list opens');
     assert.match(items[0].textContent, /compact/);
   });
 
