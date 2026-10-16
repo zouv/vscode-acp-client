@@ -287,6 +287,13 @@
           "when": "view == vac-sessions && viewItem =~ /^session/",
           "group": "session@2"
         }
+      ],
+      "editor/title": [
+        {
+          "command": "vac.openChatInEditor",
+          "when": "activeWebviewPanelId != vac-chat-editor",
+          "group": "navigation@1"
+        }
       ]
     },
     "keybindings": [

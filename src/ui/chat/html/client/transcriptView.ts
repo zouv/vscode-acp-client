@@ -790,7 +790,8 @@ export const transcriptViewClient = `
       // The card sits in the transcript: without this the click would also hit the record.
       event.preventDefault();
       event.stopPropagation();
-      NS.bridge.post({ type: 'cancelSubagent', subagentSessionId: entry.subagentSessionId });
+      // postForSession：会话作用域消息，裸 post 不带 sessionId 会被宿主的守卫丢掉。
+      NS.bridge.postForSession({ type: 'cancelSubagent', subagentSessionId: entry.subagentSessionId });
     });
     return btn;
   }
