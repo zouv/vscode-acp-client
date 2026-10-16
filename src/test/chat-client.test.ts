@@ -5104,6 +5104,8 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
 
   test('an assistant record offers Fork from here; a user record does not', () => {
     const { NS, posted } = withEntry();
+    // 会话作用域消息走 postForSession（宿主按 sessionId 校验后处理）；桩里两条都要接住。
+    NS.bridge.postForSession = (message: Record<string, unknown>) => { posted.push(message); };
     NS.transcriptView.append(
       { id: 'a1', kind: 'assistant', at: 2, text: 'answer', streaming: false }, undefined);
 
@@ -5663,6 +5665,8 @@ suite('chat client logic: sub-agent card (stub DOM, )', () => {
     const NS = harness.NS;
     const posted: Array<Record<string, unknown>> = [];
     NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    // Cancel 是会话作用域消息，走 postForSession。
+    NS.bridge.postForSession = (message: Record<string, unknown>) => { posted.push(message); };
     NS.transcriptView.init(messages);
     NS.transcriptView.append({
       id: 's1', kind: 'subagent', at: 1, subagentSessionId: 'child-1',

@@ -174,6 +174,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 表单卡片 | `html/client/elicitationView.ts` | 与 `ElicitationBridge` 配对 |
 | 从记录 fork 会话 | `ChatPanelHost` 的 `forkFromMessage` 分支 + `html/client/contextMenu.ts` | 面板只报 entryId，宿主查该条 ACP `messageId` → `SessionManager.forkSession` |
 | sub-agent 子会话卡 | `html/client/transcriptView.ts` 的 `buildSubagent` / `patchSubagent`（记录类型 `subagent`） | 状态/标题走 `revise` 就地补丁；Cancel 发 `cancelSubagent` |
+| 编辑区标签栏右侧入口 | `package.json(menus.editor/title)` → `vac.openChatInEditor` | Chat 面板已在编辑区激活时隐藏（`when: activeWebviewPanelId != vac-chat-editor`） |
 | webview 样式 | `html/styles.ts` | 按 §5 的锚点搜 |
 
 ### 2.6 能力实现（`src/handlers/`）

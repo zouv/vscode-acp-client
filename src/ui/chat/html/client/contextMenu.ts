@@ -165,7 +165,9 @@ export const contextMenuClient = `
     if (forkEntry && forkEntry.kind === 'assistant') {
       items.push({
         label: 'Fork from here',
-        run: function () { NS.bridge.post({ type: 'forkFromMessage', entryId: forkId }); }
+        // postForSession：这条是**会话作用域**消息，宿主会按 sessionId 校验后处理；
+        // 裸 post 不带 sessionId，会被守卫静默丢掉（点了没反应）。
+        run: function () { NS.bridge.postForSession({ type: 'forkFromMessage', entryId: forkId }); }
       });
     }
 

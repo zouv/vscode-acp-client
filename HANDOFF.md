@@ -17,15 +17,18 @@
 
 - **最近更新**：2026-10-16
 - **整体状态**：✅ 无进行中的开发任务。本轮 = ACP 能力补齐（`session/delete` 真删除 +
-  助手消息右键 **Fork from here** + **sub-agent 子会话卡/取消**）+ fork 适配器升级到上游
-  **v0.91.0** + 新增 [`docs/acp-protocol.md`](docs/acp-protocol.md)（ACP 接口 + 适配器功能对照表）。
+  助手消息右键 **Fork from here** + **sub-agent 子会话卡/取消**）+ **编辑区标签栏右侧入口按钮** +
+  fork 适配器升级到上游 **v0.91.0** + 新增 [`docs/acp-protocol.md`](docs/acp-protocol.md)。
   成果已记入 `CHANGELOG [未发布]`，**尚未发版**。
 - **当前分支（必填）**：`main`。
 - **最后验证状态**（2026-10-16）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（91 项）·
   `npm test`（真实宿主）✅ **477 项**（原 466 + 本轮新增 11）。fork 仓库
   （`D:\Git\zgithub\claude-agent-acp`）已 rebase 到 **v0.91.0**（保留自研 `_meta.extraModels`）
   并推送 origin/main；`build` + `lint` 绿（其单测有 Windows 环境性红，与升级无关）。
-  ⚠️ 仍未做 `npm run dev:host` 真机实测 —— 见「下一步」第 2 条。
+  ⚠️ 仍未做 `npm run dev:host` 真机实测 —— 见「下一步」第 1 条。
+  📌 用户实测报过「Fork from here 点了没反应」= **客户端会话作用域消息用了裸 `NS.bridge.post`
+  （不补 sessionId）**，被宿主 `verifySession` 守卫静默丢弃；已改走 `postForSession`
+  （sub-agent 的 Cancel 同一处 bug，一并修）。**新加会话作用域消息务必走 `postForSession`。**
 
 ---
 
@@ -59,9 +62,10 @@
 
 > 均来自 `ROADMAP.md` 的近期规划；接手时按用户实际指定挑一条，先按 §0.5 定范围再动手。
 
-1. **P1-2 宿主实测验收**（**顺带验收本轮三项**：Agents 树右键会话 → **Delete Session**、
-   聊天面板助手消息右键 → **Fork from here**、以及 **sub-agent 卡** —— 真跑一个会派生子 agent 的
-   提示词，看卡片出现 / 状态变化 / Cancel 生效）：`npm run dev:host` 打开宿主，目视确认 Dashboard 的统计数字与
+1. **P1-2 宿主实测验收**（**顺带验收本轮四项**：Agents 树右键会话 → **Delete Session**、
+   聊天面板助手消息右键 → **Fork from here**、**sub-agent 卡**（真跑一个会派生子 agent 的提示词，
+   看卡片出现 / 状态变化 / Cancel 生效 —— 需适配器为升级后的 0.91.0 且会发 `subagent_update`）、
+   以及**编辑区标签栏右侧的插件图标按钮**）：`npm run dev:host` 打开宿主，目视确认 Dashboard 的统计数字与
    连接状态、以及聊天面板（发消息 → 流式 → 工具调用 → 权限卡片）的实际表现；
    **顺带确认图标三处到位**（活动栏 VAC 容器 / 编辑区聊天标签页）、
    **会话 tab 的目录徽标**（1/2 个字母单行；3 个字母应为**上 2 下 1**、4 个为贴紧的 2x2；
