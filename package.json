@@ -279,12 +279,12 @@
         },
         {
           "command": "vac.copySessionId",
-          "when": "view == vac-sessions && viewItem =~ /^session/",
+          "when": "view == vac-sessions && (viewItem == 'session' || viewItem == 'session-local')",
           "group": "session@1"
         },
         {
           "command": "vac.forgetSession",
-          "when": "view == vac-sessions && viewItem =~ /^session/",
+          "when": "view == vac-sessions && (viewItem == 'session' || viewItem == 'session-local')",
           "group": "session@2"
         }
       ],
