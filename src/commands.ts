@@ -30,7 +30,7 @@ async function readAgentsConfig() {
 }
 
 export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
-  const { sessions, history, chat, tree } = deps;
+  const { sessions, chat, tree } = deps;
   const handlers: Record<string, (...args: any[]) => unknown> = {
     'vac.connectAgent': async (arg?: TreeArg) => {
       let agentName = agentNameOf(arg);
@@ -173,8 +173,19 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
       void vscode.window.showInformationMessage(`Copied session ID: ${arg.sessionId}`);
     },
 
-    'vac.forgetSession': (arg?: { agentName?: string; sessionId?: string }) => {
-      if (arg?.agentName && arg.sessionId) { history.forget(arg.agentName, arg.sessionId); }
+    'vac.forgetSession': async (arg?: { agentName?: string; sessionId?: string }) => {
+      if (!arg?.agentName || !arg.sessionId) { return; }
+      const confirm = await vscode.window.showWarningMessage(
+        `Delete session "${arg.sessionId}"? This cannot be undone.`,
+        { modal: true }, 'Delete');
+      if (confirm !== 'Delete') { return; }
+      try {
+        await sessions.deleteSession(arg.agentName, arg.sessionId);
+        tree.refresh();
+      } catch (e) {
+        logError('Failed to delete session', e);
+        void vscode.window.showErrorMessage(`Failed to delete session: ${errorMessage(e)}`);
+      }
     },
 
     'vac.addAgent': async () => {

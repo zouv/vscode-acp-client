@@ -343,6 +343,9 @@ export type ChatToExt =
   // （草稿页出现在屏幕上时，宿主手上的聚焦会话往往是别的那个），否则会出现"显示 A 的模型、
   // 建的是 B 的会话"——而那种错配在应用阶段会被逐项校验静默丢掉。
   | { type: 'closeSession'; sessionId: string }
+  // [CUSTOM- 取消**一个** sub-agent 子会话（`session/cancel` 打在子会话 id 上），父会话与兄弟
+  // 子会话照常跑。会话作用域（守卫之后）：`sessionId` 是**父**会话，子会话 id 走 `subagentSessionId`。
+  | { type: 'cancelSubagent'; sessionId: string; subagentSessionId: string }
   // 历史列表 / 会话 tab 的**改名**。**要在守卫之前处理**：
   // 历史列表里的行大多不是活会话（verifySession 只认 live 的）——会话 tab 那条是活的，但走同
   // 一条路更省心（见 ChatPanelHost 的分支注释）。`currentTitle` 只是给输入框的初值（客户端
@@ -350,6 +353,10 @@ export type ChatToExt =
   | { type: 'archiveSession'; sessionId: string }
   | { type: 'renameSession'; sessionId: string; currentTitle?: string }
   | { type: 'focusSession'; sessionId: string }
+  // [CUSTOM- 从某条助手消息处 fork 出新会话（`session/fork` + 适配器的消息级 `_meta`）。
+  // **会话作用域**（走 `verifySession` 守卫之后）。`entryId` 是面板记录 id —— 宿主据它取回
+  // 那一条的 ACP `messageId`，所以记录序列化不必带 messageId。
+  | { type: 'forkFromMessage'; sessionId: string; entryId: string }
   | { type: 'focusAgent'; agentName: string }
   // [CUSTOM- 带上行区间 = 只摘那一段（同一个文件可以引用多段）；不带 = 整个路径全摘。
   | { type: 'detachFile'; sessionId: string; path: string; lineStart?: number; lineEnd?: number }

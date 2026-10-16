@@ -17,6 +17,7 @@ export function summarizeCapabilities(caps: AgentCapabilities | undefined | null
     load: !!(caps as { loadSession?: unknown } | undefined | null)?.loadSession,
     resume: !!sc?.resume,
     close: !!sc?.close,
+    delete: !!sc?.delete,
     fork: !!sc?.fork,
     additionalDirectories: !!sc?.additionalDirectories,
   };

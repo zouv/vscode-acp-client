@@ -14,10 +14,12 @@
 ## [未发布]
 
 ### 新增
--
+- Agents 树右键会话新增 **Delete Session**：**真删除**会话——先取消/关闭活会话，再向 agent 发 `session/delete`（适配器声明支持时），最后清掉本地缓存；带二次确认。
+- 聊天面板**助手消息**右键新增 **Fork from here**：以该条消息为分叉点调用 `session/fork` 派生一个独立会话，新会话会重放它继承的历史并自动聚焦。适配器不支持分叉时给出提示。
+- 新增 **sub-agent 子会话卡**：声明 ACP draft 的 `subagents` 能力后，Claude Code 派生的每个子 agent 在父会话里显示为一张卡（名字 + 工作状态 + **Cancel**）；子会话自己的输出照旧内联在父会话记录里。子会话**空闲时不可取消**，agent 未声明 `capabilities.cancel` 时也不显示按钮。
 
 ### 变更
--
+- "Forget Session" 更名为 **Delete Session**（命令 id `vac.forgetSession` 不变），可用范围从「仅本地缓存会话」扩展到**所有会话行**（agent 侧列表与本地缓存都能删）。
 
 ### 修复
 -

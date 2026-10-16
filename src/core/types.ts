@@ -31,6 +31,7 @@ export interface AgentCapabilitySummary {
   load: boolean;
   resume: boolean;
   close: boolean;
+  delete: boolean;
   fork: boolean;
   additionalDirectories: boolean;
 }

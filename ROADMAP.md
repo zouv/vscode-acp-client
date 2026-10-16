@@ -21,6 +21,13 @@
 
 ## ✅ 已交付里程碑
 
+### M3 · ACP 能力补齐（2026-10-16）
+
+`session/delete`（真删除会话）、`session/fork`（从助手消息分叉）与 **sub-agent 子会话**（声明 draft
+`subagents` 能力 + 卡片/取消）三项落地；fork 适配器升级到上游 **v0.91.0**（保留自研 `_meta.extraModels`）。
+另产出 [`docs/acp-protocol.md`](docs/acp-protocol.md) —— ACP 协议接口 + claude-agent-acp 功能对照表
+（逐条标「已用 / 值得补 / 暂不用」）。细节见 `CHANGELOG` 未发布区。
+
 ### M2 · 上架前打磨（2026-10-13）
 
 v1.0.3：修「目录筛选菜单被会话行盖住」（绘制顺序）、插件正式图标（侧边栏 / 徽标 / 编辑区标签页

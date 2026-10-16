@@ -13,6 +13,7 @@ import type {
   PermissionEntry,
   PermissionState,
   PlanEntryRecord,
+  SubagentEntry,
   ThoughtEntry,
   ToolEntry,
   TranscriptEntry,
@@ -298,6 +299,48 @@ export class TranscriptStore {
       streaming: true,
       messageId,
     }));
+  }
+
+  /**
+   * Create or update the card for one sub-agent child session, keyed by
+   * `subagentSessionId` so the successive `subagent_update` patches for one child
+   * land on a single card. Returns it (existing or new) so the host can post it.
+   * `null` fields clear nothing — an omitted patch field keeps its previous value.
+   */
+  upsertSubagent(
+    sessionId: string,
+    update: {
+      subagentSessionId: string;
+      title?: string | null;
+      description?: string | null;
+      state?: SubagentEntry['state'];
+      canCancel?: boolean;
+    },
+  ): { entry: SubagentEntry; created: boolean } | null {
+    const t = this.sessions.get(sessionId);
+    if (!t) { return null; }
+    const existing = t.entries.find(
+      (e): e is SubagentEntry => e.kind === 'subagent' && e.subagentSessionId === update.subagentSessionId,
+    );
+    if (existing) {
+      if (typeof update.title === 'string') { existing.title = update.title; }
+      if (typeof update.description === 'string') { existing.description = update.description; }
+      if (update.state !== undefined) { existing.state = update.state; }
+      if (update.canCancel !== undefined) { existing.canCancel = update.canCancel; }
+      t.touched = ++this.clock;
+      return { entry: existing, created: false };
+    }
+    const entry = this.append<SubagentEntry>(sessionId, s => ({
+      id: this.nextEntryId(s),
+      kind: 'subagent',
+      at: Date.now(),
+      subagentSessionId: update.subagentSessionId,
+      ...(typeof update.title === 'string' ? { title: update.title } : {}),
+      ...(typeof update.description === 'string' ? { description: update.description } : {}),
+      state: update.state ?? 'unknown',
+      canCancel: update.canCancel ?? false,
+    }));
+    return entry ? { entry, created: true } : null;
   }
 
   /**

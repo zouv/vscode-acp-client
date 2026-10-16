@@ -16,13 +16,16 @@
 ## 状态快照
 
 - **最近更新**：2026-10-16
-- **整体状态**：✅ 无进行中的开发任务。**v1.2.0 已发布**（GitHub Release 附
-  `vscode-acp-client-1.2.0.vsix`），工作区干净。本轮 = Times 时刻回退 + Show all 临时查看 +
-  输入卡（`/` 按钮 / 两行默认 / 空态隐藏 / IME 自适应修复），已归档到 `CHANGELOG [1.2.0]`。
-- **当前分支（必填）**：`main`，与 `origin/main` 同步。
-- **最后验证状态**（2026-10-16，v1.2.0 发布）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（91 项）·
-  `npm test`（真实宿主）✅ **466 项** · `npm run vsix` ✅ 生成 `release/vscode-acp-client-1.2.0.vsix`
-  （409.89 KB）。⚠️ 仍未做 `npm run dev:host` 真机实测 —— 见「下一步」第 1 条。
+- **整体状态**：✅ 无进行中的开发任务。本轮 = ACP 能力补齐（`session/delete` 真删除 +
+  助手消息右键 **Fork from here** + **sub-agent 子会话卡/取消**）+ fork 适配器升级到上游
+  **v0.91.0** + 新增 [`docs/acp-protocol.md`](docs/acp-protocol.md)（ACP 接口 + 适配器功能对照表）。
+  成果已记入 `CHANGELOG [未发布]`，**尚未发版**。
+- **当前分支（必填）**：`main`。
+- **最后验证状态**（2026-10-16）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（91 项）·
+  `npm test`（真实宿主）✅ **477 项**（原 466 + 本轮新增 11）。fork 仓库
+  （`D:\Git\zgithub\claude-agent-acp`）已 rebase 到 **v0.91.0**（保留自研 `_meta.extraModels`）
+  并推送 origin/main；`build` + `lint` 绿（其单测有 Windows 环境性红，与升级无关）。
+  ⚠️ 仍未做 `npm run dev:host` 真机实测 —— 见「下一步」第 2 条。
 
 ---
 
@@ -32,7 +35,8 @@
 - **范围 / 涉及文件**：—
 - **完成定义（Definition of Done）**：—
 
-> v1.2.0 已发布并归档到 `CHANGELOG [1.2.0]`。
+> 本轮（ACP 能力补齐：`session/delete` / `session/fork` / sub-agent 子会话 + fork 仓库升级到
+> v0.91.0）已完成，成果见 `CHANGELOG [未发布]`。用户已同意**与 subagents 一起提交**。
 
 ---
 
@@ -55,7 +59,9 @@
 
 > 均来自 `ROADMAP.md` 的近期规划；接手时按用户实际指定挑一条，先按 §0.5 定范围再动手。
 
-1. **P1-2 宿主实测验收**：`npm run dev:host` 打开宿主，目视确认 Dashboard 的统计数字与
+1. **P1-2 宿主实测验收**（**顺带验收本轮三项**：Agents 树右键会话 → **Delete Session**、
+   聊天面板助手消息右键 → **Fork from here**、以及 **sub-agent 卡** —— 真跑一个会派生子 agent 的
+   提示词，看卡片出现 / 状态变化 / Cancel 生效）：`npm run dev:host` 打开宿主，目视确认 Dashboard 的统计数字与
    连接状态、以及聊天面板（发消息 → 流式 → 工具调用 → 权限卡片）的实际表现；
    **顺带确认图标三处到位**（活动栏 VAC 容器 / 编辑区聊天标签页）、
    **会话 tab 的目录徽标**（1/2 个字母单行；3 个字母应为**上 2 下 1**、4 个为贴紧的 2x2；

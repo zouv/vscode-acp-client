@@ -148,8 +148,8 @@ npm run dev:host      # 编译 + 打开 Extension Development Host
 | `VAC: Refresh` / `VAC: Refresh Sessions` / `VAC: Refresh Dashboard` | 刷新各视图 |
 | `VAC: Show Log` / `VAC: Show Protocol Traffic` | 打开 `VAC` / `VAC Traffic` 输出通道 |
 
-会话树的行内右键菜单另有 `Open Session` / `Load More Sessions` / `Copy Session ID` / `Forget Session`
-几个不在命令面板里的命令。
+会话树的行内右键菜单另有 `Open Session` / `Load More Sessions` / `Copy Session ID` / `Delete Session`
+几个不在命令面板里的命令；聊天面板里对**助手消息**右键可 **Fork from here**（以该条消息为分叉点新建一个会话）。
 
 </details>
 
@@ -239,7 +239,7 @@ agent 支持 `session/list` 时以 agent 为准；否则用本机缓存，而缓
 **换工作区就看不到**在别的工作区产生的记录。跨目录打开请从记录区的历史选择器走。
 
 **怎么从头重建统计？**
-删掉 `<globalStorage>/usage-index.json` 再刷新 Dashboard。单条会话缓存可在 Agents 树里右键 **Forget Session** 清除。
+删掉 `<globalStorage>/usage-index.json` 再刷新 Dashboard。单条会话可在 Agents 树里右键 **Delete Session** 删除（真删除：agent 侧与本地缓存一并清掉）。
 
 **行为不对，怎么自查？**
 先确认窗口跑的是当前构建：`VAC` 通道第一行与聊天面板客户端日志里都有构建指纹（版本 · git sha · 打包时间 · bundle 哈希），

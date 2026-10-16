@@ -91,6 +91,9 @@ export class ConnectionManager {
         // Without this the Claude adapter disables AskUserQuestion outright; `url` mode is
         // deliberately undeclared because agents fail closed on modes the client never renders.
         elicitation: { form: {} },
+        // Draft (agent-client-protocol #1992): the adapter then reports each Claude Code
+        // sub-agent as a child session (`subagent_update`), which we surface as a card.
+        subagents: {},
       },
     });
     log(`ConnectionManager: initialized. Agent: ${initResponse.agentInfo?.name || 'unknown'} v${initResponse.agentInfo?.version || '?'}`);
