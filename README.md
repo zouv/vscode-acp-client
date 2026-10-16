@@ -149,7 +149,8 @@ npm run dev:host      # 编译 + 打开 Extension Development Host
 | `VAC: Show Log` / `VAC: Show Protocol Traffic` | 打开 `VAC` / `VAC Traffic` 输出通道 |
 
 会话树的行内右键菜单另有 `Open Session` / `Load More Sessions` / `Copy Session ID` / `Delete Session`
-几个不在命令面板里的命令；聊天面板里对**助手消息**右键可 **Fork from here**（以该条消息为分叉点新建一个会话）。
+几个不在命令面板里的命令；聊天面板里对**助手消息**右键可 **Fork from here**（以该条消息为分叉点新建一个会话），
+会话**历史弹窗**的每一行右端悬停有 `Archive` / `Delete` / `Rename` 三颗图标按钮（Delete 为真删除）。
 
 </details>
 

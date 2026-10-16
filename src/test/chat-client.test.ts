@@ -2124,7 +2124,12 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     return hit!;
   }
 
-  test('每行都带一对动作，且动作按钮是行按钮的兄弟（不嵌套）', () => {
+  /** 真会话行。空态行（「Show all folders」那条）也带 `.outline-item`，不能靠它计数。 */
+  function sessionRows(tree: ReturnType<typeof historyDrawer>): StubNode[] {
+    return tree.list.querySelectorAll('[data-open-session]');
+  }
+
+  test('每行都带一排动作，且动作按钮是行按钮的兄弟（不嵌套）', () => {
     const { tree } = openedPicker();
     const rows = tree.list.querySelectorAll('.outline-item');
     assert.strictEqual(rows.length, 3);
@@ -2132,10 +2137,10 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
       const wrap = row.parentNode!;
       assert.ok(wrap.className.includes('session-row'), '行外面是 .session-row');
       const actions = wrap.querySelectorAll('[data-session-action]');
-      assert.strictEqual(actions.length, 2, 'Archive + Rename');
+      assert.strictEqual(actions.length, 3, 'Archive + Delete + Rename');
       assert.strictEqual(
         actions.map(a => a.getAttribute('data-session-action')).join(','),
-        'archive,rename');
+        'archive,delete,rename');
       // 动作层是行的**兄弟**：按钮的父级不是行按钮，而动作层自身挂在 .session-row 下。
       assert.notStrictEqual(actions[0].parentNode, row, '动作不在行按钮里');
       assert.strictEqual((actions[0].parentNode as StubNode).parentNode, wrap, '动作层挂在行容器下');
@@ -2151,6 +2156,16 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     assert.strictEqual(tree.list.querySelectorAll('.outline-item').length, 3,
       '回执之前列表不动（不做乐观更新）');
     assert.strictEqual(tree.drawer.hidden, false, '列表就地更新，抽屉不关');
+  });
+
+  test('点 Delete 带上这一行属于哪个 agent（真删除要连 agent 一起动）', () => {
+    const { docListeners, tree, posted } = openedPicker();
+    const row = tree.list.querySelectorAll('.outline-item')[1];
+    dispatchClick(actionBtnOf(row.parentNode as StubNode, 'delete'), docListeners);
+    assert.deepStrictEqual(posted.filter(m => m.type === 'deleteSession'),
+      [{ type: 'deleteSession', sessionId: 'a2', agentName: 'Claude Code' }]);
+    assert.strictEqual(tree.list.querySelectorAll('.outline-item').length, 3,
+      '回执之前列表不动（不做乐观更新）');
   });
 
   test('点 Rename 带上行上的当前标题（进输入框当初值）', () => {
@@ -2171,11 +2186,25 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     assert.strictEqual(tree.list.querySelectorAll('.outline-item').length, 2, '过滤在 alpha');
 
     NS.sessionMenu.applyAction({ action: 'archive', sessionId: 'a1' });
-    assert.strictEqual(tree.list.querySelectorAll('.outline-item').length, 1, '归档的行被摘掉');
+    assert.strictEqual(sessionRows(tree).length, 1, '归档的行被摘掉');
     assert.ok(!tree.drawer.hidden, '列表就地更新，抽屉不关');
 
-    NS.sessionMenu.applyAction({ action: 'rename', sessionId: 'a2', title: '新的名字' });
-    const first = tree.list.querySelectorAll('.outline-item')[0];
+    NS.sessionMenu.applyAction({ action: 'delete', sessionId: 'a2' });
+    assert.strictEqual(sessionRows(tree).length, 0,
+      '删除的行也摘掉（与归档同一条对账路径）');
+    assert.strictEqual(tree.list.querySelectorAll('.outline-item').length, 1,
+      '清空后剩的是空态行 —— 所以断言只数真会话行');
+  });
+
+  test('applyAction：改名换标签，计数跟着重算，过滤不被重置', () => {
+    const { NS, docListeners, tree } = openedPicker({}, { tabCwd: '/git/alpha' });
+    dispatchClick(tree.chip, docListeners);
+    const alpha = filterRows(tree.menu).find(r => r.getAttribute('data-filter-key') === '/git/alpha');
+    dispatchClick(alpha!, docListeners);
+    assert.strictEqual(sessionRows(tree).length, 2, '过滤在 alpha');
+
+    NS.sessionMenu.applyAction({ action: 'rename', sessionId: 'a1', title: '新的名字' });
+    const first = sessionRows(tree)[0];
     assert.ok(first.querySelector('.outline-text')!.textContent.includes('新的名字'),
       '改名的行换标签');
     assert.ok(tree.chip.querySelector('.picker-label')!.textContent.includes('alpha'),
@@ -5210,19 +5239,23 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     assert.strictEqual(labels(draftItems), 'Close', '草稿没有会话可改名');
   });
 
-  test('历史列表行：右键也给 Archive / Rename（键盘用户的入口）', () => {
+  test('历史列表行：右键也给 Archive / Delete / Rename（键盘用户的入口）', () => {
     const { NS, posted } = withEntry();
     const row = new StubNode('button');
     row.className = 'outline-item';
     row.setAttribute('data-open-session', 'a1');
+    row.setAttribute('data-open-agent', 'Claude Code');
     row.setAttribute('data-open-title', 'alpha one');
 
     const items = NS.contextMenu.itemsFor(row) as Array<{ label: string; run: () => void }>;
-    assert.strictEqual(labels(items), 'Archive / Rename');
+    assert.strictEqual(labels(items), 'Archive / Delete / Rename');
     items[0].run();
     items[1].run();
+    items[2].run();
     assert.deepStrictEqual(posted, [
       { type: 'archiveSession', sessionId: 'a1' },
+      // 删除要连 agent 一起动，所以带上这一行属于哪个 agent（行上的 data-open-agent）。
+      { type: 'deleteSession', sessionId: 'a1', agentName: 'Claude Code' },
       { type: 'renameSession', sessionId: 'a1', currentTitle: 'alpha one' },
     ]);
   });

@@ -1,7 +1,9 @@
 // Icon generator: one geometry, three surfaces.
 //
-//   resources/icon.svg  monochrome mark for the activity bar container (24x24, single color)
-//   resources/icon.png  128x128 badge for the Marketplace listing and the editor tab
+//   resources/icon.svg        monochrome mark for the activity bar container (24x24, currentColor)
+//   resources/icon.png        128x128 badge for the Marketplace listing and the editor tab
+//   resources/icon-editor-*.svg  the same mark with a FIXED color, for the editor tab bar button
+//                             (a path icon is painted as an image there, so currentColor is no use)
 //
 // Both files are generated from MARKS below, so the sidebar icon and the badge can never
 // drift apart. Zero dependencies: the badge is rasterized with signed-distance functions
@@ -211,7 +213,7 @@ function encodePng(width, height, rgba) {
 
 // --- SVG --------------------------------------------------------------------
 
-function toSvg() {
+function toSvg(color = 'currentColor') {
   const n = (v) => Number(v.toFixed(2));
   const at = (m, angle) => [n(m.cx + m.r * Math.cos(angle * Math.PI / 180)), n(m.cy + m.r * Math.sin(angle * Math.PI / 180))];
   // The bubble is a closed subpath; the prompt strokes after it start elsewhere, so each
@@ -231,7 +233,7 @@ function toSvg() {
     cursor = to;
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${GRID} ${GRID}" fill="none"` +
-    ` stroke="currentColor" stroke-width="${STROKE}" stroke-linecap="round" stroke-linejoin="round">` +
+    ` stroke="${color}" stroke-width="${STROKE}" stroke-linecap="round" stroke-linejoin="round">` +
     `<path d="${parts.join('')}"/></svg>\n`;
 }
 
@@ -241,7 +243,12 @@ const BADGE_SIZE = 128;
 mkdirSync(join(ROOT, 'resources'), { recursive: true });
 writeFileSync(join(ROOT, 'resources', 'icon.svg'), toSvg());
 writeFileSync(join(ROOT, 'resources', 'icon.png'), encodePng(BADGE_SIZE, BADGE_SIZE, renderBadge(BADGE_SIZE)));
-console.log(`icon.svg + icon.png (${BADGE_SIZE}x${BADGE_SIZE}) written to resources/`);
+// 编辑区标签栏那颗按钮：`icon` 走**文件路径**（不是 codicon），而 VS Code 把这种 SVG 当
+// 图片渲染 —— `currentColor` 在那儿解析不出颜色，所以必须给出**写死颜色**的 light/dark 两份
+// （light 主题配深色字形，dark 主题配浅色字形，取值与 VS Code 自己的工具栏图标一致）。
+writeFileSync(join(ROOT, 'resources', 'icon-editor-light.svg'), toSvg('#424242'));
+writeFileSync(join(ROOT, 'resources', 'icon-editor-dark.svg'), toSvg('#c5c5c5'));
+console.log(`icon.svg + icon.png (${BADGE_SIZE}x${BADGE_SIZE}) + icon-editor-{light,dark}.svg written to resources/`);
 
 if (process.argv.includes('--preview')) {
   const dir = join(tmpdir(), 'vac-icon-preview');
