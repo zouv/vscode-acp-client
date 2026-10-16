@@ -12,7 +12,7 @@
 | 项 | 值 |
 |---|---|
 | **记录时间** | 2026-10-16 |
-| **本插件版本** | `1.2.0` |
+| **本插件版本** | `1.3.0` |
 | **插件侧 ACP SDK** | `@agentclientprotocol/sdk` **1.8.0**（`package.json` 声明 `^1.7.0`，实际解析到 1.8.0） |
 | **claude-agent-acp（官方）** | **0.91.0**（本文档编写时官方最新 tag `v0.91.0`） |
 | **claude-agent-acp（本仓 fork）** | `zouv/claude-agent-acp`，基点 **0.91.0** + 1 个自研提交（`_meta.extraModels`）；2026-10-16 由 0.89.1 升级并推送 |
