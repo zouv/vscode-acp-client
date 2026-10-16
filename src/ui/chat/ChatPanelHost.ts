@@ -725,6 +725,17 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         void this.handleRenameSession(id, typeof current === 'string' ? current : '');
         return;
       }
+      // [CUSTOM- 真删除一条会话（历史列表行）。与 archiveSession 同区：**在 verifySession 守卫
+      // 之前处理** —— 历史行大多不是活会话，守卫会把它整条丢掉。
+      case 'deleteSession': {
+        const id = (msg as { sessionId?: unknown }).sessionId;
+        if (typeof id !== 'string' || !id) { return; }
+        const requested = (msg as { agentName?: unknown }).agentName;
+        const agentName = this.panelAgent(typeof requested === 'string' && requested ? requested : undefined);
+        if (!agentName) { return; }
+        void this.handleDeleteSession(agentName, id);
+        return;
+      }
       case 'setRestorePref':
         void this.handleSetRestorePref((msg as { value?: unknown }).value);
         return;
@@ -2441,6 +2452,24 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       ...all,
       [sessionId]: { ...(all[sessionId] ?? {}), ...patch },
     });
+  }
+
+  /**
+   * 真删除一条会话（历史列表行的 Delete）。比 Archive 重：Archive 只是本地收起，这一步
+   * 会向 agent 发 `session/delete` 并清掉本地缓存，**不可撤销** —— 所以先用原生弹框问一句。
+   * 做完回一条 `sessionAction {action:'delete'}`，列表据此摘掉那行（与 Archive 同一对账路径）。
+   */
+  private async handleDeleteSession(agentName: string, sessionId: string): Promise<void> {
+    const confirm = await vscode.window.showWarningMessage(
+      `Delete session "${sessionId}"? This cannot be undone.`,
+      { modal: true }, 'Delete');
+    if (confirm !== 'Delete') { return; }
+    try {
+      await this.sessionManager.deleteSession(agentName, sessionId);
+      this.post({ type: 'sessionAction', action: 'delete', sessionId });
+    } catch (e) {
+      this.reportError(sessionId, e);
+    }
   }
 
   /**

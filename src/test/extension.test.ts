@@ -8,6 +8,7 @@ const COMMANDS = [
   'vac.newConversation',
   'vac.openChat',
   'vac.openChatInEditor',
+  'vac.openChatFromEditorTab',
   'vac.addAgent',
   'vac.removeAgent',
   'vac.showLog',

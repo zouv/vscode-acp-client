@@ -105,6 +105,14 @@
         "icon": "$(open-preview)"
       },
       {
+        "command": "vac.openChatFromEditorTab",
+        "title": "Open VAC Chat",
+        "icon": {
+          "light": "resources/icon-editor-light.svg",
+          "dark": "resources/icon-editor-dark.svg"
+        }
+      },
+      {
         "command": "vac.addAgent",
         "title": "VAC: Add Agent Configuration",
         "icon": "$(add)"
@@ -186,6 +194,10 @@
         },
         {
           "command": "vac.forgetSession",
+          "when": "false"
+        },
+        {
+          "command": "vac.openChatFromEditorTab",
           "when": "false"
         }
       ],
@@ -290,7 +302,7 @@
       ],
       "editor/title": [
         {
-          "command": "vac.openChatInEditor",
+          "command": "vac.openChatFromEditorTab",
           "when": "activeWebviewPanelId != vac-chat-editor",
           "group": "navigation@1"
         }

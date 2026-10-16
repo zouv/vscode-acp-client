@@ -387,6 +387,9 @@ export const sessionMenuClient = `
     var actions = NS.dom.el('span', 'row-actions');
     var specs = [
       { action: 'archive', icon: 'archive', label: 'Archive' },
+      // [CUSTOM- 真删除（agent 侧 session/delete + 清本地缓存）。它比 Archive 重得多：
+      // Archive 只是本地收起，Delete 不可撤销 —— 宿主会先弹二次确认。
+      { action: 'delete', icon: 'trash', label: 'Delete' },
       { action: 'rename', icon: 'rename', label: 'Rename' }
     ];
     for (var i = 0; i < specs.length; i++) {
@@ -416,7 +419,7 @@ export const sessionMenuClient = `
     if (!message || !lastMessage || !lastMessage.sessions) { return; }
     var id = message.sessionId;
     var sessions = lastMessage.sessions;
-    if (message.action === 'archive') {
+    if (message.action === 'archive' || message.action === 'delete') {
       var kept = [];
       for (var i = 0; i < sessions.length; i++) {
         if (sessions[i].sessionId !== id) { kept.push(sessions[i]); }
@@ -526,6 +529,16 @@ export const sessionMenuClient = `
           });
         } else if (actionKind === 'archive') {
           NS.bridge.post({ type: 'archiveSession', sessionId: actionId });
+        } else if (actionKind === 'delete') {
+          // 删除要连 agent 一起动，所以还带上这条行属于哪个 agent（行上有 data-open-agent，
+          // 与 rename 取标题同一取法：动作按钮与行是**兄弟**，从最近的 .session-row 里找）。
+          var delWrap = actionBtn.closest ? actionBtn.closest('.session-row') : null;
+          var delRow = delWrap && delWrap.querySelector ? delWrap.querySelector('[data-open-session]') : null;
+          NS.bridge.post({
+            type: 'deleteSession',
+            sessionId: actionId,
+            agentName: delRow ? (delRow.getAttribute('data-open-agent') || '') : ''
+          });
         }
       }
       return;

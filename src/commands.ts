@@ -82,6 +82,10 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
     'vac.openChat': () => vscode.commands.executeCommand('vac-chat.focus'),
     'vac.sendPrompt': () => vscode.commands.executeCommand('vac-chat.focus'),
     'vac.openChatInEditor': () => chat.openEditorChat(),
+    // 编辑区标签栏那颗按钮自己的命令：同一个动作，但**图标与标题是给那个位置用的**
+    // （插件徽标 + "Open VAC Chat"）。不共用 openChatInEditor，是因为它的图标同时被三个
+    // 视图标题栏用着（那里要的是 ↗ 箭头，见验收清单）。
+    'vac.openChatFromEditorTab': () => chat.openEditorChat(),
 
     'vac.cancelTurn': async () => {
       const id = sessions.getActiveSessionId();

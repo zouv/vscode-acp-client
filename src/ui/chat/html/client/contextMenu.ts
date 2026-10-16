@@ -136,6 +136,16 @@ export const contextMenuClient = `
       return [
         { label: 'Archive', run: function () { NS.bridge.post({ type: 'archiveSession', sessionId: historyId }); } },
         {
+          label: 'Delete',
+          // 与行上那颗悬停按钮同一个出口（真删除；宿主会先弹二次确认）。
+          run: function () {
+            NS.bridge.post({
+              type: 'deleteSession', sessionId: historyId,
+              agentName: historyRow.getAttribute('data-open-agent') || ''
+            });
+          }
+        },
+        {
           label: 'Rename',
           run: function () {
             NS.bridge.post({ type: 'renameSession', sessionId: historyId, currentTitle: historyTitle });

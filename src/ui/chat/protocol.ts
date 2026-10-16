@@ -213,7 +213,7 @@ export type ExtToChat =
   // 客户端据此**就地**更新历史列表（改标题 / 摘掉行），不重发整份 history —— 那会把用户
   // 手选的目录过滤重置回默认（setHistory 用 askedCwd 重派生 filterKey）。广播：两个面
   // 都可能开着这份列表，谁开着谁更新（没开的 applyAction 会按 lastMessage 为空短路）。
-  | { type: 'sessionAction'; action: 'rename' | 'archive'; sessionId: string; title?: string }
+  | { type: 'sessionAction'; action: 'rename' | 'archive' | 'delete'; sessionId: string; title?: string }
   // 草稿页与目录选择的应答。
   // 四条都**定向**发给发起请求的那个面（`post(msg, to)` 会绕开合帧队列），
   // 因为它们是"某个文档正在编辑的东西"，广播会让另一个面也长出同一个草稿。
@@ -351,6 +351,11 @@ export type ChatToExt =
   // 一条路更省心（见 ChatPanelHost 的分支注释）。`currentTitle` 只是给输入框的初值（客户端
   // 行/标签上有它就带上）。归档（历史行的另一个动作）见下行 `archiveSession`。
   | { type: 'archiveSession'; sessionId: string }
+  // [CUSTOM- 真删除一条会话（历史列表行的悬停 Delete / 右键 Delete）：取消/关闭活会话 →
+  // agent 侧 `session/delete` → 清本地缓存。历史行大多**不是**活会话（verifySession 只认 live 的），
+  // 所以与 archiveSession 同区：**必须在 `verifySession` 守卫之前处理**。
+  // `agentName` 来自行上的 `data-open-agent`（列表可能横跨多个 agent）。
+  | { type: 'deleteSession'; sessionId: string; agentName?: string }
   | { type: 'renameSession'; sessionId: string; currentTitle?: string }
   | { type: 'focusSession'; sessionId: string }
   // [CUSTOM- 从某条助手消息处 fork 出新会话（`session/fork` + 适配器的消息级 `_meta`）。
