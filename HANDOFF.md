@@ -16,15 +16,17 @@
 ## 状态快照
 
 - **最近更新**：2026-10-16
-- **整体状态**：✅ 无进行中的开发任务。本轮 = ACP 能力补齐（`session/delete` 真删除 +
+- **整体状态**：✅ 无进行中的开发任务。**v1.3.0 已发布**（GitHub Release 附
+  `vscode-acp-client-1.3.0.vsix`），工作区干净。本轮 = ACP 能力补齐（`session/delete` 真删除 +
   助手消息右键 **Fork from here** + **sub-agent 子会话卡/取消**）+ **编辑区标签栏入口** +
   **历史弹窗每行的 Delete 按钮** + fork 适配器升级到上游 **v0.91.0** +
-  新增 [`docs/acp-protocol.md`](docs/acp-protocol.md)。成果已记入 `CHANGELOG [未发布]`，**尚未发版**。
-- **当前分支（必填）**：`main`。
-- **最后验证状态**（2026-10-16）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（91 项）·
-  `npm test`（真实宿主）✅ **479 项**（原 466 + 本轮新增 13）。fork 仓库
-  （`D:\Git\zgithub\claude-agent-acp`）已 rebase 到 **v0.91.0**（保留自研 `_meta.extraModels`）
-  并推送 origin/main；`build` + `lint` 绿（其单测有 Windows 环境性红，与升级无关）。
+  新增 [`docs/acp-protocol.md`](docs/acp-protocol.md)，已归档到 `CHANGELOG [1.3.0]`。
+- **当前分支（必填）**：`main`，与 `origin/main` 同步。
+- **最后验证状态**（2026-10-16，v1.3.0 发布）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（91 项）·
+  `npm test`（真实宿主）✅ **479 项** · `npm run vsix` ✅ 生成 `release/vscode-acp-client-1.3.0.vsix`
+  （415.07 KB，11 文件）。fork 仓库（`D:\Git\zgithub\claude-agent-acp`）已 rebase 到 **v0.91.0**
+  （保留自研 `_meta.extraModels`）并推送 origin/main；`build` + `lint` 绿
+  （其单测有 Windows 环境性红，与升级无关）。
   ⚠️ 仍未做 `npm run dev:host` 真机实测 —— 见「下一步」第 1 条。
   📌 用户实测报过「Fork from here 点了没反应」= **客户端会话作用域消息用了裸 `NS.bridge.post`
   （不补 sessionId）**，被宿主 `verifySession` 守卫静默丢弃；已改走 `postForSession`
@@ -38,8 +40,7 @@
 - **范围 / 涉及文件**：—
 - **完成定义（Definition of Done）**：—
 
-> 本轮（ACP 能力补齐：`session/delete` / `session/fork` / sub-agent 子会话 + fork 仓库升级到
-> v0.91.0）已完成，成果见 `CHANGELOG [未发布]`。用户已同意**与 subagents 一起提交**。
+> v1.3.0 已发布并归档到 `CHANGELOG [1.3.0]`。剩余唯一未做的验收环节见「下一步」第 1 条。
 
 ---
 
