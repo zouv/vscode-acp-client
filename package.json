@@ -157,7 +157,7 @@
       },
       {
         "command": "vac.forgetSession",
-        "title": "VAC: Forget Session"
+        "title": "VAC: Delete Session"
       },
       {
         "command": "vac.restartAgent",
@@ -284,7 +284,7 @@
         },
         {
           "command": "vac.forgetSession",
-          "when": "view == vac-sessions && viewItem == session-local",
+          "when": "view == vac-sessions && viewItem =~ /^session/",
           "group": "session@2"
         }
       ]

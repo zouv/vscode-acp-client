@@ -5102,6 +5102,26 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     assert.deepStrictEqual(posted, [{ type: 'copy', text }], 'the record正文 goes to the clipboard channel');
   });
 
+  test('an assistant record offers Fork from here; a user record does not', () => {
+    const { NS, posted } = withEntry();
+    NS.transcriptView.append(
+      { id: 'a1', kind: 'assistant', at: 2, text: 'answer', streaming: false }, undefined);
+
+    const assistant = new StubNode('div');
+    assistant.setAttribute('data-entry-id', 'a1');
+    const items = NS.contextMenu.itemsFor(assistant) as Array<{ label: string; run: () => void }>;
+    const fork = items.find(i => i.label === 'Fork from here');
+    assert.ok(fork, `expected Fork from here, got: ${labels(items)}`);
+    fork.run();
+    // The panel only names the record; the host looks up that entry's ACP messageId.
+    assert.deepStrictEqual(posted, [{ type: 'forkFromMessage', entryId: 'a1' }]);
+
+    const user = new StubNode('div');
+    user.setAttribute('data-entry-id', 'u1');
+    const userItems = NS.contextMenu.itemsFor(user) as Array<{ label: string }>;
+    assert.ok(!userItems.some(i => i.label === 'Fork from here'), 'a user record is not a fork point');
+  });
+
   test('the sticky card offers it from its own whitespace (197)', () => {
     const { NS, posted } = withEntry();
     // 卡片的留白：既不在克隆体里，也不带 data-entry-id —— 正是用户右键点中的那一处。
@@ -5631,5 +5651,54 @@ suite('chat client logic: 会话恢复（stub DOM, ）', () => {
     assert.strictEqual(tabs.length, 1, '不该两处并存');
     assert.strictEqual(tabs[0].getAttribute('data-session-id'), 'aaaaaaaa-1');
     assert.strictEqual(tabs[0].getAttribute('data-restore-id'), null);
+  });
+});
+
+// [CUSTOM- sub-agent 子会话卡：身份 + 工作状态 + 取消。子会话自己的输出内联在父会话里，
+// 所以这张卡**不**重复那份输出 —— 它只回答「这是谁 / 在忙什么 / 能不能停它」。
+suite('chat client logic: sub-agent card (stub DOM, )', () => {
+  function card(extra: Record<string, unknown> = {}) {
+    const messages = new StubNode('div');
+    const harness = loadClient({ messages });
+    const NS = harness.NS;
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.transcriptView.init(messages);
+    NS.transcriptView.append({
+      id: 's1', kind: 'subagent', at: 1, subagentSessionId: 'child-1',
+      title: 'story_editor', description: 'edits the story', state: 'running', canCancel: true,
+      ...extra,
+    }, undefined);
+    return { NS, posted, node: NS.transcriptView.node('s1') as StubNode };
+  }
+
+  test('the card names the child, shows its state and offers Cancel', () => {
+    const { node } = card();
+    assert.ok(node.querySelector('.subagent'), 'the card is rendered');
+    assert.strictEqual(node.querySelector('.subagent-title')!.textContent, 'Sub-agent · story_editor');
+    assert.strictEqual(node.querySelector('.subagent-state')!.textContent, 'Running');
+    assert.strictEqual(node.querySelector('.subagent-desc')!.textContent, 'edits the story');
+    assert.strictEqual(node.querySelector('.subagent-cancel')!.hidden, false);
+  });
+
+  test('Cancel asks the host to cancel exactly that child session', () => {
+    const { posted, node } = card();
+    node.querySelector('.subagent-cancel')!.dispatch('click', { preventDefault() {}, stopPropagation() {} });
+    assert.deepStrictEqual(posted, [{ type: 'cancelSubagent', subagentSessionId: 'child-1' }]);
+  });
+
+  test('an idle or non-cancellable child offers no Cancel', () => {
+    assert.strictEqual(card({ state: 'idle' }).node.querySelector('.subagent-cancel')!.hidden, true,
+      'idle 不是终态，但没有在跑的活可停');
+    assert.strictEqual(card({ canCancel: false }).node.querySelector('.subagent-cancel')!.hidden, true,
+      '适配器没声明 cancel 就不给按钮');
+  });
+
+  test('a state patch updates the badge in place', () => {
+    const { NS, node } = card();
+    NS.transcriptView.patch('s1', { state: 'requires_action' });
+    assert.strictEqual(node.querySelector('.subagent-state')!.textContent, 'Needs input');
+    assert.strictEqual(node.querySelector('.subagent-state')!.getAttribute('data-state'), 'requires_action');
+    assert.strictEqual(node.querySelector('.subagent-cancel')!.hidden, false, '需要用户介入时仍可取消');
   });
 });

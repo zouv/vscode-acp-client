@@ -1167,6 +1167,45 @@ export function styles(): string {
   .elic-clear[hidden] { display: none; }
 
   /* --- Permission card () --------------------------- */
+  /* [CUSTOM- sub-agent 子会话卡（ACP draft subagent_update）：身份 + 工作状态 + 取消。
+     子会话**自己的输出内联在父会话的记录里**（宿主把子会话别名回父会话），所以这张卡刻意做得很
+     轻 —— 它不是可折叠容器，不重复那份输出。 */
+  .entry-subagent { align-self: stretch; }
+  .subagent {
+    border: 1px solid var(--vscode-panel-border);
+    border-left-width: 3px;
+    border-radius: 6px;
+    padding: 6px 10px;
+    background: var(--vscode-editor-background);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .subagent-head { display: flex; align-items: center; gap: 8px; }
+  .subagent-title {
+    flex: 1; font-size: 0.9em; color: var(--vscode-descriptionForeground);
+    word-break: break-word;
+  }
+  .subagent-state {
+    flex: none; font-size: 0.78em; padding: 0 6px; border-radius: 3px;
+    border: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-descriptionForeground);
+  }
+  .subagent-state[data-state="running"] {
+    color: var(--vscode-charts-blue, var(--vscode-textLink-foreground)); border-color: currentColor;
+  }
+  .subagent-state[data-state="requires_action"] {
+    color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); border-color: currentColor;
+  }
+  .subagent-cancel {
+    flex: none; padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em;
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    background: var(--vscode-button-secondaryBackground, transparent);
+    border: 1px solid var(--vscode-panel-border);
+  }
+  .subagent-cancel:hover {
+    background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+  }
+  .subagent-desc { font-size: 0.85em; color: var(--vscode-descriptionForeground); word-break: break-word; }
+
   /* 面板内的权限请求卡：替代窗口级 QuickPick。配色故意用 warn 边框而不是普通卡片，
      因为它是**阻塞的**——agent 在等到答复前不会继续。 */
   .entry-permission { align-self: stretch; }

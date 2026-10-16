@@ -156,6 +156,19 @@ export const contextMenuClient = `
       items.push({ label: 'Copy message', run: function () { copy(message); } });
     }
 
+    // [CUSTOM- 从这条记录 fork 出一个新会话。只有**助手**记录可 fork —— 适配器按助手消息
+    // 定位分叉点（_meta.jetbrains.air.fork.messageId），用户/通知记录没有可对应的位置。
+    // 只发 entryId：ACP 的 messageId 由宿主从记录里取（记录序列化因此不必带它）。
+    var forkId = entryIdOf(target);
+    var forkEntry = forkId && NS.transcriptView && NS.transcriptView.entry
+      ? NS.transcriptView.entry(forkId) : null;
+    if (forkEntry && forkEntry.kind === 'assistant') {
+      items.push({
+        label: 'Fork from here',
+        run: function () { NS.bridge.post({ type: 'forkFromMessage', entryId: forkId }); }
+      });
+    }
+
     var code = codeTextOf(target);
     if (code) {
       items.push({ label: 'Copy code', run: function () { copy(code); } });

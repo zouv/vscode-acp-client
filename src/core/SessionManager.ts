@@ -48,6 +48,15 @@ const toBlocks = (prompt: string | ContentBlock[]): ContentBlock[] =>
   typeof prompt === 'string' ? [{ type: 'text', text: prompt }] : prompt;
 
 /**
+ * `_meta` the Claude adapter reads to fork at a specific message (its
+ * `fork-session.ts`). AIR-shaped, but the adapter does not gate it on the
+ * client's identity: any client that sends it gets a message-level fork.
+ */
+function forkPointMeta(messageId: string): Record<string, unknown> {
+  return { jetbrains: { air: { fork: { version: 1, messageId } } } };
+}
+
+/**
  * Orchestrates N agent processes × M ACP sessions.
  *
  * Events: agent-connected, agent-disconnected, agent-error, agent-stderr,
@@ -256,6 +265,32 @@ export class SessionManager extends EventEmitter {
     this.removeSession(sessionId, 'user');
   }
 
+  /**
+   * Permanently deletes a session: cancels any running turn and closes it when it
+   * is live, asks the agent to delete it (`session/delete`, only when advertised),
+   * then drops the local cache entry. The agent call is best-effort — the local
+   * entry always goes, so the tree cannot keep a row the user just deleted.
+   */
+  async deleteSession(agentName: string, sessionId: string): Promise<void> {
+    const session = this.store.get(sessionId);
+    if (session && session.agentName === agentName) {
+      await this.closeSession(agentName, sessionId);
+    }
+
+    const agentId = this.connector.agentIdOf(agentName);
+    const conn = agentId ? this.connectionManager.getConnection(agentId) : undefined;
+    if (agentId && conn && this.getCachedCapabilities(agentName)?.delete) {
+      try {
+        await this.connector.enqueue(agentId, () => conn.connection.deleteSession({ sessionId }));
+        log(`Deleted session ${sessionId} on agent ${agentName}`);
+      } catch (e) {
+        logError(`session/delete failed for ${sessionId} (continuing with local removal)`, e);
+      }
+    }
+
+    this.historyStore?.forget(agentName, sessionId);
+  }
+
   async disconnectAgent(agentName: string): Promise<void> {
     if (!this.connector.isConnected(agentName) && !this.store.hasAgent(agentName)) { return; }
     log(`Disconnecting agent ${agentName}`);
@@ -317,6 +352,22 @@ export class SessionManager extends EventEmitter {
     const outcome = (result as { outcome?: unknown } | null | undefined)?.outcome;
     log(`steerPrompt: outcome=${String(outcome ?? 'steered')}`);
     return outcome === 'promptRequired' ? 'idle' : 'steered';
+  }
+
+  /**
+   * Cancels ONE sub-agent child session (`session/cancel` on the child id), leaving
+   * its parent session and siblings running. A child is not a registered session, so
+   * `cancelTurn` cannot be used: it looks the id up in the store and would no-op.
+   */
+  async cancelSubagent(parentSessionId: string, subagentSessionId: string): Promise<void> {
+    const parent = this.store.get(parentSessionId);
+    if (!parent) { return; }
+    this.permissionBridge?.cancelSession(subagentSessionId);
+    this.elicitationBridge?.cancelSession(subagentSessionId);
+    const conn = this.connectionManager.getConnection(parent.agentId);
+    if (!conn) { return; }
+    log(`Cancelling subagent ${subagentSessionId} of ${parentSessionId}`);
+    await conn.connection.cancel({ sessionId: subagentSessionId });
   }
 
   async cancelTurn(sessionId: string): Promise<void> {
@@ -619,6 +670,40 @@ export class SessionManager extends EventEmitter {
   }
 
   isLoading(sessionId: string): boolean { return this.loadingSessionIds.has(sessionId); }
+
+  /**
+   * Forks a live session into a new independent one (`session/fork`, only when the
+   * agent advertises it). With a `messageId` the agent forks at that message;
+   * without it, at the end of the session. The forked session is then opened
+   * through `openExistingSession` so the panel shows the history it inherited.
+   */
+  async forkSession(
+    agentName: string,
+    sessionId: string,
+    opts: { messageId?: string } = {},
+  ): Promise<SessionInfo> {
+    const source = this.store.get(sessionId);
+    if (!source || source.agentName !== agentName) {
+      throw new Error('Fork needs a live session of the same agent.');
+    }
+    const conn = await this.ensureConnected(agentName, source.cwd);
+    if (!this.getCachedCapabilities(agentName)?.fork) {
+      throw new Error(`Agent "${agentName}" does not support session/fork.`);
+    }
+    const agentId = this.agentIdFor(conn, agentName);
+    const response = await this.connector.enqueue(agentId, () => conn.connection.unstable_forkSession({
+      sessionId,
+      cwd: source.cwd,
+      ...(source.additionalDirectories?.length ? { additionalDirectories: source.additionalDirectories } : {}),
+      ...(opts.messageId ? { _meta: forkPointMeta(opts.messageId) } : {}),
+    }));
+    log(`forkSession: ${sessionId} -> ${response.sessionId}${opts.messageId ? ` @ ${opts.messageId}` : ''}`);
+
+    await this.openExistingSession(agentName, response.sessionId, { cwd: source.cwd, title: source.title });
+    const forked = this.store.get(response.sessionId);
+    if (!forked) { throw new Error('The forked session could not be opened.'); }
+    return forked;
+  }
 
   // --- Queries ---------------------------------------------------------------
 

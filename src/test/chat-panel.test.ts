@@ -4435,3 +4435,176 @@ suite('chat panel: session restore ()', () => {
     assert.deepStrictEqual(manager.opened, ['b'], '只把那一条真加载（其余点开才加载）');
   });
 });
+
+// [CUSTOM- 从记录 fork 会话：面板只报「哪条记录」（entryId），ACP `messageId` 由宿主
+// 从记录里取 —— 所以记录的线格式不必带 messageId，而分叉点仍然精确到那条消息。
+suite('chat panel: fork a session from a record', () => {
+  async function waitFor(check: () => boolean, label: string): Promise<void> {
+    for (let i = 0; i < 100 && !check(); i++) { await new Promise(resolve => setTimeout(resolve, 5)); }
+    assert.ok(check(), label);
+  }
+
+  class ForkingManager extends SessionManager {
+    readonly forks: Array<{ agentName: string; sessionId: string; messageId?: string }> = [];
+    override async forkSession(
+      agentName: string, sessionId: string, opts: { messageId?: string } = {},
+    ): Promise<SessionInfo> {
+      this.forks.push({ agentName, sessionId, ...(opts.messageId ? { messageId: opts.messageId } : {}) });
+      return { sessionId: 'forked' } as unknown as SessionInfo;
+    }
+  }
+
+  function harnessWithForker(): { harness: Harness; manager: ForkingManager } {
+    let manager!: ForkingManager;
+    const harness = makeHarness('s-fork', 'Claude Code', handler => {
+      manager = new ForkingManager(new AgentManager(), new ConnectionManager(handler), handler);
+      return manager;
+    });
+    harness.surface.sent.length = 0;
+    return { harness, manager };
+  }
+
+  /** Feed one assistant chunk; its record id is what the panel would right-click. */
+  function feedAssistant(harness: Harness, messageId?: string): string {
+    harness.handler.handleUpdate({
+      sessionId: harness.sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk', ...(messageId ? { messageId } : {}),
+        content: { type: 'text', text: 'answer' },
+      },
+    } as never);
+    for (let i = harness.surface.sent.length - 1; i >= 0; i--) {
+      const message = harness.surface.sent[i];
+      if (message.type === 'append') {
+        const entry = message.entries.find(e => e.kind === 'assistant');
+        if (entry) { return entry.id; }
+      }
+    }
+    throw new Error('no assistant record was appended');
+  }
+
+  test('the ACP messageId of that record is the fork point', async () => {
+    const { harness, manager } = harnessWithForker();
+    const entryId = feedAssistant(harness, 'm1');
+
+    harness.host.onMessage({ type: 'forkFromMessage', sessionId: 's-fork', entryId });
+    await waitFor(() => manager.forks.length === 1, 'the fork to be requested');
+    assert.deepStrictEqual(manager.forks,
+      [{ agentName: 'Claude Code', sessionId: 's-fork', messageId: 'm1' }],
+      '宿主把记录还原成 ACP 的 messageId 再分叉');
+  });
+
+  test('a record the agent gave no messageId forks at the end of the session', async () => {
+    const { harness, manager } = harnessWithForker();
+    const entryId = feedAssistant(harness);
+
+    harness.host.onMessage({ type: 'forkFromMessage', sessionId: 's-fork', entryId });
+    await waitFor(() => manager.forks.length === 1, 'the fork to be requested');
+    assert.deepStrictEqual(manager.forks,
+      [{ agentName: 'Claude Code', sessionId: 's-fork' }],
+      '没有消息 id 就不带 _meta（整条会话分叉）');
+  });
+});
+
+// [CUSTOM- sub-agent 子会话（ACP draft subagent_update）。适配器把子会话**自己的流量**改路由到
+// 子 sessionId；宿主把它**别名回父会话**照原样渲染（既有行为因此不变），另外多出一张
+// 「身份 + 状态 + 取消」的卡。通知外层的 sessionId 是父，update 里的 sessionId 才是子。
+suite('chat panel: sub-agent child sessions', () => {
+  async function waitFor(check: () => boolean, label: string): Promise<void> {
+    for (let i = 0; i < 100 && !check(); i++) { await new Promise(resolve => setTimeout(resolve, 5)); }
+    assert.ok(check(), label);
+  }
+
+  class CancellingManager extends SessionManager {
+    readonly cancels: Array<{ parent: string; child: string }> = [];
+    override async cancelSubagent(parentSessionId: string, subagentSessionId: string): Promise<void> {
+      this.cancels.push({ parent: parentSessionId, child: subagentSessionId });
+    }
+  }
+
+  interface Card {
+    kind?: string; subagentSessionId?: string; title?: string;
+    description?: string; state?: string; canCancel?: boolean;
+  }
+  interface Append { type?: string; sessionId?: string; entries: Card[] }
+
+  function harnessWithManager(): { harness: Harness; manager: CancellingManager } {
+    let manager!: CancellingManager;
+    const harness = makeHarness('parent', 'Claude Code', handler => {
+      manager = new CancellingManager(new AgentManager(), new ConnectionManager(handler), handler);
+      return manager;
+    });
+    harness.surface.sent.length = 0;
+    return { harness, manager };
+  }
+
+  function appends(harness: Harness): Append[] {
+    return harness.surface.sent.filter(m => m.type === 'append') as unknown as Append[];
+  }
+
+  function cards(harness: Harness): Card[] {
+    return appends(harness).flatMap(m => m.entries).filter(e => e.kind === 'subagent');
+  }
+
+  /** One `subagent_update`, sent on the PARENT (its `sessionId` inside names the child). */
+  function announce(harness: Harness, child: string, extra: Record<string, unknown> = {}): void {
+    harness.handler.handleUpdate({
+      sessionId: 'parent',
+      update: {
+        sessionUpdate: 'subagent_update', sessionId: child,
+        title: 'story_editor', capabilities: { cancel: {} }, state: { state: 'running' },
+        ...extra,
+      },
+    } as never);
+  }
+
+  test('a subagent_update adds a card carrying identity, state and cancel', async () => {
+    const { harness } = harnessWithManager();
+    announce(harness, 'child-1', { description: 'edits the story' });
+    // `post` coalesces appends through the outbox, so the card lands on a later turn.
+    await waitFor(() => cards(harness).length === 1, 'the sub-agent card to be appended');
+    const card = cards(harness)[0];
+    assert.strictEqual(card.subagentSessionId, 'child-1');
+    assert.strictEqual(card.title, 'story_editor');
+    assert.strictEqual(card.description, 'edits the story');
+    assert.strictEqual(card.state, 'running');
+    assert.strictEqual(card.canCancel, true);
+  });
+
+  test("the child's own output renders in the PARENT (aliased), not dropped", async () => {
+    const { harness } = harnessWithManager();
+    announce(harness, 'child-1');
+    harness.handler.handleUpdate({
+      sessionId: 'child-1',
+      update: { sessionUpdate: 'agent_message_chunk', messageId: 'm1', content: { type: 'text', text: 'child says hi' } },
+    } as never);
+
+    await waitFor(() => appends(harness).flatMap(m => m.entries).some(e => e.kind === 'assistant'),
+      "the child's text to land in the parent transcript");
+    assert.ok(appends(harness).every(m => m.sessionId === 'parent'),
+      'every append names the parent session, never the child');
+  });
+
+  test('a later subagent_update patches the card in place, not a second card', async () => {
+    const { harness } = harnessWithManager();
+    announce(harness, 'child-1');
+    await waitFor(() => cards(harness).length === 1, 'the first card');
+    announce(harness, 'child-1', { state: { state: 'requires_action' } });
+
+    await waitFor(() => harness.surface.sent.filter(m => m.type === 'revise').length === 1,
+      'the follow-up to be a patch');
+    const revises = harness.surface.sent.filter(m => m.type === 'revise') as unknown as
+      Array<{ patch?: { state?: string } }>;
+    assert.strictEqual(revises[0].patch!.state, 'requires_action');
+    assert.strictEqual(cards(harness).length, 1, 'still exactly one card');
+  });
+
+  test('cancelSubagent cancels exactly that child session', async () => {
+    const { harness, manager } = harnessWithManager();
+    announce(harness, 'child-1');
+    harness.host.onMessage({ type: 'cancelSubagent', sessionId: 'parent', subagentSessionId: 'child-1' });
+    await waitFor(() => manager.cancels.length === 1, 'the child cancel to be requested');
+    assert.deepStrictEqual(manager.cancels, [{ parent: 'parent', child: 'child-1' }],
+      '取消打在子会话 id 上，父会话与兄弟子会话不受影响');
+  });
+});

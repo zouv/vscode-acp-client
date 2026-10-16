@@ -8,7 +8,7 @@ import type { ContentBlockView } from '../content/contentBlocks';
 
 /** Why a plan/tool entry exists in the transcript. */
 // `elicitation`：ACP 表单请求（AskUserQuestion 等）。
-export type TranscriptEntryKind = 'user' | 'assistant' | 'thought' | 'tool' | 'plan' | 'content' | 'notice' | 'permission' | 'elicitation';
+export type TranscriptEntryKind = 'user' | 'assistant' | 'thought' | 'tool' | 'plan' | 'content' | 'notice' | 'permission' | 'elicitation' | 'subagent';
 
 interface EntryBase {
   /** Stable id, unique within a session. Assigned by TranscriptStore. */
@@ -145,6 +145,27 @@ export interface ElicitationEntry extends EntryBase {
   elicitation: import('../../../handlers/ElicitationBridge').ElicitationState;
 }
 
+/**
+ * [CUSTOM- A sub-agent child session (ACP draft `subagent_update`, agent-client-protocol
+ * #1992) surfaced as a card in its PARENT's transcript. The child's own output renders
+ * inline in the parent — the host aliases the child session back to its parent so the
+ * existing rendering (and the sub-agent grouping it already does) keeps working — so the
+ * card carries identity, work state and the cancel control only.
+ */
+export interface SubagentEntry extends EntryBase {
+  kind: 'subagent';
+  /** The child session id (`SubagentUpdate.sessionId`). */
+  subagentSessionId: string;
+  /** The parent's display title for this child. */
+  title?: string;
+  /** The child's role / purpose. */
+  description?: string;
+  /** Work state (`SubagentUpdate.state`). `idle` is NOT terminal — the child is reusable. */
+  state: 'running' | 'idle' | 'requires_action' | 'unknown';
+  /** Whether the agent allows cancelling this child (`SubagentUpdate.capabilities.cancel`). */
+  canCancel: boolean;
+}
+
 export type TranscriptEntry =
   | UserEntry
   | AssistantEntry
@@ -154,7 +175,8 @@ export type TranscriptEntry =
   | ContentEntry
   | NoticeEntry
   | PermissionEntry
-  | ElicitationEntry;
+  | ElicitationEntry
+  | SubagentEntry;
 
 /** Full snapshot of one session's transcript, sent on focus/boot. */
 export interface TranscriptSnapshot {
@@ -187,6 +209,11 @@ export interface EntryPatch {
   permission?: PermissionState;
   // [CUSTOM- 表单卡的补丁键（键名必须与记录字段名逐字相同，见 PATCH_KEYS 的教训）。
   elicitation?: import('../../../handlers/ElicitationBridge').ElicitationState;
+  // [CUSTOM- 子会话卡的补丁键（键名与 `SubagentEntry` 的字段名逐字相同）。
+  title?: string;
+  description?: string;
+  state?: SubagentEntry['state'];
+  canCancel?: boolean;
 }
 
 /**
@@ -194,8 +221,10 @@ export interface EntryPatch {
  * （Claude Code：输入是 `rawInput.subagent_type`，更早的载荷是
  * `_meta.claudeCode.toolResponse`）。
  *
- * 为什么只能从厂商专属键读：ACP **没有**子 agent 概念（239 个 schema 定义里
- * `parent|subagent|delegate|spawn` 零命中），也就没有"这段是谁说的"字段。
+ * 为什么只能从厂商专属键读：ACP 的**稳定** schema 里没有子 agent 概念，
+ * 也就没有"这段是谁说的"字段。（SDK 1.8.0 起加了一个 **draft** 的
+ * `subagent_update` 子会话说（agent-client-protocol #1992），我们已接它来做卡片；
+ * 但这条"这条**工具调用**属于哪个子 agent"的身份，draft 也没提供，仍只能读厂商键。）
  *
  * 只读已知形状，别的键一律不猜（与 `extractToolName` 同一条规矩）。
  */

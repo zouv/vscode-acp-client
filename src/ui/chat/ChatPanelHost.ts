@@ -61,6 +61,7 @@ import { ToolInvocationStore } from './transcript/ToolInvocationStore';
 import { toToolCallView } from './content/toolCalls';
 import { toContentView, hasVisibleContent } from './content/contentBlocks';
 import type { ContentBlockView } from './content/contentBlocks';
+import type { SubagentEntry } from './transcript/types';
 import { resolveNestingStrategy } from './nesting/NestingStrategy';
 import {
   choiceChanges,
@@ -196,6 +197,14 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   private readonly usage: Map<string, SessionMeta['usage']> = new Map();
   /** `${sessionId}::${toolCallId}` → transcript entry id. */
   private readonly toolEntryIds: Map<string, string> = new Map();
+  /**
+   * [CUSTOM- sub-agent 子会话 id → 它的父会话 id（ACP draft `subagent_update`）。
+   *
+   * 声明 `clientCapabilities.subagents` 后，适配器把子会话自己的流量**改路由到子 sessionId**。
+   * 子会话不是注册过的会话，所以这里把它**别名回父会话**再走渲染原路 —— 现有行为（含已有的
+   * 子 agent 分组）因此原样生效，卡片只承担身份、状态与取消。
+   */
+  private readonly subagentParents: Map<string, string> = new Map();
   /** sessionId → entry id of the single plan card (ACP replaces the list). */
   private readonly planEntryIds: Map<string, string> = new Map();
   // [CUSTOM- Sessions that produced output while they were NOT the
@@ -879,6 +888,14 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           .catch(e => this.reportError(sessionId, e));
         return;
       }
+      // [CUSTOM- 取消一个 sub-agent 子会话（子会话 id 走 `subagentSessionId`，不是 sessionId）。
+      case 'cancelSubagent': {
+        const subagentSessionId = (msg as { subagentSessionId?: string }).subagentSessionId ?? '';
+        if (!subagentSessionId) { return; }
+        void this.sessionManager.cancelSubagent(sessionId, subagentSessionId)
+          .catch(e => this.reportError(sessionId, e));
+        return;
+      }
       case 'focusSession':
         // [CUSTOM- `force` — an explicit request from the client must
         // ALWAYS be answered.
@@ -893,6 +910,21 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // newConversation / loadSession / resume.)
         this.sessionManager.focusSession(sessionId, { force: true });
         return;
+      // [CUSTOM- Fork the session at the assistant message the user right-clicked.
+      // The panel only sends an entry id; the ACP `messageId` is looked up here so the
+      // record wire format does not have to carry it.
+      case 'forkFromMessage': {
+        const agentName = sessionOf(this.sessionManager, sessionId)?.agentName;
+        const entryId = (msg as { entryId?: string }).entryId ?? '';
+        const entry = entryId ? this.transcripts.getEntry(sessionId, entryId) : undefined;
+        if (!agentName || !entry) { return; }
+        const messageId = entry.kind === 'assistant' ? entry.messageId : undefined;
+        log(`${LOG_PREFIX}: fork session ${sessionId} at entry ${entryId} (messageId=${messageId ?? 'end'})`);
+        void this.sessionManager.forkSession(agentName, sessionId, messageId ? { messageId } : {})
+          .then(() => this.refreshSessions())
+          .catch(e => this.reportError(sessionId, e));
+        return;
+      }
       case 'detachFile': {
         const path = (msg as { path?: string }).path;
         // [CUSTOM- 带区间 = 只摘那一段（同一个文件的多段引用各自能删）；不带 = 整条路径
@@ -1286,6 +1318,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // --- Session update → transcript ----------------------------------------
 
   private onSessionUpdate(update: SessionNotification): void {
+    // [CUSTOM- 子会话别名（见 subagentParents 的注释）：子会话自己的流量并回父会话再渲染。
+    const parentOfChild = this.subagentParents.get(update.sessionId);
+    if (parentOfChild) { update = { ...update, sessionId: parentOfChild }; }
     const sessionId = update.sessionId;
     const data = update.update as any;
     const session = sessionOf(this.sessionManager, sessionId);
@@ -1427,6 +1462,44 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         if (entry) {
           this.stampReplayTime(sessionId, entry, data.messageId);
           this.post({ type: 'append', sessionId, entries: [entry] });
+        }
+        return;
+      }
+
+      // [CUSTOM- sub-agent 子会话的通知（ACP draft，agent-client-protocol #1992）。
+      // 通知**外层**的 sessionId 是父会话（已由上面的别名与守卫处理），update **里面**的
+      // `sessionId` 才是子会话 —— 两者不要看错。
+      case 'subagent_update': {
+        const childId = typeof data.sessionId === 'string' ? data.sessionId : '';
+        if (!childId) { return; }
+        const caps = data.capabilities as { cancel?: unknown } | null | undefined;
+        const rawState = data.state as { state?: unknown } | null | undefined;
+        const state: SubagentEntry['state'] =
+          rawState && typeof rawState.state === 'string'
+            ? (rawState.state as SubagentEntry['state'])
+            : 'unknown';
+        // Remember the parent BEFORE the card exists: the child's own output can arrive first.
+        this.subagentParents.set(childId, sessionId);
+        const result = this.transcripts.upsertSubagent(sessionId, {
+          subagentSessionId: childId,
+          title: typeof data.title === 'string' ? data.title : undefined,
+          description: typeof data.description === 'string' ? data.description : undefined,
+          state,
+          canCancel: !!caps && typeof caps === 'object' && caps.cancel !== undefined && caps.cancel !== null,
+        });
+        if (!result) { return; }
+        if (result.created) {
+          this.post({ type: 'append', sessionId, entries: [result.entry] });
+        } else {
+          this.post({
+            type: 'revise', sessionId, entryId: result.entry.id,
+            patch: {
+              title: result.entry.title,
+              description: result.entry.description,
+              state: result.entry.state,
+              canCancel: result.entry.canCancel,
+            },
+          });
         }
         return;
       }

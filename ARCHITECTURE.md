@@ -145,6 +145,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 打开历史会话 | `openExistingSession()` | **唯一决策点**：live → focus，否则 load，再否则 resume |
 | 重放历史 / 轻量恢复 | `loadSession()` / `resumeSession()` | load 走 `session-load-start/end`，面板显示覆盖层 |
 | 关闭单个会话 / 断开整个 agent | `closeSession()` / `disconnectAgent()` | 关会话前会先 `cancelTurn` |
+| 删除会话（真删） | `deleteSession()` | 先 cancel/close 活会话 → `session/delete`（能力 `delete`）→ 清本地缓存 |
+| 分叉会话 | `forkSession()` | `session/fork`（能力 `fork`）；带 `messageId` 时在 `_meta.jetbrains.air.fork` 指定分叉点；建好后走 `openExistingSession` 重放 |
 | 认证失败（-32000） | `auth.ts`：`isAuthRequiredError` / `runAuthFlow` | 新建会话与 listSessions 都会重试一次 |
 | 焦点切换 | `focusSession()` | `active-session-changed` 的唯一出口 |
 | 每会话工作目录 | `resolveDefaultCwd()` / `sessionCwd()` / `cwd.ts:pickDefaultCwd` | 会话级属性，与进程 cwd 无关 |
@@ -170,6 +172,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 记录区渲染 | `transcript/TranscriptStore.ts`、`content/*`、`html/client/transcriptView.ts` | 布局类问题见 §5 |
 | 权限卡片 / 抽屉 | `html/client/permissionView.ts`、`permissionDrawer.ts` | 与 `PermissionBridge` 配对 |
 | 表单卡片 | `html/client/elicitationView.ts` | 与 `ElicitationBridge` 配对 |
+| 从记录 fork 会话 | `ChatPanelHost` 的 `forkFromMessage` 分支 + `html/client/contextMenu.ts` | 面板只报 entryId，宿主查该条 ACP `messageId` → `SessionManager.forkSession` |
+| sub-agent 子会话卡 | `html/client/transcriptView.ts` 的 `buildSubagent` / `patchSubagent`（记录类型 `subagent`） | 状态/标题走 `revise` 就地补丁；Cancel 发 `cancelSubagent` |
 | webview 样式 | `html/styles.ts` | 按 §5 的锚点搜 |
 
 ### 2.6 能力实现（`src/handlers/`）
@@ -182,6 +186,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 权限自动批准 | `PermissionHandler.requestPermission` | 读 `vac.autoApprovePermissions` |
 | 权限面板/弹框分流 | `PermissionBridge.request` / `canPresent` | presenter 只对「屏幕上的会话」返回 true |
 | 表单字段扁平化 | `ElicitationBridge.fieldsOf` / `optionOf` | JSON Schema → 五种字段；选项的 description 与 preview 都保留 |
+| sub-agent 子会话 / 取消子会话 | `ChatPanelHost.onSessionUpdate` 的 `subagent_update` 分支 + `subagentParents`（别名回父会话）、`SessionManager.cancelSubagent` | draft 能力；卡片由 `TranscriptStore.upsertSubagent` 建 |
 
 ### 2.7 侧边栏树（`src/ui/SessionTreeProvider.ts`）
 

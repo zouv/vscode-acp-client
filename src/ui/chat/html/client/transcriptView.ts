@@ -129,7 +129,7 @@ export const transcriptViewClient = `
   // （patch() 不认识的那个键只是被拷进对象，没有任何报错）。
   // 改这里之前先对照 src/ui/chat/transcript/types.ts 的 EntryPatch。
   // [CUSTOM- 'elicitation' 与记录字段名逐字相同（表单卡的 patch）。
-  var PATCH_KEYS = ['text', 'html', 'streaming', 'elapsedMs', 'entries', 'blocks', 'permission', 'elicitation'];
+  var PATCH_KEYS = ['text', 'html', 'streaming', 'elapsedMs', 'entries', 'blocks', 'permission', 'elicitation', 'title', 'description', 'state', 'canCancel'];
 
   function init(container) {
     messagesEl = container;
@@ -764,6 +764,68 @@ export const transcriptViewClient = `
     return wrap;
   }
 
+  // [CUSTOM- sub-agent 子会话卡（ACP draft subagent_update）。子会话**自己的输出内联在父
+  // 会话里**（宿主把子会话别名回父会话再渲染），所以卡片只承担身份、工作状态与取消 —— 不做
+  // 折叠、也不重复那份输出。
+  var SUBAGENT_STATE_LABEL = {
+    running: 'Running',
+    idle: 'Idle',
+    requires_action: 'Needs input'
+  };
+
+  function subagentTitle(entry) {
+    return 'Sub-agent · ' + (entry.title || 'unnamed');
+  }
+
+  /** The card is cancellable only while it is actually working and the agent allows it. */
+  function subagentCancelHidden(entry) {
+    return !entry.canCancel || entry.state === 'idle' || entry.state === 'unknown';
+  }
+
+  function subagentCancelBtn(entry) {
+    var btn = NS.dom.el('button', 'subagent-cancel', 'Cancel');
+    btn.type = 'button';
+    btn.hidden = subagentCancelHidden(entry);
+    btn.addEventListener('click', function (event) {
+      // The card sits in the transcript: without this the click would also hit the record.
+      event.preventDefault();
+      event.stopPropagation();
+      NS.bridge.post({ type: 'cancelSubagent', subagentSessionId: entry.subagentSessionId });
+    });
+    return btn;
+  }
+
+  function buildSubagent(entry) {
+    var card = NS.dom.el('div', 'subagent');
+    var head = NS.dom.el('div', 'subagent-head');
+    head.appendChild(NS.dom.el('span', 'subagent-title', subagentTitle(entry)));
+    var state = NS.dom.el('span', 'subagent-state',
+      SUBAGENT_STATE_LABEL[entry.state] || entry.state || 'Unknown');
+    state.setAttribute('data-state', entry.state || 'unknown');
+    head.appendChild(state);
+    head.appendChild(subagentCancelBtn(entry));
+    card.appendChild(head);
+    if (entry.description) { card.appendChild(NS.dom.el('div', 'subagent-desc', entry.description)); }
+    return card;
+  }
+
+  function patchSubagent(node, entry) {
+    var card = node.querySelector('.subagent');
+    if (!card) { return; }
+    var title = card.querySelector('.subagent-title');
+    if (title) { title.textContent = subagentTitle(entry); }
+    var state = card.querySelector('.subagent-state');
+    if (state) {
+      state.textContent = SUBAGENT_STATE_LABEL[entry.state] || entry.state || 'Unknown';
+      state.setAttribute('data-state', entry.state || 'unknown');
+    }
+    var cancel = card.querySelector('.subagent-cancel');
+    if (cancel) { cancel.hidden = subagentCancelHidden(entry); }
+    var desc = card.querySelector('.subagent-desc');
+    if (entry.description && desc) { desc.textContent = entry.description; }
+    else if (entry.description) { card.appendChild(NS.dom.el('div', 'subagent-desc', entry.description)); }
+  }
+
   function build(entry) {
     if (entry.kind === 'user') {
       var userEntry = NS.dom.el('div', 'entry entry-user');
@@ -794,6 +856,11 @@ export const transcriptViewClient = `
     }
     if (entry.kind === 'notice') {
       return NS.dom.el('div', 'entry entry-notice ' + entry.level, entry.text);
+    }
+    if (entry.kind === 'subagent') {
+      var subWrap = NS.dom.el('div', 'entry entry-subagent');
+      subWrap.appendChild(buildSubagent(entry));
+      return subWrap;
     }
     if (entry.kind === 'tool') {
       var placeholder = NS.dom.el('div', 'tool');
@@ -1224,6 +1291,10 @@ export const transcriptViewClient = `
       // mid-click. The data-kind attribute is already on the wrapper.
       var card = node.querySelector('.perm');
       if (card) { NS.permissionView.applyState(card, entry.permission || {}); }
+    } else if (entry.kind === 'subagent') {
+      // [CUSTOM- In place, for the same reason as the permission card: the Cancel
+      // button must not move under the pointer when a state patch arrives.
+      patchSubagent(node, entry);
     }
     NS.scroll.follow();
   }
