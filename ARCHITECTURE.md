@@ -105,7 +105,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/test/*.test.ts` | 真实 Extension Host 的 mocha 测试（**用 Tab 缩进**） | 改扩展 id / 命令前缀 / 面板协议 |
 | `src/**/*.spec.ts` | vitest 纯逻辑测试（2 空格，禁 import `vscode`） | 改对应纯逻辑模块 |
 | `resources/icon.svg` | 活动栏容器图标（24×24 单色 `currentColor`，`viewsContainers.activitybar`） | 改侧边栏图标外观 |
-| `resources/icon-editor-{light,dark}.svg` | 编辑区标签栏按钮的图标（同一份几何，**写死颜色**：light 主题配深色、dark 配浅色） | 改那颗粒按钮外观（同经 `make-icon.mjs` 生成，别手改） |
+| `resources/icon-editor-color.svg` | 编辑区标签栏按钮的图标（全彩徽标：蓝→紫渐变底 + 白色标记，与 `icon.png` 同一几何/配色） | 改那颗按钮外观（同经 `make-icon.mjs` 生成，别手改） |
 | `resources/icon.png` | 128×128 插件徽标（`package.json` 的 `icon`）＋编辑区标签页图标（`ChatEditorPanel` 的 `iconPath`） | 改徽标外观 |
 | `scripts/make-icon.mjs` | **图标的唯一几何源**：一份几何同时产出 `icon.svg` 与 `icon.png`（SDF 光栅化 + zlib 手写 PNG，零依赖）；`npm run icon`，`--preview` 另出多尺寸预览图到系统临时目录 | 改图标外观 |
 
@@ -175,7 +175,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 表单卡片 | `html/client/elicitationView.ts` | 与 `ElicitationBridge` 配对 |
 | 从记录 fork 会话 | `ChatPanelHost` 的 `forkFromMessage` 分支 + `html/client/contextMenu.ts` | 面板只报 entryId，宿主查该条 ACP `messageId` → `SessionManager.forkSession` |
 | sub-agent 子会话卡 | `html/client/transcriptView.ts` 的 `buildSubagent` / `patchSubagent`（记录类型 `subagent`） | 状态/标题走 `revise` 就地补丁；Cancel 发 `cancelSubagent` |
-| 编辑区标签栏右侧入口 | `package.json(menus.editor/title)` → `vac.openChatFromEditorTab`（动作同 `vac.openChatInEditor`） | 图标用 `resources/icon-editor-{light,dark}.svg` —— 路径图标按**图片**渲染，`currentColor` 在那儿无效，所以必须给写死颜色的两份；Chat 面板已在编辑区激活时隐藏 |
+| 编辑区标签栏右侧入口 | `package.json(menus.editor/title)` → `vac.openChatFromEditorTab`（动作同 `vac.openChatInEditor`） | 图标用 `resources/icon-editor-color.svg`（全彩徽标）—— 路径图标按**图片**渲染，颜色按 SVG 自己的来；Chat 面板已在编辑区激活时隐藏 |
 | 历史列表行的悬停动作 | `html/client/sessionMenu.ts` 的 `buildRowActions` + `applyAction` | Archive 只写本地标签；**Delete 走 `deleteSession`（真删除，宿主先弹确认）**，两条同走 `sessionAction` 回执对账 |
 | webview 样式 | `html/styles.ts` | 按 §5 的锚点搜 |
 

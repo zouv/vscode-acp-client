@@ -1281,6 +1281,24 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     assert.deepStrictEqual(orderOf(els), ['s1', 's2'], 'the × is not a handle');
     assert.strictEqual(posted.filter(m => m.type === 'setUiPref').length, 0, 'and nothing was saved');
   });
+
+  // [CUSTOM- 用户报"切换 tab 有个短暂延时才会切过去"。高亮/地址栏先本地切（宿主回包前
+  // 的那次绘制就生效），记录区随后重建；请求照发。宿主回包再走一次 setFocus（同值幂等）。
+  test('clicking a tab switches the highlight before the host answers', () => {
+    const { NS, els } = tabStrip();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.tabs.setSessions([summary('s1'), { ...summary('s2'), cwd: '/work/two' }]);
+    NS.tabs.setFocus(summary('s1'));
+
+    dispatchClick(els.tabs.querySelectorAll('.tab')[1], {});
+    assert.deepStrictEqual(posted, [{ type: 'focusSession', sessionId: 's2' }],
+      'the host is still asked to focus');
+
+    const tabs = els.tabs.querySelectorAll('.tab');
+    assert.ok(tabs[1].className.includes('active'), 'but the strip already reads as switched');
+    assert.strictEqual(els.cwdBtn.textContent, '/work/two', 'and the address bar follows at once');
+  });
 });
 
 suite('chat client logic: Times 开关按会话记忆 (stub DOM, )', () => {
@@ -1322,6 +1340,16 @@ suite('chat client logic: Times 开关按会话记忆 (stub DOM, )', () => {
     assert.deepStrictEqual(setUiPrefPosts(posted), [{
       type: 'setUiPref', timesBySession: { A: true }, timesDefault: true,
     }], 'one write, both halves of the state');
+  });
+
+  test('地址栏用时钟图标（不是文字 Times），tooltip 说明它做什么', () => {
+    const { NS, els } = timesWith();
+    NS.times.init();
+    assert.ok(els.timeToggle.querySelector('.time-icon'), 'the clock icon is mounted at init');
+    assert.strictEqual(els.timeToggle.textContent, '', 'the word Times is gone');
+    assert.ok(String(els.timeToggle.title).includes('wall-clock time'),
+      'hover explains the meaning (it is the only label left)');
+    assert.strictEqual(els.timeToggle.getAttribute('aria-pressed'), 'false', 'and the state is announced');
   });
 
   test('换会话看的是那个会话自己的记录；没有记录就跟随默认值', () => {
@@ -1826,6 +1854,24 @@ suite('chat client logic: tool-card markdown round trip (stub DOM)', () => {
     assert.strictEqual(NS.toolCallView.pendingMarkdownItems().length, 0, 'no new request');
     assert.strictEqual(rebuilt.querySelector('.tool-text').textContent, '<p>same</p>');
     assert.ok(applied.length >= 2, 'the cached HTML was applied to the rebuilt node');
+  });
+
+  // [CUSTOM- 回放时整份 pending 每帧重发的另一半：工具项此前也会跟着重复。
+  // 同一段文本（同一个指纹 key）在回填到达之前只该问一次；回填到了才允许重新排队
+  // （那时它已在 mdCache 里，正常路径根本不会再问）。
+  test('the same tool text is only requested once while its reply is in flight', () => {
+    const { NS } = loadClient();
+    recordRendering(NS);
+    NS.toolCallView.render(toolWithText('same output'), 'e1');
+    const first = NS.toolCallView.pendingMarkdownItems('s1') as Array<{ key: string }>;
+    assert.strictEqual(first.length, 1);
+    assert.strictEqual(NS.toolCallView.pendingMarkdownItems('s1').length, 0,
+      'the same text must not be re-sent every frame');
+    // A different session identity re-arms it (an item asked with null is dropped by the host).
+    assert.strictEqual(NS.toolCallView.pendingMarkdownItems('s2').length, 1);
+    // The reply closes the in-flight entry.
+    NS.toolCallView.applyMarkdown(first[0].key, '<p>x</p>');
+    assert.strictEqual(NS.toolCallView.pendingMarkdownItems('s2').length, 0);
   });
 });
 
@@ -2845,10 +2891,11 @@ suite('chat client logic: image chip and pinned question (stub DOM)', () => {
     NS: Record<string, any>; messages: StubNode; host: StubNode; nodes: Record<string, StubNode>;
     jumps: Array<{ node: StubNode | null; clearance?: number }>;
     docListeners: Record<string, Array<(event: any) => void>>;
+    win: Record<string, any>;
     scrollTo: (top: number) => void;
   } {
     const { messages, host } = pinnedNodes();
-    const { NS, jumps, docListeners } = loadClient({ messages, stickyUser: host }, { syncFrames: true });
+    const { NS, jumps, docListeners, win } = loadClient({ messages, stickyUser: host }, { syncFrames: true });
     NS.transcriptView.init(messages);
     for (const q of questions) {
       NS.transcriptView.append({ id: q.id, kind: 'user', at: 1, text: q.text || ('question ' + q.id) }, undefined);
@@ -2867,7 +2914,7 @@ suite('chat client logic: image chip and pinned question (stub DOM)', () => {
       nodes[q.id] = node;
     });
     const scrollTo = (top: number): void => { messages.scrollTop = top; messages.dispatch('scroll', {}); };
-    return { NS, messages, host, nodes, jumps, docListeners, scrollTo };
+    return { NS, messages, host, nodes, jumps, docListeners, win, scrollTo };
   }
 
   /** 两条提问，隔着一段助手回答（u1 在 8..48，u2 在 1000..1040）。 */
@@ -3123,6 +3170,22 @@ suite('chat client logic: image chip and pinned question (stub DOM)', () => {
     assert.strictEqual(jumps[0].clearance, TOP_GAP + STACK_SEAM,
       'the jump lands just PAST the handoff line, so the real message keeps the floor');
     assert.ok(jumps[0].clearance! > TOP_GAP, 'that is the whole point: outside the handoff window');
+  });
+
+  // [CUSTOM- 用户报："鼠标点击后松开就会触发定位，导致没法在悬浮状态下框选复制里面的一段文本"。
+  // 拖选文本松手时浏览器仍会派发 click —— 手里已有选区就必须放过，否则刚选好的内容
+  // 立刻被跳转/滚动带走。
+  test('a click that ends a text selection does not jump', () => {
+    const { host, scrollTo, jumps, docListeners, win } = stickySetup([{ id: 'u1', top: 8, height: 40 }]);
+    scrollTo(100);
+
+    win.getSelection = () => ({ toString: () => 'a selected phrase' });
+    dispatchClick(cardOf(host, 'u1') as StubNode, docListeners);
+    assert.strictEqual(jumps.length, 0, 'dragging to select must not navigate away');
+
+    win.getSelection = () => null;
+    dispatchClick(cardOf(host, 'u1') as StubNode, docListeners);
+    assert.strictEqual(jumps.length, 1, 'a plain click still hands the question back');
   });
 
   test('the cards mirror the list rendering toggles without losing their entry animation', () => {
@@ -4405,6 +4468,63 @@ suite('chat client logic: markdown asks for itself (stub DOM, )', () => {
     h.NS.transcriptView.patch('a9', { streaming: false });
     assert.ok(h.asked() > 0, 'finalize 必须把请求补出来，否则它永远停在原文');
     assert.strictEqual(h.NS.transcriptView.pendingMarkdown().length, 1);
+  });
+
+  // [CUSTOM- 回放时"最后一条不渲染"的直接推手：pending 没清空之前，每一帧都会
+  // 把整份列表再发一次（真机日志 3 秒 200 次、31→391 条）。同一段文本只该在飞一次；
+  // 文本变了或回填到了才允许再问。
+  test('the same text is only requested once while its reply is in flight', () => {
+    const h = withRequestLog();
+    // 回填落地会走 sanitize（真 webview 里是 DOMParser）；测试只关心记账。
+    h.NS.dom.setSanitizedHtml = (node: any, html: string) => { node.textContent = html; };
+    h.NS.transcriptView.append(
+      { id: 'a1', kind: 'assistant', at: Date.now(), text: '**x**' }, undefined);
+    assert.strictEqual(h.NS.transcriptView.pendingMarkdown().length, 1, '第一次要问');
+    assert.strictEqual(h.NS.transcriptView.pendingMarkdown().length, 0,
+      '同一段文本在飞时不得重发（否则会把批尾那条一直往后挤）');
+
+    // 回填到了 ⇒ 那次在飞结束；即便文本（假设）没变，未来的定稿也不会重复问。
+    h.NS.transcriptView.patch('a1', { html: '<p>x</p>' });
+    h.NS.transcriptView.patch('a1', { streaming: false });
+    assert.strictEqual(h.NS.transcriptView.pendingMarkdown().length, 0,
+      '已经有 html 的记录不该在定稿时再问一遍');
+  });
+
+  test('a text change re-arms the request', () => {
+    const h = withRequestLog();
+    h.NS.transcriptView.append(
+      { id: 'a2', kind: 'assistant', at: Date.now(), text: '第一段', streaming: true }, undefined);
+    assert.strictEqual(h.NS.transcriptView.pendingMarkdown().length, 1);
+
+    h.NS.transcriptView.append(
+      { id: 'a2', kind: 'assistant', at: Date.now(), text: '第一段，后面还有', streaming: true }, undefined);
+    h.NS.transcriptView.patch('a2', { streaming: false });
+    const items = h.NS.transcriptView.pendingMarkdown();
+    assert.strictEqual(items.length, 1, '文本变了就必须按**当前**文本再问一次');
+    assert.strictEqual(items[0].text, '第一段，后面还有');
+  });
+
+  // [CUSTOM- 回放里最后一条消息的真实形状：append 时还在流式，正文随后长到最终版，
+  // 最后一次 revise 只是 {streaming:false}（不带 html），然后回填才到。去重不能把
+  // 最后一次请求吞掉，也不能让最终 html 落不进正文。
+  test('the replay shape (append → text grows → finalize → reply) still renders', () => {
+    const h = withRequestLog();
+    h.NS.dom.setSanitizedHtml = (node: any, html: string) => { node.textContent = html; };
+    h.NS.transcriptView.append(
+      { id: 'm1', kind: 'assistant', at: 1, text: 'v1', streaming: true }, undefined);
+    h.NS.transcriptView.patch('m1', { text: 'v2' });
+    h.NS.transcriptView.patch('m1', { streaming: false });
+
+    const items = h.NS.transcriptView.pendingMarkdown();
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].text, 'v2', '定稿必须按最终文本再问一次');
+
+    h.NS.transcriptView.patch('m1', { html: '<p>v2</p>' });
+    const node = h.NS.transcriptView.node('m1') as any;
+    const body = node && node.querySelector ? node.querySelector('.bubble-body') : null;
+    assert.ok(body, 'the record body exists');
+    assert.ok(body.className.includes('md'), `the html must land, got className: ${body.className}`);
+    assert.strictEqual(body.textContent, '<p>v2</p>');
   });
 
   // [CUSTOM- 真机那条路径的**根因**：reset() 会清掉会话身份，而只有快照（hydrate）

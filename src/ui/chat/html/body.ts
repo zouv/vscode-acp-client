@@ -34,8 +34,11 @@ export function body(surface: SurfaceKey = 'view'): string {
     <button id="cwdBtn" class="session-title" title="Working directory" aria-label="Working directory"></button>
     <!-- [CUSTOM- 这里原有一个 #usageBar（上下文进度条 + 数字）。删掉了：
          同一份数据在底部已经有一个更省地方的呈现（圆环），顶部这一条只是重复占位。 -->
+    <!-- [CUSTOM- 文字 'Times' 改成图标（时钟，由 times.ts 在 init 时挂上：
+         icons.ts 是图标的唯一来源）。tooltip 说明它做什么，.off 的透明度表达开关状态。 -->
     <button id="timeToggle" class="nest-toggle"
-            title="Show the wall-clock time of each record">Times</button>
+            title="Show the wall-clock time of each record"
+            aria-label="Show record times"></button>
     <button id="nestToggle" class="nest-toggle" hidden
             title="Group sub-agent tool calls under their parent (links are inferred)">Sub-agents</button>
     <button id="outlineBtn" class="outline-btn" hidden
@@ -60,9 +63,12 @@ export function body(surface: SurfaceKey = 'view'): string {
            [CUSTOM- 它现在能**溢出**历史浮层了：滚动从 #history 下移到了
            .outline-list（见 styles.ts 里 #history 那条）—— 否则这个绝对定位的菜单会被外层
            滚动容器裁成"只剩几行"（历史列表越短越矮）。filter-menu 类用于与历史列表区分观感。 -->
+      <!-- [CUSTOM- 目录筛选在下拉框**左边**，计数（"4 of 264 sessions · …"）紧跟其右。
+           顺序就是 DOM 顺序：'.outline-head' 是 flex，render() 只清空并回填
+           '.outline-head-info'，筛选按钮是它的兄弟、跨重渲染存活。 -->
       <div class="outline-head">
-        <span class="outline-head-info"></span>
         <button id="historyFilter" class="picker-btn filter-chip" hidden aria-expanded="false"></button>
+        <span class="outline-head-info"></span>
         <div id="historyFilterMenu" class="picker-menu down filter-menu"></div>
       </div>
       <div class="outline-list"></div>

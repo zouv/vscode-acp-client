@@ -131,21 +131,33 @@ export function styles(): string {
     border: 1px solid transparent;
     border-bottom: none;
     border-radius: 4px 4px 0 0;
-    background: transparent;
-    color: var(--vscode-foreground);
+    /* 未选中的底：优先用主题自己的 'tab.inactiveBackground'（多数主题给的是一个比面板略深的
+       色块），没有就保持透明 —— 这样在侧边栏与编辑区两种面里都不会凭空造色。 */
+    background: var(--vscode-tab-inactiveBackground, transparent);
+    /* [CUSTOM- 选中/未选中的区分度（用户 2026-10-19 报"不太明显"）：
+       未选中先退到 descriptionForeground + 更低的透明度，选中态再用
+       ① 与面板同色的底、② 顶部 2px 强调线、③ 加粗、④ 满不透明度，
+       四条同向叠加。只靠 0.75 透明度 + 一个几乎同色的背景，在深色主题里几乎看不出来。 */
+    color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground));
     cursor: pointer;
     font-family: inherit;
     font-size: inherit;
     white-space: nowrap;
-    opacity: 0.75;
+    opacity: 0.7;
     /* [CUSTOM- 手工拖拽排序。button（047 为了键盘可达性选的）在 Blink 里
        光靠 draggable 属性有时不起拖 —— 这一行是官方给"可拖元素"的兜底。 */
     -webkit-user-drag: element;
   }
   .tab:hover { background: var(--vscode-list-hoverBackground); opacity: 1; }
   .tab.active {
-    background: var(--vscode-editor-background);
+    /* 与**面板底色**同色（侧边栏 / 编辑区各自匹配，见 .surface-editor 的覆盖），
+       这样它才像是"连着下面内容的当前页"，而不是另一块贴纸。 */
+    background: var(--vscode-sideBar-background);
     border-color: var(--vscode-panel-border);
+    /* 顶部强调线：不占布局（拖拽指示线用的是左右 inset，两者不冲突）。 */
+    box-shadow: inset 0 2px 0 var(--vscode-tab-activeBorderTop, var(--vscode-focusBorder));
+    color: var(--vscode-tab-activeForeground, var(--vscode-foreground));
+    font-weight: 600;
     opacity: 1;
   }
   .tab-label { overflow: hidden; text-overflow: ellipsis; }
@@ -176,8 +188,10 @@ export function styles(): string {
        大字号下不再长大。7px 是两行档的上限（两行的行盒 2×7=14px，方块里还剩 2px 余量）。
        6px 圆角是四档的共同上限：2x2 的角格有字，再圆就削到笔画。 */
     font-size: min(0.54em, 7px); font-weight: 700; line-height: 1; letter-spacing: 0;
-    /* 文字色：固定、不随状态变（否则完成态背景灰+文字深灰就看不清了）。 */
-    color: var(--vscode-editor-background);
+    /* 文字色：固定、不随状态变（否则完成态背景灰+文字深灰就看不清了）。
+       取**面板底色**：字母是状态色底上的"挖空"字形；侧边栏面与编辑区面各自匹配自己的底
+       （见 .surface-editor 的覆盖），否则字色与它周围那片底色会差一档。 */
+    color: var(--vscode-sideBar-background);
     /* 背景色：默认空闲态的灰；下面的状态类**只覆盖这一个属性**。 */
     background-color: var(--vscode-descriptionForeground);
     padding: 0;
@@ -185,6 +199,10 @@ export function styles(): string {
   }
   /* [CUSTOM-228 字母越少给得越大。1~2 个字母走**单行居中**（弹性那套，宽度随字形走）。 */
   .tab-dot[data-len="1"] { font-size: min(0.7em, 9.1px); }
+  /* [CUSTOM- 228/229 为了让放大字号时的字母不顶出方块加了 overflow: hidden —— 而它同时
+     把 130 的"运行中涟漪"（.tab-dot.busy::after，放大到 1.9 倍）裁在了方块里：外圈动画
+     看起来像失效/被屏蔽。忙碌态放开裁剪，涟漪才能画到方块之外；空闲态仍裁剪字母。 */
+  .tab-dot.busy { overflow: visible; }
   .tab-dot[data-len="2"] { font-size: min(0.6em, 7.8px); }
   /* [CUSTOM-229 3/4 个字母改用**紧凑两列网格**：列宽随字形走（auto），整块再在方块里居中。
      227/228 的等分格（width: 50%）把每个字母居中在自己的 8px 格里 —— 4 个字母的墨迹因此被推到
@@ -1362,6 +1380,11 @@ export function styles(): string {
   .surface-editor {
     background: var(--vscode-editor-background);
   }
+  /* [CUSTOM- tab 的"选中态底色"必须跟着**这个面**的底走：侧边栏面用 sideBar、
+     编辑区面用 editor。只写一套 editor-background 时，侧边栏里的选中 tab 会和面板
+     对不上色 —— 那正是"选中/未选中区分不明显"的一半原因。dot 的挖空字色同理。 */
+  .surface-editor .tab.active { background: var(--vscode-editor-background); }
+  .surface-editor .tab-dot { color: var(--vscode-editor-background); }
   /* [CUSTOM- 这里原来还有 .composer。底栏从 140 起是**浮在消息之上的透明层**
      （见 .composer 那段），给它刷 editor-background 就等于把整条底栏变成一块不透明带：输入卡
      两侧的消息、右侧大纲栏的底部全被盖住 —— 用户报的"还是遮挡"就是这个，而且它**只在编辑区
@@ -1520,6 +1543,13 @@ export function styles(): string {
     border: none; font-family: inherit; font-size: 0.82em;
   }
   .nest-toggle.off { opacity: 0.5; }
+  /* [CUSTOM- Times 改成纯图标后是**方块**按钮（文字容量不再存在）：
+     只给 #timeToggle 收窄内边距，旁边的 'Sub-agents' 仍是有文字的胶囊。 */
+  #timeToggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 3px 5px; line-height: 0;
+  }
+  #timeToggle .time-icon, #timeToggle .time-icon svg { display: block; }
   /* [CUSTOM- 纵向收紧：工具卡一轮十几张，body 的上下留白各收 2px 就有几十像素。 */
   .tool-body { padding: 3px 7px 5px; border-top: 1px solid var(--vscode-panel-border); }
   /* [CUSTOM- IN / OUT 段：**左右两栏**（对齐官方插件）——段标在左列、
@@ -1784,6 +1814,9 @@ export function styles(): string {
      借 .filter-chip.on 已有的那套语义（--vscode-focusBorder 表示"当前项"）：**不是画环**
      （环在这个面板里是键盘焦点，062 的教训），只是把边框换成高亮色。 */
   .filter-menu { border-color: var(--vscode-focusBorder); }
+  /* [CUSTOM- 筛选 chip 现在排在头部**最左**（计数在它右边），菜单也要跟着从左展开；
+     '.picker-menu.down' 的 'right: 0' 是 chip 在右端时的锚点。 */
+  #historyFilterMenu.picker-menu.down { left: 0; right: auto; }
   .filter-icon { display: inline-flex; align-items: center; flex: none; opacity: .7; }
   .filter-icon svg { display: block; }
   .filter-caret { flex: none; opacity: .7; }

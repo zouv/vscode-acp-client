@@ -578,6 +578,17 @@ export const stickyUserClient = `
         if (event.stopPropagation) { event.stopPropagation(); }
         return;
       }
+      // [CUSTOM- 拖选文本松手时浏览器**仍会派发 click**（mousedown/mouseup 落点相同）——
+      // 旧逻辑把它当成"点卡片"，于是刚框选好的内容立刻被跳转/滚动带走（用户报："点击后
+      // 松开就触发定位，没法框选复制里面的一段文本"）。手里已经有选区就不跳转：
+      // 复制一段文字是比"跳到原消息"更具体的意图，而且选区会告诉你用户刚做了什么。
+      var selection = window.getSelection ? window.getSelection() : null;
+      if (selection && String(selection.toString() || '').length > 0) {
+        // preventDefault 仍要调：克隆体里的 summary 没有记录侧那套"有选区就拦下"的
+        // click 处理器（cloneNode 不复制监听器），不拦的话松手会顺手把卡片折起来。
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       // [CUSTOM- 跳转目标取自**被点的那张卡**（卡堆里每张各代表一条消息）。
       var card = event.target && event.target.closest ? event.target.closest('.sticky-card') : null;

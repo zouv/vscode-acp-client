@@ -251,6 +251,11 @@ export const toolCallViewClient = `
    */
   var mdCache = {};
   var mdPending = {};
+  // [CUSTOM- key -> 这次请求带的 sessionId（请求已发出、回填未到）。
+  // 与 transcriptView 的同名机制同理：pending 列表每帧被整份重发时，宿主会对同一段
+  // 工具输出重复渲染；大会话回放里几百条 item 每帧重发一次是那条"最后一条不渲染"
+  // 链路上的放大器。key 里带文本指纹 ⇒ 文本一变就是另一个 key，天然允许重问。
+  var mdInFlight = {};
 
   /**
    * [CUSTOM- The round-trip key must identify the TEXT, not just the slot.
@@ -313,7 +318,7 @@ export const toolCallViewClient = `
     NS.dom.schedule(function () {
       markdownFlushPending = false;
       if (!NS.boot || !NS.boot.requestMarkdown) { return; }
-      if (pendingMarkdownItems().length === 0) { return; }
+      if (!hasPendingMarkdown()) { return; }
       NS.boot.requestMarkdown();
     });
   }
@@ -341,14 +346,30 @@ export const toolCallViewClient = `
     var out = [];
     for (var key in mdPending) {
       if (!Object.prototype.hasOwnProperty.call(mdPending, key)) { continue; }
+      // [CUSTOM- 同一段文本只问一次。sessionId 一并比较：带着 null 发出去的那批
+      // 会被宿主丢掉，调用方拿到会话身份后必须允许用新身份重发。
+      // hasOwnProperty 是必需的：没有记录时 mdInFlight[key] 与 sessionId 都可能
+      // 是 undefined，直接比较会把**所有**条目当成"已在飞"而一条都不发。
+      if (Object.prototype.hasOwnProperty.call(mdInFlight, key) && mdInFlight[key] === sessionId) { continue; }
+      mdInFlight[key] = sessionId;
       out.push({ entryId: mdPending[key].entryId, sessionId: sessionId, key: key, text: mdPending[key].text });
     }
     return out;
   }
 
+  /** Cheap "anything still waiting?" that does NOT mark anything in flight. */
+  function hasPendingMarkdown() {
+    for (var key in mdPending) {
+      if (Object.prototype.hasOwnProperty.call(mdPending, key)) { return true; }
+    }
+    return false;
+  }
+
   /** The host rendered one of them: cache it and, if the node still exists, show it. */
   function applyMarkdown(key, html) {
     var item = mdPending[key];
+    // [CUSTOM- 这就是对那条在飞请求的回答（哪怕 pending 已因文本变化而消失）。
+    delete mdInFlight[key];
     // The key names the text, so this HTML belongs to that text and no other. A reply
     // whose request is gone (the text changed meanwhile) has nothing left to attach to
     // — caching it anyway is exactly how the stale-HTML bug would come back.
@@ -362,6 +383,7 @@ export const toolCallViewClient = `
   function resetMarkdown() {
     mdCache = {};
     mdPending = {};
+    mdInFlight = {};
   }
 
   function renderContentItem(item, key, entryId, tool) {

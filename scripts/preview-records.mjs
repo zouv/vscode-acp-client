@@ -339,6 +339,9 @@ function driver() {
       row('s10', '单词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/pavilion' }),
       row('s11', '双词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/story-myriad' }),
     ]);
+    // [CUSTOM- 选一个"运行中"的 tab 作为当前项：截图要能看出选中态（底色 / 顶部强调线 /
+    // 加粗）与未选中的差别 —— 这正是用户报"区分度不明显"的那一档。
+    NS.tabs.setFocus(row('s2', '轮次在跑', { running: true }));
     // [CUSTOM-20261009-226/227，20261013-228/229] 探针：完成态（s1，无状态类）下背景与文字必须是**对比色**，
     // 不能同色撞车 —— 226 修的就是这个（背景被 currentColor 吃成灰、文字近黑 ⇒ 看不见）。
     // 227 追加：缩写要取**最底层目录名**（不是整条路径）。
@@ -376,6 +379,10 @@ function driver() {
           title: dotEls[d].title,
           letters: letters,
           letterRows: letterTops.length > 0 ? (new Set(letterTops)).size : 0,
+          // [CUSTOM- 涟漪有没有真的画得出来：工具态必须 overflow: visible 且动画
+          // 是 tab-ring；228 的 overflow:hidden 曾把外圈裁进方块里（看起来像被屏蔽）。
+          overflow: cs.overflow,
+          ring: getComputedStyle(dotEls[d], '::after').animationName,
         });
       }
       // 228：把**字号基准**也记进读数。预览主题一旦漏掉 --vscode-font-size，

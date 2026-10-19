@@ -23,6 +23,12 @@ export const transcriptViewClient = `
   // 详见 pitfalls #49。
   // ⚠️ 本文件是嵌在模板字符串里的客户端代码，注释里也**不能出现反引号**（pitfalls #11）。
   var asked = {};
+  // [CUSTOM- entryId -> 已经在**飞行中**的那段文本（请求已发出、回填未到）。
+  // 没有它时，回放期间每一帧都会把整份 pending 再发一次（真机日志：3 秒内 200 次请求、
+  // 每次带 31→391 条），宿主对同一条记录重复渲染几十遍，最后一条（永远排在批尾）
+  // 迟迟轮不到 —— 用户看到的就是"最后一条停在原文"。同一段文本只问一次；文本变了
+  //（pending 里的值不同）或回填到了（patch 带 html）就清掉，所以不会吞掉重试。
+  var inFlight = {};
   var sessionId = null;
   var messagesEl = null;
   // [CUSTOM- Explicit append order. Object key order is NOT usable
@@ -193,6 +199,7 @@ export const transcriptViewClient = `
     // [CUSTOM- 渲染请求与记录一起作废：留着旧 entryId 的"问过哪段文本"，
     // 只会让新会话里同名 id 的第一次回填被误判成旧文本的。
     asked = {};
+    inFlight = {};
     order = [];
     tails = {};
     requestedViews = {};
@@ -427,10 +434,19 @@ export const transcriptViewClient = `
     // 过期回填（或压根没有回填）：把那次请求**清掉**。留着它（它问的是一段已经不存在的
     // 文本）会让下面那条自愈判据永远不成立 —— 记录停在原文，谁也不再来要一次。
     delete pending[entryId];
-    if (entry.streaming === false && entry.text) {
+    // [CUSTOM- 已经有 html 就不要再问：定稿的 revise 不带 html 键，而正文在回放/流式期间
+    // 往往已经渲染过。旧写法只判 streaming，于是 391 条**同时定稿**时会一条一条再问一遍
+    // （每条还同步 flush 一次），正是"最后一条永远轮不到"的放大器。
+    // [CUSTOM- 用 scheduleMarkdown 而不是 flushPending：一次 finalize 批次可能有几百条，
+    // 每条同步发一次请求 = 几百次整批往返。合到下一帧只发一次。
+    if (entry.streaming === false && entry.text && !entry.html) {
+      // [CUSTOM- 定稿是一次天然的**重试点**：万一上次请求被宿主静默丢掉（未知会话 /
+      // 单项异常），在飞记录会把它永远按住。这里清掉再排一次，重试次数被"每条记录
+      // 定稿一次"天然限制住，不会打转。
+      delete inFlight[entryId];
       asked[entryId] = entry.text;
       pending[entryId] = entry.text;
-      flushPending();
+      scheduleMarkdown();
     }
   }
 
@@ -1223,6 +1239,9 @@ export const transcriptViewClient = `
     if (changes.text !== undefined && changes.html === undefined && entry.html !== undefined) {
       entry.html = undefined;
     }
+    // [CUSTOM- 这份回填（哪怕是过期的）就是对"在飞的那次请求"的回答：清掉它，
+    // 让 pending 里仍是当前文本的条目能在下一帧重新发问，而不是被去重逻辑永远按住。
+    if (changes.html !== undefined && changes.html !== null) { delete inFlight[entryId]; }
     if (wasStreaming !== !!entry.streaming) {
       streamingCount += entry.streaming ? 1 : -1;
       if (streamingCount < 0) { streamingCount = 0; }
@@ -1329,9 +1348,16 @@ export const transcriptViewClient = `
   function pendingMarkdown() {
     var out = [];
     for (var id in pending) {
-      if (Object.prototype.hasOwnProperty.call(pending, id)) {
-        out.push({ entryId: id, sessionId: sessionId, text: pending[id] });
-      }
+      if (!Object.prototype.hasOwnProperty.call(pending, id)) { continue; }
+      // [CUSTOM- 同一段文本只问一次：回填按 FIFO 回来，期间每帧重发只是把同一份活
+      // 重复排到宿主队列里（O(n^2)），并把批尾那条的记录一直往后挤。文本变了
+      //（pending[id] 与在飞的那份不同）或回填到了（patch 清掉 inFlight）才会再问。
+      // 会话身份也算在内：带着 null sessionId 发出去的那次会被宿主整条丢掉，
+      // setSessionId 校正之后必须允许用新身份重发（否则那条记录永远停在原文）。
+      var sent = inFlight[id];
+      if (sent && sent.sessionId === sessionId && sent.text === pending[id]) { continue; }
+      inFlight[id] = { sessionId: sessionId, text: pending[id] };
+      out.push({ entryId: id, sessionId: sessionId, text: pending[id] });
     }
     return out;
   }

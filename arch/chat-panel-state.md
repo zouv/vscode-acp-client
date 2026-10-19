@@ -213,6 +213,13 @@ scroll 事件**：底部留白（输入卡 / 表单抽屉 / 权限抽屉的高�
 - 写回前按"本面知道的会话"裁表（`pruned`），宿主那侧还有 200 条上限 —— 这张表随用户拨开关增长。
 - **迁移只有一次**：本地那个旧的 `showTimes=true` 被播上去一次（本地记 `timesMigrated`）。
   本地值胜出的理由：它是用户真拨过的，而宿主那一份是本次改动才出现的。
+- **图标化（2026-10-19）**：`#timeToggle` 不再有文字；`times.init` 用 `NS.icons.icon('history')`
+  挂上时钟（图标的唯一来源在 `icons.ts`），tooltip 随开关状态写 `Show/Hide the wall-clock time…`，
+  `aria-pressed` 给读屏。`.off` 的透明度仍是唯一的关闭态视觉。
+- **切 tab 的感知延时（2026-10-19）**：点击 tab 时 `tabs.activateModel` **先** `setFocus(model.summary)`
+  （高亮 + 地址栏在宿主回包前的那次绘制就切过去），再发 `focusSession`；记录区仍要等宿主回包后的
+  `hydrate` **同步**重建。真正的耗时在 hydrate（DOM + sanitize + 折叠量测），不是消息往返 ——
+  `boot.applyFocus` 会打一行 `[vac] focus: hydrate N entries in Xms` 供真机判断。
 
 **201 拖拽落点**。198 把 `dragover`/`drop` 挂在**每个 `.tab`** 上，而 `.tabs` 是 `flex: 0 0 auto`：
 最后一个 tab 右边的空白属于 `.tab-strip`、tab 之间还有 2px 的缝，指针落在这些地方**没有落点**

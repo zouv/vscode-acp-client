@@ -83,7 +83,7 @@ Thought 的 `Thought for Ns` 是**耗时**不是时刻。
 |---|---|---|
 | 悬停 | 每条记录的 `title` 是完整时刻（HH:MM:SS） | 零成本、零噪声，随时可查 |
 | 工具耗时 | `ToolCallView.elapsedMs`（宿主用 `endedAt - startedAt` 算），卡头显示 `1.2s` / `420ms` / `2m 5s`，**常显** | 与 `Thought for Ns` 同类信息，不设开关。**不下发两个时间戳**：已完成的时长不需要客户端时钟；**仍在跑的不显示**——`status` 的脉动已说明"进行中"，实时计时器意味着每帧重渲染 |
-| 每条时刻 | 头部「Times」开关（持久化）⇒ **只在工具卡上**显示 HH:MM：关 = `3ms`（耗时，常显）；开 = `3ms 18:32`（耗时 + 时刻，见 129）。**[146] 普通消息与 Thought 不显示时刻** —— ACP 里只有工具调用带 `elapsedMs`，它们根本没有"耗时"这个量，单独挂一个时刻读起来像缺了一半 | `.rec-time` 元素**始终在 DOM 里**（`transcriptView` 一律插入），显隐由一个类决定：`.messages.show-times .tool-head .rec-time { display: block }` ⇒ **切换开关不重渲染任何东西**。工具卡的时刻是**标题行里的一项**（`.tool-head .rec-time { position: static }`，跟在 `.tool-time` 后面，整行读作 `3ms 18:32`）；其余记录的时刻元素仍插在 `summary` 里，只是选择器不放它出来（`.rec-time` 的绝对定位对它们才成立，工具卡是例外）。挂在**标题行**而不是记录节点上，是因为折叠的 `<details>` 会隐藏 summary 之外的一切。**145 曾试图让工具卡的时刻也浮到右上角**（好让所有记录对齐），靠 `padding-right` 硬留槽位 —— 结果把工具卡本来工整的一行挤散了，**已回退** |
+| 每条时刻 | 头部**时钟图标**开关（原文字「Times」；持久化）⇒ **只在工具卡上**显示 HH:MM：关 = `3ms`（耗时，常显）；开 = `3ms 18:32`（耗时 + 时刻，见 129）。tooltip 按状态写 `Show/Hide the wall-clock time of each record`，`aria-pressed` 给读屏。**[146] 普通消息与 Thought 不显示时刻** —— ACP 里只有工具调用带 `elapsedMs`，它们根本没有"耗时"这个量，单独挂一个时刻读起来像缺了一半 | `.rec-time` 元素**始终在 DOM 里**（`transcriptView` 一律插入），显隐由一个类决定：`.messages.show-times .tool-head .rec-time { display: block }` ⇒ **切换开关不重渲染任何东西**。工具卡的时刻是**标题行里的一项**（`.tool-head .rec-time { position: static }`，跟在 `.tool-time` 后面，整行读作 `3ms 18:32`）；其余记录的时刻元素仍插在 `summary` 里，只是选择器不放它出来（`.rec-time` 的绝对定位对它们才成立，工具卡是例外）。挂在**标题行**而不是记录节点上，是因为折叠的 `<details>` 会隐藏 summary 之外的一切。**145 曾试图让工具卡的时刻也浮到右上角**（好让所有记录对齐），靠 `padding-right` 硬留槽位 —— 结果把工具卡本来工整的一行挤散了，**已回退** |
 
 **时长的格式化在 `NS.dom.duration`**（最底层模块）：`toolCallView` 与记录层都要用，而模块加载顺序
 **只允许依赖指向前方**——放在 `transcriptView` 里 `toolCallView` 用不到，抄第二份又会漂（pitfalls #19）。
@@ -122,6 +122,14 @@ SDK），回放记录默认全用 `Date.now()`——一个几十条的旧会话�
   里全局唯一，按它回填本来就串不了台。**判据**：客户端的请求链路本身由桩测试钉住了
   （`markdown asks for itself`，含"正文后到 + finalize"那条），所以再遇到同类症状应当先怀疑
   **回填这一侧**，而不是去翻 `markPending`。
+- **[CUSTOM- 回放请求去重与宿主逐项容错]**（修"历史会话最后一条不渲染"）：同一
+  `(entryId, sessionId, text)` 在回填到达前**只发一次**（`transcriptView.inFlight`；工具项是
+  `toolCallView.mdInFlight`，key 自带文本指纹）。文本变化 / 回填到达 / 定稿 revise 会解除；
+  **定稿时已有 html 的记录不再重问**。`trackMarkdown` 改用 `scheduleMarkdown()` 合帧，
+  不再每条同步 `flushPending()`（一次 finalize 可能有几百条）。宿主 `handleRenderMarkdown`
+  逐项校验 + 逐项 try/catch：单个坏项只跳过它，其余照常渲染并回包 —— 旧实现在
+  `item.entryId` 上先抛异常，整批不回包，而批尾正是最后一条（两端均无日志）。
+  **别再退回"每帧重发整份 pending"**：真机日志里那是 3 秒 200 次、31→391 条的来源。
 
 ### 5.19 右键菜单是自己的（067）
 
@@ -129,8 +137,10 @@ Webview 默认弹 **Chromium 的原生菜单**，它在这个面板上有两个�
 `Copy` 复制的是**选区**（右键时通常没有选区）⇒ 看起来可用、实际什么都不做。
 
 - `contextmenu` 上 `preventDefault()` **整体接管**（留着原生菜单会得到两个菜单）。
-- 项：`Copy`（选区，**无选区时禁用**）/ `Copy message` / `Copy code` / `Select all`。**没有 Cut/Paste**。
+- 项：`Copy selection`（选区，**无选区时禁用**）/ `Copy message` / `Copy code` / `Select all`。**没有 Cut/Paste**。
   **禁用项比"点了没反应"诚实得多** —— 本次故障的全部体感就是"点了没反应"。
+  `Copy selection` 这个名字就是那次教训：一条永远灰着的 `Copy` 会被读成"坏了/这是干什么的"，
+  标签本身应当说清它复制的是**选区**（上下文专属的 `Copy`——大纲行 / 地址栏——复制的是内容与路径，不是选区）。
 - 复制走扩展侧 `copy` 通道（与代码块 Copy 同一条路）：webview 的 `navigator.clipboard` 依赖文档焦点。
 - **输入框里不接管**（那里系统的 Cut/Paste 是对的）。
 - 关闭：任意点击 / Esc / 滚动 / resize / 失焦；位置贴边翻转。项是真 `<button>`（047 的规矩）。
@@ -279,6 +289,7 @@ Webview 默认弹 **Chromium 的原生菜单**，它在这个面板上有两个�
 | `TOP_GAP` 只有一个来源 | 它既是布局（JS 写进 host 的 inline `padding-top`）又是交棒窗口。两者必须相等，否则每次交棒都带一段位移 ⇒ 由 JS 写，CSS 不写 padding-top（pitfall #19） |
 | 收缩（169/171/172） | 控件是卡片里的折叠三角（169 删掉了卡片左侧那个小方块）。它走**原生 `<details>`**（171）：浏览器开合，"收成一行"、"图片/文件与文字同行"这些规则全是现成的；`toggle` 事件把状态记回 `collapsedBySession[sessionId][entryId]` —— **按会话 + 按卡**（172；判据即 pitfalls #38 的"用户说每个 X 自己保持，代码里就该出现 byX"）。卡的折叠改变卡高 ⇒ 记账后要重量、重排 |
 | 跳转（170/171/172） | 落点 `NS.scroll.jumpTo(node, 0)`：**在交接窗口之内**（0 ≤ natural < TOP_GAP），消息就地接管卡片的位置、本体让位 ⇒ 既不重叠也不偏下。170 的"让开卡高"解反了：那让开的是**别的东西占着的位置**。172 起目标取自**被点那张卡**的 `data-sticky-id`（每张卡各代表一条消息） |
+| **框选 vs 跳转（2026-10-19）** | 拖选文本松手时浏览器**仍会派发 click** —— 旧逻辑把它当成"点卡片"，刚框选好的内容立刻被跳转带走（用户报："点击后松开就触发定位，没法框选复制里面的一段文本"）。现在 click 处理先看 `window.getSelection()`：**有非空选区就不跳转**；普通点击照旧跳。"选区"比"跳到原消息"是更具体的用户意图，不需要额外的拖拽距离阈值 |
 | 渲染状态 | 克隆体不在 `#messages` 里，`.messages.show-times` 这类**状态类选择器够不着它** ⇒ `sync()` 把 `show-times` 抄到 host（用 `classList.toggle`：整体重写 `host.className` 会抹掉各卡身上的 `.entering`），`boot.applyTimes` 之后调 `NS.stickyUser.refresh()` 重建。**再加新的"挂在 `#messages` 上的渲染开关"时，别忘了这里也要抄一份** |
 | 成本（172） | 一帧一次（`dom.schedule` + `syncQueued` 去重，流式 chunk 也会触发）。热路径**先读后写**：一次读完 scrollTop / 各 offsetTop / 没量过的高度，纯算术算完所有 top，再统一写 `marginTop` 与 class。克隆**按条缓存**，只有 `.fold-body` 这个结构信号变了才重建（拿高度做信号会每帧强制重排）。被顶出上沿、且超出 `KEEP_MARGIN`(24px) 的卡**不渲染**（但仍在上夹计算里 —— 它是上一条的上夹来源）；`KEEP_MARGIN` 只为省掉交界线上的克隆抖动，不改变画面（留着的那张整条在 y<0） |
 | 维护提示 | 判据依赖 `node.offsetTop` 与 `#messages` 的 `scrollTop` **在同一坐标系**。当前靠"节点与 `#messages` 同处 `.messages-column`"成立——**给 `#messages` 或那条链上新加带 `position` 的祖先时要重新核对**（`NS.scroll.jumpTo` 的 `node.offsetTop - container.offsetTop` 是同一个前提） |
@@ -318,6 +329,20 @@ Webview 默认弹 **Chromium 的原生菜单**，它在这个面板上有两个�
 | 载入历史（replay） | 黄 `--vscode-charts-yellow` | 有 |
 | 后台有新输出（unread） | 蓝 `--vscode-charts-blue` | 无 —— 它是关于**过去**的提示，不是当下的活动 |
 | 平常 | 灰 `--vscode-descriptionForeground` | 无 |
+
+> **涟漪曾被裁掉（2026-10-19）**：228/229 给 `.tab-dot` 加了 `overflow: hidden`（防止放大字号时
+> 字母顶出方块），它同时把 `::after` 的涟漪（`scale(1.9)`）裁进了 16px 方块 —— 看起来像"运行中
+> 的动效被屏蔽了"。现在忙碌态 `.tab-dot.busy { overflow: visible }`，空闲态仍裁剪字母。
+> **验收判据在 `#tabsprobe`**：忙碌点的 `overflow` 必须是 `visible`、`::after` 的 `animationName`
+> 必须是 `tab-ring`；空闲/unread 则是 `hidden` / `none`。改 `.tab-dot` 的布局时先看这两项。
+
+> **选中 / 未选中 tab 的区分（2026-10-19）**：用户报"区分度不明显"。现在四条同向叠加 ——
+> 未选中用 `tab-inactiveForeground` + `opacity: .7`；选中用**与面板同色的底** + 1px 边框 +
+> **顶部 2px 强调线**（`tab-activeBorderTop`，回退 `focusBorder`）+ `font-weight: 600` + `opacity: 1`。
+> 底色必须**按面**取：侧边栏面 `sideBar-background`、编辑区面 `editor-background`
+> （`.surface-editor .tab.active` 覆盖）—— 只写 editor 时侧边栏的选中 tab 与面板不同色，
+> 那正是"看起来没选中"的一半原因。`.tab-dot` 的挖空字色同理按面取。
+> 拖拽落点指示线用的是左右 `inset` 阴影，与顶部强调线不冲突。
 
 - **数据**：`waiting` 从两个桥的 `hasPendingFor(sessionId)` 读 —— **桥才是 pending 的唯一持有者**，
   宿主不存第二份（pitfalls #19）。
@@ -466,7 +491,7 @@ hide 与恢复都不报。"变量=0 而卡片可见"于是可达。
 ### 5.50 右键菜单的四个上下文格 与 历史列表行的悬停动作（CUSTOM-20261009-211/212）
 
 **右键菜单**（`contextMenu.ts` 的 `itemsFor`，四个专属分支**排在通用清单之前** —— 通用那条
-`Copy` 复制的是**选区**、无选区时禁用，而用户报的"有个 Copy 但点不动"正是这几处）：
+`Copy selection` 复制的是**选区**、无选区时禁用，而用户报的"有个 Copy 但点不动"正是这几处）：
 - **大纲行**（`.outline-item[data-jump-id]`）：`Copy` = 这一条的**正文**（`transcriptView.entry(id).text`，
   取不到时退回行上可见文本）——不是选区，也不需要选区；
 - **地址栏**（`.session-title`，即 body.ts 的 `#cwdBtn`；用类选择器是为了桩 DOM 也认）：

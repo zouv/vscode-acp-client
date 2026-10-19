@@ -1,11 +1,12 @@
 // Icon generator: one geometry, three surfaces.
 //
-//   resources/icon.svg        monochrome mark for the activity bar container (24x24, currentColor)
-//   resources/icon.png        128x128 badge for the Marketplace listing and the editor tab
-//   resources/icon-editor-*.svg  the same mark with a FIXED color, for the editor tab bar button
-//                             (a path icon is painted as an image there, so currentColor is no use)
+//   resources/icon.svg          monochrome mark for the activity bar container (24x24, currentColor)
+//   resources/icon.png          128x128 badge for the Marketplace listing and the editor tab
+//   resources/icon-editor-color.svg  the full-color badge as a 24x24 SVG, for the editor tab bar button
+//                               (a path icon is painted as an image there, so currentColor is no use;
+//                                the button should read as the plugin badge, not a monochrome glyph)
 //
-// Both files are generated from MARKS below, so the sidebar icon and the badge can never
+// All files are generated from MARKS below, so the sidebar icon and the badge can never
 // drift apart. Zero dependencies: the badge is rasterized with signed-distance functions
 // and encoded as PNG with Node's zlib.
 //
@@ -213,7 +214,7 @@ function encodePng(width, height, rgba) {
 
 // --- SVG --------------------------------------------------------------------
 
-function toSvg(color = 'currentColor') {
+function markPath() {
   const n = (v) => Number(v.toFixed(2));
   const at = (m, angle) => [n(m.cx + m.r * Math.cos(angle * Math.PI / 180)), n(m.cy + m.r * Math.sin(angle * Math.PI / 180))];
   // The bubble is a closed subpath; the prompt strokes after it start elsewhere, so each
@@ -232,9 +233,30 @@ function toSvg(color = 'currentColor') {
     if (to[0] === subpathStart[0] && to[1] === subpathStart[1]) parts.push('Z');
     cursor = to;
   }
+  return parts.join('');
+}
+
+function toSvg(color = 'currentColor') {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${GRID} ${GRID}" fill="none"` +
     ` stroke="${color}" stroke-width="${STROKE}" stroke-linecap="round" stroke-linejoin="round">` +
-    `<path d="${parts.join('')}"/></svg>\n`;
+    `<path d="${markPath()}"/></svg>\n`;
+}
+
+/**
+ * Full-color 24x24 badge: the same blue→purple tile and white mark the PNG badge uses
+ * (see BADGE_FROM / BADGE_TO above), so the editor title-bar button matches the tab icon
+ * and the Marketplace listing instead of reading as a tool glyph.
+ */
+function toBadgeSvg() {
+  const hex = (c) => '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${GRID} ${GRID}" fill="none">` +
+    `<defs><linearGradient id="vacBadge" x1="0" y1="0" x2="1" y2="1">` +
+    `<stop offset="0" stop-color="${hex(BADGE_FROM)}"/>` +
+    `<stop offset="1" stop-color="${hex(BADGE_TO)}"/>` +
+    `</linearGradient></defs>` +
+    `<rect x="0.75" y="0.75" width="22.5" height="22.5" rx="5.3" fill="url(#vacBadge)"/>` +
+    `<path d="${markPath()}" stroke="#ffffff" stroke-width="${STROKE}"` +
+    ` stroke-linecap="round" stroke-linejoin="round"/></svg>\n`;
 }
 
 // --- output -----------------------------------------------------------------
@@ -244,11 +266,10 @@ mkdirSync(join(ROOT, 'resources'), { recursive: true });
 writeFileSync(join(ROOT, 'resources', 'icon.svg'), toSvg());
 writeFileSync(join(ROOT, 'resources', 'icon.png'), encodePng(BADGE_SIZE, BADGE_SIZE, renderBadge(BADGE_SIZE)));
 // 编辑区标签栏那颗按钮：`icon` 走**文件路径**（不是 codicon），而 VS Code 把这种 SVG 当
-// 图片渲染 —— `currentColor` 在那儿解析不出颜色，所以必须给出**写死颜色**的 light/dark 两份
-// （light 主题配深色字形，dark 主题配浅色字形，取值与 VS Code 自己的工具栏图标一致）。
-writeFileSync(join(ROOT, 'resources', 'icon-editor-light.svg'), toSvg('#424242'));
-writeFileSync(join(ROOT, 'resources', 'icon-editor-dark.svg'), toSvg('#c5c5c5'));
-console.log(`icon.svg + icon.png (${BADGE_SIZE}x${BADGE_SIZE}) + icon-editor-{light,dark}.svg written to resources/`);
+// 图片渲染（background-image）—— 颜色按 SVG 自己的来。给它全彩徽标：与标签页图标 / Marketplace
+// 徽标同一套渐变，用户一眼认出是插件本身，而不是一个灰字形的工具按钮。
+writeFileSync(join(ROOT, 'resources', 'icon-editor-color.svg'), toBadgeSvg());
+console.log(`icon.svg + icon.png (${BADGE_SIZE}x${BADGE_SIZE}) + icon-editor-color.svg written to resources/`);
 
 if (process.argv.includes('--preview')) {
   const dir = join(tmpdir(), 'vac-icon-preview');

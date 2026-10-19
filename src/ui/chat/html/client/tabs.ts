@@ -100,6 +100,11 @@ export const tabsClient = `
       return;
     }
     if (model.id !== state.focusedId) {
+      // [CUSTOM- 先本地切 tab/地址栏，再发请求：宿主回 'focus' 之前的那次绘制就能看到
+      // 新 tab 高亮（旧写法要等消息往返 + 整份记录重渲染完才重绘，点击像"卡了一下"）。
+      // 宿主回包会再走一次 setFocus（同值，幂等）；切到非 live 会话失败时，下一次
+      // sessionsChanged/focus 会把高亮纠正回来。
+      setFocus(model.summary);
       NS.bridge.post({ type: 'focusSession', sessionId: model.id });
     }
   }

@@ -2799,6 +2799,58 @@ suite('chat panel: renderMarkdown item validation ()', () => {
       'the item with no session id never comes back — a silent drop, which is why the client must send it');
     assert.ok(answered[0].html.includes('hi there'), 'and the accepted one really was rendered');
   });
+
+  // [CUSTOM- 大会话回放时客户端一次发来几百条；旧实现只要数组里混进一个 null
+  // 就在 `item.entryId` 上抛异常 —— 整批不回包，而批尾正是"最后一条消息"。
+  // 这条用例把"坏项不影响其余项"钉死（play 里不会出现坏项，但一次异常的全部代价
+  // 是**静默的**：没有日志、没有回包，只有一条永远停在原文的记录）。
+  test('a malformed item cannot take the whole batch (and its reply) down', () => {
+    const sessionId = 'malformed-batch';
+    const harness = makeHarness(sessionId, 'Claude Code');
+    harness.surface.sent.length = 0;
+
+    harness.host.onMessage({
+      type: 'renderMarkdown',
+      items: [
+        null,
+        'junk',
+        { entryId: 'missing-text', sessionId },
+        { entryId: 'e-good', sessionId, key: 'slot#1', text: 'still rendered' },
+      ],
+    } as never);
+    settle(harness, 'Claude Code', sessionId);
+
+    const replies = harness.surface.sent.filter(m => m.type === 'markdownRendered') as Array<{
+      items: Array<{ entryId: string; html: string; key?: string }>;
+    }>;
+    assert.strictEqual(replies.length, 1, 'the good item must still be answered');
+    assert.deepStrictEqual(replies[0].items.map(i => i.entryId), ['e-good']);
+    assert.ok(replies[0].items[0].html.includes('still rendered'));
+  });
+
+  // [CUSTOM- 用户报"右键 Copy / Copy message 没反应"时，两个进程之前都没有一行
+  // 日志。这条用例至少把宿主这一段（写剪贴板）钉住；客户端侧的 'context copy' 日志
+  // 与宿主的 'copied N char(s)' 合起来能区分"点击没跑 / 消息没到 / 剪贴板拒绝"。
+  test('a copy message writes the text to the clipboard', async () => {
+    const sessionId = 'copy-clipboard';
+    const harness = makeHarness(sessionId, 'Claude Code');
+    // The clipboard is machine-global: put back whatever the developer had.
+    let previous = '';
+    try { previous = await vscode.env.clipboard.readText(); } catch { /* no clipboard: fine */ }
+    try {
+      await vscode.env.clipboard.writeText('seed');
+      harness.host.onMessage({ type: 'copy', text: 'copied through the panel' });
+
+      let got = '';
+      for (let i = 0; i < 50 && got !== 'copied through the panel'; i++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        got = await vscode.env.clipboard.readText();
+      }
+      assert.strictEqual(got, 'copied through the panel');
+    } finally {
+      try { await vscode.env.clipboard.writeText(previous); } catch { /* nothing to restore */ }
+    }
+  });
 });
 
 suite('chat panel: Bash tool payloads (real capture, )', () => {

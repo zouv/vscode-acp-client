@@ -80,7 +80,10 @@ export const linksClient = `
     var wrap = button.parentNode;
     var code = wrap ? wrap.querySelector('code') : null;
     if (!code) { return; }
-    NS.bridge.post({ type: 'copy', text: code.textContent || '' });
+    // The one copy seam (host channel + local best effort + diagnostics).
+    var text = code.textContent || '';
+    if (NS.bridge.copy) { NS.bridge.copy(text); }
+    else { NS.bridge.post({ type: 'copy', text: text }); }
     button.textContent = 'Copied';
     window.setTimeout(function () { button.textContent = 'Copy'; }, 1200);
   }

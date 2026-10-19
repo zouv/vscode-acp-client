@@ -34,7 +34,15 @@ export const timesClient = `
     if (messagesEl) {
       if (on) { messagesEl.classList.add('show-times'); } else { messagesEl.classList.remove('show-times'); }
     }
-    if (toggleEl) { toggleEl.className = on ? 'nest-toggle' : 'nest-toggle off'; }
+    if (toggleEl) {
+      toggleEl.className = on ? 'nest-toggle' : 'nest-toggle off';
+      // [CUSTOM- 图标化之后，状态与含义都只能靠 tooltip / aria 说明：
+      // 悬停给出"现在能做什么"，读屏给出 pressed 状态。
+      toggleEl.title = on
+        ? 'Hide the wall-clock time of each record'
+        : 'Show the wall-clock time of each record';
+      toggleEl.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
     // [CUSTOM- 置顶副本是 #messages **外面**的克隆体，它带的是自己那份类
     // （stickyUser.render 抄过去）。光切上面的类够不着已经在屏上的副本 ⇒ 重渲染它一次。
     if (NS.stickyUser && NS.stickyUser.refresh) { NS.stickyUser.refresh(); }
@@ -126,6 +134,15 @@ export const timesClient = `
   function init() {
     messagesEl = NS.dom.qs('messages');
     toggleEl = NS.dom.qs('timeToggle');
+    // [CUSTOM- 地址栏用**图标**而不是文字 'Times'（用户要求）：时钟形状是本仓库
+    // icons.ts 已有的 'history' 形（circle + 指针），语义就是"时刻"，也不必再画一份。
+    // 文字标签移进 title / aria-label；开关状态沿用 .off 的透明度。
+    if (toggleEl && NS.icons && NS.icons.icon) {
+      NS.dom.clear(toggleEl);
+      var clock = NS.icons.icon('history', 'time-icon');
+      if (clock) { toggleEl.appendChild(clock); }
+      toggleEl.setAttribute('aria-label', 'Show record times');
+    }
     migrateLegacy();
     apply(timesOnFor(currentSessionId));
     if (toggleEl) {

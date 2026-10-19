@@ -168,8 +168,9 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 **为什么需要**：这个列表是 **agent 侧的**（跨目录），实测 232 条会话横跨多个仓库——
 没有过滤就得在两百多行里找一条。
 
-**一句话**：header 右侧一个 chip 兼管"开关"与"选目录"（`All folders` / `<目录名>`），
-过滤是**纯客户端的 key 比较**，key 由宿主算好。
+**一句话**：header **左侧**一个 chip 兼管"开关"与"选目录"（`All folders` / `<目录名>`），计数行
+（`4 of 264 sessions · from the agent + local sources`）紧跟在它右边；过滤是**纯客户端的 key 比较**，
+key 由宿主算好。
 
 | 关注点 | 规则 |
 |---|---|
@@ -187,7 +188,7 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 | **第三个来源：转录目录（094）** | Claude Code 把每个工作目录的会话放在 `<CLAUDE_CONFIG_DIR 或 ~/.claude>/projects/<路径里非字母数字都换成 '-' 的 slug>/<sessionId>.jsonl`。**官方插件看到的就是这个目录**，所以这里补上它（`diskSessions.ts`）。三条硬约束：**只对 Claude Code**（`CLAUDE_CODE_AGENT`）；**初始只扫当前工作目录对应的那一个 slug**（与本地缓存同作用域）；**095 起按过滤目录按需补扫**——客户端过滤到具体目录时发 `supplementHistory { cwd }`，宿主 `readDiskHistory(agent, cwd?)` 按该目录扫描并增量返回（`historySupplement`），解决多根/跨目录场景下扫错目录的问题；**任何失败都只是"没有补充"**，绝不影响 agent 的那份列表。读取用**按行流式**、超长行跳过（转录能到几十 MB，且**第一行本身就可能很大**——按字符切一刀会读不到任何记录，探针的第一版就是这么错的） |
 | **没有目录的行（093）** | `dirKey` 为空（agent 没报 cwd）的行**不属于任何候选**——但"不知道它在哪个目录"**不等于**"它在别的目录"，静默丢弃是把猜测当规则。现在：菜单末尾多一个 `Unknown folder (N)` 候选（哨兵 key `~unknown`，真实 key 必含分隔符、撞不了车），选中即筛出这些行；用真实目录过滤时计数行补一句 `· N without a folder` |
 | 空结果 | 一行「No sessions in this folder」+ 一行可点的「Show all folders」（chip 不显眼，不能只靠它）。「Show all folders」走独立标记 `data-show-all` → `applyFilter('', false)`：**临时显示全部、不写 `historyFolderFilter`**（下次打开仍按地址栏目录自动过滤） |
-| 挂载位置 | 菜单挂在 `.outline-head` **内部**：它已是定位元素（`position: sticky`），`top: 100%` 正好落在 header 下面——不量高度、没有常量偏移（pitfalls #24）。chip 与菜单是 `.outline-head-info`（`render()` 清空回填的计数容器）的**兄弟**，所以重渲染不会把它们清掉（077 的形态）。**[141] 但它必须能"溢出"浮层**：浮层 `#history` 原本是 `overflow-y: auto` 的滚动容器，而菜单的包含块（head）在它里面 ⇒ 菜单被裁成"head 底边到浮层底边"那么几行（历史列表越短它越矮，用户实测只剩两三行）。修法是把滚动**下移**到 `.outline-list`：`#history` 变成 flex column + `overflow: visible`，于是它不再裁剪任何后代，菜单高度交回自己的 `max-height` 单独控制。**只写在 `#history` 上**（`#outline` / `#cwdMenu` 里没有这种嵌套菜单，不动通用规则） |
+| 挂载位置 | 菜单挂在 `.outline-head` **内部**：它已是定位元素（`position: sticky`），`top: 100%` 正好落在 header 下面——不量高度、没有常量偏移（pitfalls #24）。chip 与菜单是 `.outline-head-info`（`render()` 清空回填的计数容器）的**兄弟**，所以重渲染不会把它们清掉（077 的形态）。**[2026-10-19] 头部顺序 = DOM 顺序**：chip 在前（最左），`.outline-head-info` 在它右边；菜单锚点随之从 `right: 0` 改为 `left: 0`（`#historyFilterMenu.picker-menu.down`）。**[141] 但它必须能"溢出"浮层**：浮层 `#history` 原本是 `overflow-y: auto` 的滚动容器，而菜单的包含块（head）在它里面 ⇒ 菜单被裁成"head 底边到浮层底边"那么几行（历史列表越短它越矮，用户实测只剩两三行）。修法是把滚动**下移**到 `.outline-list`：`#history` 变成 flex column + `overflow: visible`，于是它不再裁剪任何后代，菜单高度交回自己的 `max-height` 单独控制。**只写在 `#history` 上**（`#outline` / `#cwdMenu` 里没有这种嵌套菜单，不动通用规则） |
 | **观感与历史列表区分（141）** | 两者都吃 `--vscode-dropdown-*` 那套 token（底色 / 边框 / 圆角 / 阴影几乎同值），叠在一起分不清谁是谁。给菜单加 `.filter-menu`，只把边框换成 `--vscode-focusBorder`——**不是画环**（环在这个面板里是键盘焦点，062 的教训），借的是 `.filter-chip.on` 那套"当前项"语义 |
 | **谁画在上面（层叠，[141] 的第二件事）** | 菜单"被列表盖住"与"被裁掉"是两条独立的病因。历史行外套的 `.session-row` 带 `position: relative`（悬停的 Archive/Rename 图标要一个定位祖先），于是**每一行都是"定位元素、`z-index: auto`"**，与同样 `z-index: auto` 的 `.outline-head` 落在**同一个绘制步**；同一步内按 DOM 顺序画，而 `.outline-list` 排在 head 之后 ⇒ **行画在 head 之上**，行的悬停底色与右端图标直接压在菜单上（点下去命中的也是行，不是菜单项）。菜单自己的 `z-index: 20` **救不了**：`position: sticky` 让 head 自成层叠上下文，菜单被封在里面（抬到 999 也照样被盖）。能动的只有 head 这一层：`#history .outline-head { z-index: 2 }` ⇒ 整棵子树（chip + 菜单）进入"`z-index` > 0"那一步、画在所有 auto 的行之上。**只写 `#history`**（`#outline` / `#cwdMenu` 里没有 `.session-row`，没有这个竞争）。验收档 `#historyfilter`：走真路径建行 + 真点击 chip，探针用 `elementFromPoint` 读"那一点上最上面是谁"——**只能量不能推**（pitfall #31） |
 | **菜单用 `.open` 类，不是 `hidden` 属性** | `.picker-menu` 自带 `display: none`，与 `.open` 的 `display` 是同一层级的竞争。写错的表现是"菜单永远不出现"，而它看起来像 JS 没跑——正是 pitfall #13 的反面 |

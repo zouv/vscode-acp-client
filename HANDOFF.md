@@ -15,32 +15,23 @@
 
 ## 状态快照
 
-- **最近更新**：2026-10-16
-- **整体状态**：✅ 无进行中的开发任务。**v1.3.0 已发布**（GitHub Release 附
-  `vscode-acp-client-1.3.0.vsix`），工作区干净。本轮 = ACP 能力补齐（`session/delete` 真删除 +
-  助手消息右键 **Fork from here** + **sub-agent 子会话卡/取消**）+ **编辑区标签栏入口** +
-  **历史弹窗每行的 Delete 按钮** + fork 适配器升级到上游 **v0.91.0** +
-  新增 [`docs/acp-protocol.md`](docs/acp-protocol.md)，已归档到 `CHANGELOG [1.3.0]`。
+- **最近更新**：2026-10-19
+- **整体状态**：✅ **无进行中的开发任务。v1.3.1 已发布**（GitHub Release 附
+  `vscode-acp-client-1.3.1.vsix`，423.35 KB / 10 文件）。本轮 = 用户两轮反馈（共 11 条）：
+  历史会话最后一条 markdown 渲染 + 复制双路径/诊断 + `Copy selection`；编辑区图标全彩、
+  置顶卡框选不跳转、历史弹窗头部顺序、Times 图标化、tab 切换先本地高亮、tab 涟漪修复、
+  tab 选中态区分度。已归档到 `CHANGELOG [1.3.1]`。
 - **当前分支（必填）**：`main`，与 `origin/main` 同步。
-- **最后验证状态**（2026-10-16，v1.3.0 发布）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（91 项）·
-  `npm test`（真实宿主）✅ **479 项** · `npm run vsix` ✅ 生成 `release/vscode-acp-client-1.3.0.vsix`
-  （415.07 KB，11 文件）。fork 仓库（`D:\Git\zgithub\claude-agent-acp`）已 rebase 到 **v0.91.0**
-  （保留自研 `_meta.extraModels`）并推送 origin/main；`build` + `lint` 绿
-  （其单测有 Windows 环境性红，与升级无关）。
-  ⚠️ 仍未做 `npm run dev:host` 真机实测 —— 见「下一步」第 1 条。
-  📌 用户实测报过「Fork from here 点了没反应」= **客户端会话作用域消息用了裸 `NS.bridge.post`
-  （不补 sessionId）**，被宿主 `verifySession` 守卫静默丢弃；已改走 `postForSession`
-  （sub-agent 的 Cancel 同一处 bug，一并修）。**新加会话作用域消息务必走 `postForSession`。**
+- **最后验证状态**（2026-10-19，v1.3.1 发布）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（91 项）·
+  `npm test`（真实宿主）✅ **488 项** · `npm run vsix` ✅ 生成
+  `release/vscode-acp-client-1.3.1.vsix`（10 文件，含 `resources/icon-editor-color.svg`）。
+  ⚠️ 仍未做 `npm run dev:host` 真机验收（见「下一步」第 1 条）。
 
 ---
 
 ## 当前任务（In Progress）
 
-- **目标**：无进行中的开发任务。
-- **范围 / 涉及文件**：—
-- **完成定义（Definition of Done）**：—
-
-> v1.3.0 已发布并归档到 `CHANGELOG [1.3.0]`。剩余唯一未做的验收环节见「下一步」第 1 条。
+- （无。v1.3.1 已发布并归档；剩下的只有真机验收，见「下一步」。）
 
 ---
 
@@ -63,32 +54,23 @@
 
 > 均来自 `ROADMAP.md` 的近期规划；接手时按用户实际指定挑一条，先按 §0.5 定范围再动手。
 
-1. **P1-2 宿主实测验收**（**顺带验收本轮五项**：Agents 树右键会话 → **Delete Session**、
-   **会话历史弹窗**每行的 **Delete** 图标按钮（Archive 旁边那颗）、聊天面板助手消息右键 →
-   **Fork from here**、**sub-agent 卡**（真跑一个会派生子 agent 的提示词，看卡片出现 / 状态变化 /
-   Cancel 生效 —— 需适配器为升级后的 0.91.0 且会发 `subagent_update`）、
-   以及**编辑区标签栏右侧的插件图标按钮**（图标应是插件徽标、悬停读 "Open VAC Chat"））：
-   `npm run dev:host` 打开宿主，目视确认 Dashboard 的统计数字与
-   连接状态、以及聊天面板（发消息 → 流式 → 工具调用 → 权限卡片）的实际表现；
-   **顺带确认图标三处到位**（活动栏 VAC 容器 / 编辑区聊天标签页）、
-   **会话 tab 的目录徽标**（1/2 个字母单行；3 个字母应为**上 2 下 1**、4 个为贴紧的 2x2；
-   悬停应是**两行带标签**：`Dir:` + `State:` —— 无头读数已过，但真机的基准字号是
-   `--vscode-font-size`）、
-   **Dashboard 的标题栏**（`view == vac-dashboard` 应有两颗：**↗ 在 ↻ 左侧** ——
-   这是本轮唯一没被任何自动检查覆盖的点，菜单贡献只有真宿主渲染得出来）、
-   **Dashboard 页面**（行动区只剩 New conversation / Connect agent 两颗，各带悬停说明）、
-   **表单（231）**：让 agent 用 AskUserQuestion 问一次 —— 带 preview 的选项选中时应就地展开预览、
-   换选时上一块收走；答完之后记录里那张卡应能折叠、标出所选（实心圈）、给出 `Answered · N questions`
-   （这四档无头读数已过，但**真机的字号/配色**没在宿主里眼过）、
-   以及**目录筛选菜单在真宿主里的层叠**（无头档只能证明 Chrome 的绘制顺序，
-   宿主 webview 同一套引擎、结论应当一致，但没在宿主里眼过）。
-   这是目前**唯一没有做过**的验收环节（其余都是类型/单测/集成测试的结论）。
-2. **P1-1 Codex 端到端**：用真实 `codex-acp` 跑通连接与一次会话；核对
+1. **v1.3.1 真机验收（最高优先）**：`npm run dev:host` 后逐条确认：①大会话历史会话的
+   **最后一条 markdown**；②地址栏/消息卡 Copy（判据：`[vac] copy` → `copied N char(s)`；
+   失败看 `clipboard write failed`）；③编辑器标题栏图标为全彩徽标；④置顶卡内拖选文本松手不跳转；
+   ⑤历史弹窗筛选在左、计数在右；⑥Times 为时钟图标 + tooltip；⑦切 tab 高亮立即切换
+   （看 `[vac] focus: hydrate N entries in Xms`）；⑧运行中 tab 的颜色 + 外圈涟漪；
+   ⑨当前 tab 的同色底 + 顶部强调线 + 加粗。
+2. **P1-2 宿主实测验收（v1.3.0 遗留）**：`npm run dev:host` 目视确认 Dashboard 统计/连接状态、
+   聊天面板（发消息 → 流式 → 工具调用 → 权限卡）、Agents 树/历史弹窗的 **Delete**、
+   助手消息右键 **Fork from here**、**sub-agent 卡**的 Cancel、编辑区标签栏入口图标、
+   会话 tab 的目录徽标（真机字号）、Dashboard 标题栏两颗按钮、表单（231）抽屉与回执卡、
+   目录筛选菜单的层叠。
+3. **P1-1 Codex 端到端**：用真实 `codex-acp` 跑通连接与一次会话；核对
    `src/dashboard/usage/CodexUsageSource.ts` 的用量口径。
-3. **P1-3 打包瘦身**：`dist/extension.js` 1.42 MB（压缩后），主要来自 ACP SDK 全量引入；
+4. **P1-3 打包瘦身**：`dist/extension.js` 1.48 MB（压缩后），主要来自 ACP SDK 全量引入；
    注意 `.vscodeignore` 的忽略**不支持通配嵌套路径**，排除 dist 下的文件要写精确路径。
-4. **P2-5 上架 Marketplace**：已具备图标（`npm run icon` 生成）；剩余注册 publisher、准备截图、发布。
-5. 用户若指定新需求：按 `ARCHITECTURE.md` §0.5 定范围 → 定位函数 → 实施 → 文档同步。
+5. **P2-5 上架 Marketplace**：已具备图标（`npm run icon` 生成）；剩余注册 publisher、准备截图、发布。
+6. 用户若指定新需求：按 `ARCHITECTURE.md` §0.5 定范围 → 定位函数 → 实施 → 文档同步。
 
 ---
 

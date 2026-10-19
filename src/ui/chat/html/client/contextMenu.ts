@@ -7,7 +7,7 @@
 // 于是用户得到一个看起来可用、实际什么都不做的菜单项。
 //
 // 自己的菜单按上下文给项，且**没有 Cut/Paste**：
-// · Copy          —— 复制当前选区（没选区时**禁用**，而不是装作能用）；
+// · Copy selection —— 复制当前选区（没选区时**禁用**，而不是装作能用）；
 // · Copy message  —— 复制整条记录（用户/助手/推理/通知的正文）；
 // · Copy code     —— 复制代码块内容；
 // · Select all    —— 选中整个对话区，方便手动复制。
@@ -30,6 +30,9 @@ export const contextMenuClient = `
 
   function copy(text) {
     if (!text) { return; }
+    // [CUSTOM- 唯一的复制出口在 boot（宿主通道 + 本地 best-effort，并带诊断日志）；
+    // 菜单这边只负责说明"复制什么"。
+    if (NS.bridge.copy) { NS.bridge.copy(text); return; }
     NS.bridge.post({ type: 'copy', text: text });
   }
 
@@ -74,7 +77,7 @@ export const contextMenuClient = `
    */
   function itemsFor(target) {
     // 三个上下文专属格。它们**必须**排在通用清单之前：
-    // 这几处右键时通常没有选区，通用那条 Copy 只会灰着（"有个 Copy 但点不动"——用户报的
+    // 这几处右键时通常没有选区，通用的 'Copy selection' 只会灰着（"有个 Copy 但点不动"——用户报的
     // 就是它），而用户要的拷贝内容与"选区"根本不是一回事：
     // 1) 大纲行（含下拉抽屉）：Copy = 这条消息的**正文**（整条记录，不是截断的标题）；
     // 2) 地址栏（#cwdBtn）：Copy = 它正显示的目录路径；
@@ -156,8 +159,12 @@ export const contextMenuClient = `
 
     var items = [];
     var selected = selectionText();
+    // [CUSTOM- 通用项叫 'Copy selection'，不叫 'Copy'：用户看到一条**永远灰着**的
+    // Copy 会问"这是干什么的"（实际上它就是复制当前选区，右键时通常没有选区）。
+    // 标签本身说明语义，灰态才不显得像坏了。上下文专属的 Copy（大纲行 / 地址栏）
+    // 语义不同 —— 它们复制的是条目内容与路径，不是选区。
     items.push({
-      label: 'Copy', disabled: selected.length === 0,
+      label: 'Copy selection', disabled: selected.length === 0,
       run: function () { copy(selected); }
     });
 

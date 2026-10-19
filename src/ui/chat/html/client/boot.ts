@@ -16,6 +16,25 @@ export const bootClient = `
     post: function (message) { vscode.postMessage(message); }
   };
 
+  // [CUSTOM- 复制走两条腿。宿主通道是权威（webview 的 navigator.clipboard 依赖文档焦点，
+  // 所以它不能当唯一路径）；但 2026-10-19 用户实报"右键 Copy / Copy message 点了没反应"，
+  // 而旧实现里宿主失败是**完全静默**的。同一段文本再本地 best-effort 写一次：点击的用户
+  // 激活还在，宿主那条路万一失败也仍能落到剪贴板；两条写的是同一份内容，重复无害。
+  // 日志与宿主侧 'copied N char(s)' / 'clipboard write failed' 合起来能一次定位断点。
+  NS.bridge.copy = function (text) {
+    var value = typeof text === 'string' ? text : '';
+    if (!value) { return; }
+    console.warn('[vac] copy: ' + value.length + ' char(s)');
+    NS.bridge.post({ type: 'copy', text: value });
+    try {
+      var nav = typeof navigator !== 'undefined' ? navigator : null;
+      if (nav && nav.clipboard && nav.clipboard.writeText) {
+        var done = nav.clipboard.writeText(value);
+        if (done && done.catch) { done.catch(function () { /* the host path is authoritative */ }); }
+      }
+    } catch (e) { /* same: the host path is still there */ }
+  };
+
   // [CUSTOM- Forward the webview console + uncaught errors to the
   // extension's output channel. The webview console is invisible without Webview
   // DevTools, and every "why does the UI look wrong" investigation so far hit
@@ -184,7 +203,14 @@ export const bootClient = `
     showEmpty(false);
     setLoading(!!summary.loading);
     if (snapshot) {
+      // [CUSTOM- 切会话的"短暂延时"就是这一行：整份记录在**同步**重建（DOM + sanitize +
+      // 折叠量测）。打一行耗时，真机上就能判断是记录多还是 markdown/工具卡重。正常切换
+      // 一次一条，不会刷屏；排查完也留着（与 scroll# / markdownRendered 同类的诊断）。
+      var hydrateAt = Date.now();
       NS.transcriptView.hydrate(snapshot);
+      var hydrateMs = Date.now() - hydrateAt;
+      console.warn('[vac] focus: hydrate ' + ((snapshot.entries || []).length)
+        + ' entries in ' + hydrateMs + 'ms');
     } else {
       resetTranscript();
     }

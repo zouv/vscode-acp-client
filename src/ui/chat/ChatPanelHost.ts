@@ -806,9 +806,18 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           (msg as { items: Array<{ entryId: string; sessionId: string; text: string }> }).items,
         );
         return;
-      case 'copy':
-        void vscode.env.clipboard.writeText((msg as { text?: string }).text ?? '');
+      case 'copy': {
+        // [CUSTOM- 复制是用户动作、频率低，但**失败必须留痕**：此前是裸 `void writeText`，
+        // 剪贴板拒绝/超时只在渲染进程里变成一个没人看的 unhandled rejection ⇒ 界面表现
+        // 就是"点了 Copy 没反应"，两进程都没有一行日志。
+        const raw = (msg as { text?: unknown }).text;
+        const text = typeof raw === 'string' ? raw : '';
+        void vscode.env.clipboard.writeText(text).then(undefined, (e: unknown) => {
+          log(`${LOG_PREFIX}: clipboard write failed (${text.length} chars): ${String(e)}`);
+        });
+        log(`${LOG_PREFIX}: copied ${text.length} char(s) to the clipboard`);
         return;
+      }
       // [CUSTOM- NOT session-scoped: forward to the output channel.
       case 'clientLog': {
         const level = (msg as { level?: string }).level ?? 'info';
@@ -1765,44 +1774,68 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // --- Markdown round-trip -------------------------------------------------
 
   private handleRenderMarkdown(items: Array<{ entryId: string; sessionId: string; text: string; key?: string }>): void {
+    // [CUSTOM- A malformed item must never take the whole batch with it.
+    //
+    // 这条请求是一条**批**：客户端把"所有还缺 html 的记录"一次发来（大会话回放时
+    // 几百条）。旧实现在 `item.entryId` / `item.sessionId` 上直接取值，只要数组里混进
+    // 一个 null/非对象，模板字符串就先抛了 —— 整批不渲染、不回包，而且一行日志都没有。
+    // 排在批尾的正好是最后一条消息，表现就是"只有最后一条停在原文"。
+    // 现在逐项校验 + 逐项 try/catch：坏项跳过并记账，其余照常渲染、照常回包。
+    if (!Array.isArray(items)) {
+      log(`${LOG_PREFIX}: renderMarkdown without an items array ignored`);
+      return;
+    }
     const rendered: Array<{ entryId: string; sessionId: string; html: string; key?: string }> = [];
+    let skipped = 0;
     for (const item of items) {
-      const sessionId = verifySession(this.sessionManager, item);
-      if (!sessionId) {
-        // [CUSTOM- Do not drop it silently: a dropped item means that record
-        // stays raw markdown forever, and this line is the only place that can say so
-        // (pitfall #33's lesson — the 120 bug was invisible for exactly this reason).
-        log(`${LOG_PREFIX}: dropped markdown item ${item.entryId} (unknown session ${item.sessionId})`);
+      if (!item || typeof item !== 'object' || typeof item.entryId !== 'string' || typeof item.text !== 'string') {
+        skipped++;
         continue;
       }
-      const html = this.markdown.render(item.text);
-      // [CUSTOM- A render only applies to the text it was made from.
-      //
-      // `item.text` is a snapshot of the record as it looked when the client asked;
-      // the record can have grown since (prose streams, and the ask goes out the
-      // moment the record lands — 128). Storing that html anyway leaves the STORE
-      // holding a rendering of a prefix, which the next snapshot (session switch,
-      // reopen, tab focus) hands to the client as if it were current — the record
-      // then shows its first few lines and nothing else. Dropping it is not a loss:
-      // the record still has no html, so the client's settle-time request renders
-      // the text it actually has.
-      // [CUSTOM- A KEYED item is a sub-block of a tool card, not a
-      // transcript record: there is nothing in the store to patch, the HTML goes
-      // back to the element that asked for it. Skipping the patch also avoids a
-      // pointless lookup for an id that can never be found.
-      if (!item.key) {
-        const current = this.transcripts.getEntry(sessionId, item.entryId);
-        const renderedFrom = (current as { text?: string } | undefined)?.text;
-        if (current && renderedFrom !== undefined && renderedFrom !== item.text) {
-          log(`${LOG_PREFIX}: stale markdown reply dropped for ${item.entryId} (asked ${item.text.length} chars, now ${renderedFrom.length})`);
+      try {
+        const sessionId = verifySession(this.sessionManager, item);
+        if (!sessionId) {
+          // [CUSTOM- Do not drop it silently: a dropped item means that record
+          // stays raw markdown forever, and this line is the only place that can say so
+          // (pitfall #33's lesson — the 120 bug was invisible for exactly this reason).
+          log(`${LOG_PREFIX}: dropped markdown item ${item.entryId} (unknown session ${item.sessionId})`);
           continue;
         }
-        this.transcripts.patch(sessionId, item.entryId, { html });
+        const html = this.markdown.render(item.text);
+        // [CUSTOM- A render only applies to the text it was made from.
+        //
+        // `item.text` is a snapshot of the record as it looked when the client asked;
+        // the record can have grown since (prose streams, and the ask goes out the
+        // moment the record lands — 128). Storing that html anyway leaves the STORE
+        // holding a rendering of a prefix, which the next snapshot (session switch,
+        // reopen, tab focus) hands to the client as if it were current — the record
+        // then shows its first few lines and nothing else. Dropping it is not a loss:
+        // the record still has no html, so the client's settle-time request renders
+        // the text it actually has.
+        // [CUSTOM- A KEYED item is a sub-block of a tool card, not a
+        // transcript record: there is nothing in the store to patch, the HTML goes
+        // back to the element that asked for it. Skipping the patch also avoids a
+        // pointless lookup for an id that can never be found.
+        if (!item.key) {
+          const current = this.transcripts.getEntry(sessionId, item.entryId);
+          const renderedFrom = (current as { text?: string } | undefined)?.text;
+          if (current && renderedFrom !== undefined && renderedFrom !== item.text) {
+            log(`${LOG_PREFIX}: stale markdown reply dropped for ${item.entryId} (asked ${item.text.length} chars, now ${renderedFrom.length})`);
+            continue;
+          }
+          this.transcripts.patch(sessionId, item.entryId, { html });
+        }
+        rendered.push({ entryId: item.entryId, sessionId, html, key: item.key });
+      } catch (e) {
+        skipped++;
+        log(`${LOG_PREFIX}: markdown item ${item.entryId} failed: ${String(e)}`);
       }
-      rendered.push({ entryId: item.entryId, sessionId, html, key: item.key });
     }
     if (rendered.length > 0) {
       this.post({ type: 'markdownRendered', items: rendered });
+    }
+    if (skipped > 0) {
+      log(`${LOG_PREFIX}: skipped ${skipped} malformed markdown item(s) (rendered ${rendered.length})`);
     }
   }
 
