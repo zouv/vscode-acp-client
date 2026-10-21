@@ -216,7 +216,7 @@ export const tabsClient = `
    * [CUSTOM- 目录标识：取目录名单词的头几个字母（最多 4 个，2x2 布局）。
    *
    * 规则（用户指定）：按非字母数字切分取每段首字母，大写。如：
-   * 'story-myriad-pavilion' → 'SMP'（3 段）
+   * 'alpha-beta-gamma' → 'ABG'（3 段）
    * 'AbcDeFg' → 'ADF'（按驼峰拆：Abc / De / Fg）
    * 'abc-de-fg' → 'ADF'
    * 'a' → 'A'，'ab' → 'AB'
@@ -515,7 +515,9 @@ export const tabsClient = `
         tab.title = isDraft
           ? (model.draft.cwd || 'Default directory') + '\\n(not created yet)'
           : (isRestore
-            ? label + '\\n' + model.id + '\\n(not loaded yet \\u2014 click to open)'
+            ? label + '\\n' + model.id
+              + (model.restore.app ? '\\n(' + model.restore.app + ')' : '')
+              + '\\n(not loaded yet \\u2014 click to open)'
             : label + '\\n' + model.id);
 
         // [CUSTOM- 目录标识：dot 里写目录缩写，一个字母一个 span
@@ -556,6 +558,18 @@ export const tabsClient = `
 
         tab.addEventListener('click', function () {
           if (!active) { activateModel(model); }
+        });
+        // [CUSTOM- 中键关闭（2026-10-21）：与 × / Delete / 右键 Close 汇入同一个
+        // closeModel（草稿、待恢复、真会话各自的语义都不变）。
+        // mousedown 里先阻止默认行为 —— 否则 WebView 会进入中键自动滚动。
+        tab.addEventListener('mousedown', function (event) {
+          if (event.button === 1 && event.preventDefault) { event.preventDefault(); }
+        });
+        tab.addEventListener('auxclick', function (event) {
+          if (event.button !== 1) { return; }
+          if (event.preventDefault) { event.preventDefault(); }
+          if (event.stopPropagation) { event.stopPropagation(); }
+          closeModel(model);
         });
         // [CUSTOM- 手工排序。只有会话 tab 能排：草稿的 id 是本地的临时号，
         // 排它没有意义（它连会话都不是）。

@@ -121,8 +121,8 @@ export const sessionMenuClient = `
 
   /**
    * [CUSTOM- What to show for a directory: the host grows the label
-   * leftwards when two folders share a basename ('git/UniverseEditor' vs
-   * 'zdev/UniverseEditor'), and the fallback keeps an older host working.
+   * leftwards when two folders share a basename ('work/Project' vs
+   * 'archive/Project'), and the fallback keeps an older host working.
    */
   function optionLabel(option) { return option.label || option.name; }
 
@@ -354,8 +354,8 @@ export const sessionMenuClient = `
       // and until now the only way to tell was the row tooltip — 245 rows with
       // no visible directory is exactly how you open the wrong one.
       // [ 修] 2026-10-09 用户报：它原来落在行的最右端，被悬停的
-      // Archive/Rename 图标盖住（图里就是"图标压在 aki_work 上"）。改成**会话名后面的括号
-      // 后缀**（"(aki_work)"，跟着标题靠左）——右端从此留给悬停动作；配合 styles.ts 里
+      // Archive/Rename 图标盖住（图里就是"图标压在 workspace 上"）。改成**会话名后面的括号
+      // 后缀**（"(workspace)"，跟着标题靠左）——右端从此留给悬停动作；配合 styles.ts 里
       // .session-row .outline-text 的 flex 调整（标题不再吃满整行）。
       var dirName = folderName(item.cwd);
       if (dirName) { row.appendChild(NS.dom.el('span', 'outline-cwd', '(' + dirName + ')')); }

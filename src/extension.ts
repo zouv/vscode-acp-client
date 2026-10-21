@@ -54,7 +54,7 @@ export function activate(context: vscode.ExtensionContext): void {
   log(`VAC extension activating... [build ${buildStamp()}]`);
 
   const updates = new SessionUpdateHandler();
-  const agentManager = new AgentManager();
+  const agentManager = new AgentManager(context.globalStorageUri.fsPath);
   const permissionBridge = new PermissionBridge();
   const elicitationBridge = new ElicitationBridge();
   const connectionManager = new ConnectionManager(updates, permissionBridge, elicitationBridge);
@@ -76,6 +76,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const tree = new SessionTreeProvider(sessions, history, () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
   const chat = new ChatViewProvider(
     context.extensionUri, sessions, updates, permissionBridge, context.globalState, elicitationBridge,
+    context.globalStorageUri.fsPath,
   );
 
   const config = () => vscode.workspace.getConfiguration('vac');

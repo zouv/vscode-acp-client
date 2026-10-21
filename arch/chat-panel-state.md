@@ -25,6 +25,7 @@
 | 关注点 | 规则 |
 |---|---|
 | 四态 | `phase = connecting ? 'connecting' : (creating && connected ? 'creating' : (connected ? 'ready' : 'disconnected'))`。`connected` 有**两个来源**（`boot`/`focus`/`sessionsChanged` 的 `agentConnected` 说的是"进程还活着/已死"，`connection{state:'connected'}` 说的是"刚连上"），`connecting` 也有两个（本地点击、宿主广播）。`creating` 只有一条路：`composer.send()` 的草稿分支（见下行的"建会话中"）。**`creating` 以 `connected` 为前提**：socket 半路掉了要退回 `disconnected`（Connect 按钮回来），不能把用户留在一张永远转圈的卡上。 |
+| 首帧占位（booting，2026-10-21） | 面板打开到收到宿主第一条消息之间显示 `Starting VAC…` / `Loading the chat panel…`（body.ts 里静态写好同样的句子，脚本还没跑起来时就能看到，替代此前的空白/黑屏）。它在 `phase()` **最后**判定：任何已发生的相位（connecting / connected / restore / creating）都优先；`noteBoot` / `setConnected` / `setRestore` / `onConnection` 任一到达即退出。 |
 | **建会话中也属于"在等"（195）** | 用户报「发出第一条消息后要等很久、消息区才有反应」。实测那段时间**全在 `session/new` 这一发请求里**：agent 侧 `session/create` 的 `sdk-initialize` 一步 675ms / 11116ms / 13194ms（三次采样），而"建完会话 → 应用草稿选择 → 发出消息"只要 ~160ms。原本屏幕上**没有一处**能看出"已经在建了"：卡片还写着 "Claude Code is ready"、输入框的字故意留着（058）⇒ placeholder 被内容挡着、按钮只是 disabled。所以这一相位只干一件事：把等待说出来（标题 + 转圈 + 秒表）。`render()` 里把"在等"的两态收成一个 `waiting` 变量（转圈 / `aria-busy` / Connect 按钮退场三处共用）。 |
 | **`connection` 必须无条件回话** | `refreshSessions` 靠签名去重（`conn:` 位），而 `ensureConnected` 在进程已起时**不发任何事件** ⇒「已连接 + 无会话 + 点 Connect」这条路上宿主原本一句话都不会说，客户端的"连接中"会**永久卡死**（pitfalls #29 的形态：效果上没变化 ≠ 可以不回话）。三种出口（无 agent / 成功 / 失败）各发一次。 |
 | **建会话中的进出（195）** | 进：`composer.send()` 的草稿分支（与 `state.draftPending = true` 同一帧）→ `stateCard.beginCreating()`。出：`boot` 的 `resolveDraft`（成功）/ `failDraft`（失败，**先收相位再写错误**，反了报错会被压在下面）/ `dropDraft`。失败与丢弃都必须把相位收干净，否则下一个草稿页会带着上一轮的"建会话中"进来。 |
@@ -34,7 +35,9 @@
 | 相位也是面板级的 | `stateCard.render()` 把相位写到 `body[data-phase]`，header 上的 `Times` 按钮据此隐藏（129 之前它在未连接时也显示）。写在 body 上而不是让每个按钮各自监听：少三处同步，而且**本地点击发起的 `connecting` 也覆盖到了**（那条路径不经过宿主）。 |
 | `stickyUser` 的残留 | `showEmpty(true)` 里补 `NS.stickyUser.reset()`：置顶卡片是 `.messages-column` 的绝对定位子元素，`transcriptView.reset()` 清不掉它，而卡片没有背景 ⇒ 草稿页会让上一个会话的置顶卡**透出来**。 |
 | 无会话的失败 | `case 'error'` 与 `draftFailed` 原先往空 transcript 里 append 通知并 `showEmpty(false)`（卡片被藏起来、中央只剩一行孤零零的报错），现在写进卡片的 `.state-error`。 |
-| 自动连接的前提 | `autoConnect && !agentConnected && !focused`，**延迟 1s**（131 从 500ms 上调：面板刚渲染完就连接，用户还没看清卡片上写着什么）。布防**幂等**（boot 会在同一个文档上投递两次），触发时**再复查一遍**（这一秒里可能已经连上、或用户已经在别的草稿页上打字——判据用 `composer.isComposable()` 这个**直接信号**，不用代理信号）。 |
+| 自动连接的前提 | `autoConnect && !agentConnected && !focused`，**立即连接**（2026-10-21 去掉了原来的 1s 延时；用户要求打开面板即连）。布防**幂等**（boot 会在同一个文档上投递两次），连接前**复查**一次（用户可能已经在别的草稿页打字——判据用 `composer.isComposable()` 这个**直接信号**，不用代理信号）。 |
+| 预热（2026-10-21） | 视图一 resolve（`ChatViewProvider.resolveWebviewView` / `openEditorChat`）就调 `ChatPanelHost.prewarm()` → `ensureConnected`，**只建连接、不建会话**（有可恢复会话时仍由卡片先问）。首次连接的 npx 冷启动实测 **36s**（`initialize` 请求→响应），这段现在与 webview 渲染重叠。预热失败只写日志；真正的 Connect 会重试。日志分段：`prewarm connected in Nms`、`initialized in Nms`、`session ready in Nms`。 |
+| npx 本地缓存（2026-10-21） | 实测 `npx <spec>` 每次 11–17s（`--offline` 也一样），而 `node <entry>` + initialize 只要 **0.6s**。首次仍走 npx（行为不变），连接稳定 15s 后 `AgentManager.scheduleInstall` 在 `globalStorage/agents/<agent>` 后台 `npm install`（一次性 ~75s / ~320MB），下一轮启动直接 `node <entry>`。缓存 **7 天过期**，或 spec 变化 → 重建并回退 npx。日志：`Spawning … (cached runtime)`、`Agent runtime cached for … in Nms`。 |
 | 不谎报失败 | 45s 没回话**不报错**：`ensureConnected` 本身没有超时，首次 `npx` 下载可以几分钟。只把按钮放开（允许重试）并说明原因——谎报失败比慢更糟。 |
 | 设置的读写 | `vac.autoConnectOnOpen` 经 `PanelPrefsIO` 注入缝读写（默认实现才碰 `vscode.workspace`；测试给桩，**不碰真实 settings.json**）。**写失败时广播的是设置真值而不是请求值**，否则复选框会显示一个 settings.json 里没有的值。宿主只在这一个 key 上挂了 `onDidChangeConfiguration`——面板把这个配置项**渲染成了控件**，控件显示过期值就是在撒谎。 |
 | 开关什么时候在 | 只在**未连接 / 连接中**显示。连上之后卡片是"去下面打字"的路标，不是一个设置表单——开关管的是"下次打开这个面板"（127，用户复验提出）；**连接中仍然保留**，那恰恰是最想关掉它的时刻。隐藏的是整行 `#autoConnectRow` 而不是那个 `<input>`，否则标签文字会留在原地。 |
@@ -277,3 +280,42 @@ scroll 事件**：底部留白（输入卡 / 表单抽屉 / 权限抽屉的高�
 ⚠️ **探针复现不出真机那 50 秒**：合成条目（300×5KB）整批只花 ~20ms、分帧反而 ~165ms（多出来的帧各自
 要重排），而真机是 **~360ms/条**（50s/139）—— 差两个数量级。所以它只能说明"分帧之后一个批次绝不落在
 单个任务里"，**不能**证明真机修好；真机判据是下一次的 `longtask` 日志行（`docs/03-验收清单.md` 验收 211）。
+
+**2026-10-21 补充（用户再次报"滚动条触底、底部内容被输入卡盖住"）**：当天日志（`~/.vac/vac.log`）
+里 242 条 `scroll#` 全部自洽，四个病灶标记（`clamped-short` / `follow-fell-short` /
+`tail-covered-heal` / `atmax 且 pin=0`）一次都没出现——但同一时刻有 **`sup=20/21`**，说明关键采样被
+各自 12 条/10s 与日志桥 30 条/10s 的配额吞了。所以加了三条定向采样，读法：
+
+- **`cov=1` / `gap=N`**：`cov` = 已在滚动范围末尾（`st >= max-32`）且末条记录底边 **压在输入卡顶边之下**；
+  `gap` = 末条底边 − 卡片顶边（负数 = 卡片上方，健康）。用户看到的"触底却看不全"就是 `cov=1`。
+- **`wheel dy=N`**：滚轮事件的下一帧采样一次。用来区分"他滚了一格"与"位置根本没动"（后者是手势没落到
+  `#messages` 上，见同一文件的 `press@messages-bar`）。
+- **`heal-skip:<原因>`**：自愈没出手的理由（`unpinned` / `no-tail` / `not-atmax` / `no-api` /
+  `no-composer` / `no-rect` / `composer-hidden` / `var-ok` / `clear`），只在理由变化时记一行。
+  下次"没有 tail-covered-heal"就能读出是被哪道门槛挡住了，而不是"没发生"。
+
+### 5.52 设置面板与「新输出自动展开」（2026-10-21）
+
+**为什么有它**：面板里散落的开关（自动连接、Times、大纲、协议日志）各自藏在不同控件/VS Code Settings 里，
+用户要求一个集中的设置入口；同时新增「新输出自动展开」，它的卡片类型需要一个可勾选的地方。
+
+**结构**：`body.ts` 的 `#settingsOverlay > #settingsPanel`（遮罩 + 居中面板），左侧 `#settingsNav`
+（role=tablist）右侧 `#settingsBody`；`settingsPanel.ts` 只渲染，宿主是唯一写者。
+Tab 栏：`#settingsBtn` 用 `margin-left: auto` 固定在条带最右；`#newTab` 紧跟在最后一个 tab 右侧
+（`.tabs` 先按内容宽，tab 多到放不下才自己横向滚动）。
+
+| 关注点 | 规则 |
+|---|---|
+| 数据与写入 | `ChatPanelHost.settingsItems()` 生成 `SettingItem[]`；`handleSetSetting(key,value)` 按 key 决定写 **VS Code 配置**（`vac.autoConnectOnOpen` / `restoreSessionsOnOpen` / `defaultWorkingDirectory` / `autoApprovePermissions` / `logTraffic` / `customModels` / `agents`）还是 **面板 UiPrefs**（`panel.autoExpandDefault` / `panel.autoExpandKinds.*` / `panel.autoExpand.toolHeight` / `panel.autoExpand.thoughtHeight` / `panel.flatTools` / `panel.sendKey` / `panel.composerMaxWidth` / `panel.inputMaxHeight` / `panel.defaultModel.<agent>` / `panel.timesDefault` / `panel.outlineMode` / `panel.outlineWidth`）；`handleSettingAction` 处理 `pickDefaultWorkingDirectory`（系统 `showOpenDialog`）/ `openAgentCache` / `clearAgentCache`（`rmSync`，Linux/Windows 上运行中的模块可能被锁）/ `resetPanelPrefs` / `openLog` / `copyBuildInfo`。写完**重发整张表**，被夹紧的值（宽度 160–480、展开高度 0 或 80–2000、输入卡 360–1200 / 80–800）会回显真实值。 |
+| 默认模型 | `UiPrefs.defaultModelByAgent`（agent → model id）。`session-created('new')` 时 `applyRememberedModel` 与记住的模式并行应用，按会话挂在 `modelApply` 上；草稿页的显式选择先 `await` 两者再落地（后到的赢）。打开历史会话不套用。`defaultModelItems` 有候选就渲染下拉（来自 `draftOptions` 快照），没候选退化成文本输入。 |
+| 发送快捷键 / 输入卡尺寸 | `UiPrefs.sendKey` 由 `composer.applyUiPrefs` 消费（`onKeyDown` 决定 Enter 是否发送；另一种组合留给 textarea 换行）；`composerMaxWidth` / `inputMaxHeight` 写 body 的 `--vac-composer-max` / `--vac-input-max-h`。`flatTools` 同时由标题栏的 Sub-agents 按钮写（两个写者都落到同一份 UiPrefs）。 |
+| 面板尺寸 | **固定**：`height: clamp(320px, 80vh, 640px)` + `max-height: calc(100vh - 32px)`，切换分组/改值不跳动；内容在 `#settingsBody` 内滚动。窄面板（<520px）左侧导航变成顶部横排。 |
+| 协议 | `getSettings` → `settings`（ExtToChat）；`setSetting` / `settingAction`（ChatToExt）。三者都在 `verifySession` 守卫**之前**处理（非会话作用域）。 |
+| 双向同步 | `onDidChangeConfiguration` 里 `affectsConfiguration('vac')` → `postSettings()`；面板偏好走 `uiPrefs` 广播（两个 surface 立刻跟上）。 |
+| 分组 | general / chat / appearance / advanced；**没有条目的分组不显示**（客户端 `groupsWithItems`）。窄面板（<520px）左侧导航自动变成顶部横排。 |
+| 自动展开的范围 | 有效值 = `autoExpandBySession[sessionId] ?? autoExpandDefault`（与 Times 同一条"按会话 + 默认值"模型）。卡片类型是**全局** `autoExpandKinds`（`tool` / `thought` / `diff`），默认 `thought + tool`；写过空数组才是"全不展开"（类型在 Chat 分组）。**展开后的限高**在 Appearance 分组：`autoExpandToolHeight`（默认 360）/ `autoExpandThoughtHeight`（默认 240），0 = 不限，夹在 80–2000；只作用于自动展开时打了 `.auto-expanded` 的卡（手动点开的不受限），超出部分在卡片内部滚动。 |
+| 长编辑器（子面板） | `vac.customModels`（`type:'models'`）与 `vac.agents`（`type:'json'`）在主面板只显示摘要 + `Edit…`；点击打开 `#settingsSubOverlay` 子面板。模型改动即时提交（每个 input 的 change），JSON 是 Save/Cancel（Save 先本地 `JSON.parse`，非法就在子面板里报错、不发送）。Esc 先收子面板、再收主面板。 |
+| 自定义模型的 description | 存进 `vac.customModels` 后，`composer.menuItem` 用它作为模型菜单项的**副标题 + 悬停 tooltip**（`name` 覆盖 agent 返回的裸 id 标签）。此前只存不用。 |
+| 自动展开的作用面 | **只作用于 live 路径**（`transcriptView.append` / `patch` / `updateTool`）；`hydrate`（历史回放）刻意不展开 —— 大会话整屏展开既卡又抢滚动位置。展开后 `append` 的 `scroll.follow()` 按最终高度贴底；`patch` 里推理块定稿的"自动折叠"在勾了 `thought` 时不生效。 |
+| 运行中会话的关闭确认 | 宿主 `closeSessionWithConfirm`：`isSessionRunning` 为真时 `showWarningMessage(..., {modal:true}, 'Close')`；确认后仍走 `SessionManager.closeSession`（内部先 `cancelTurn` 并回答待决请求）。× / Delete / 右键 / 中键四条入口共用。 |
+| 中键关闭 | `tabs.ts` 每个 tab 的 `mousedown`（button==1 → `preventDefault`，压住 WebView 的自动滚动）与 `auxclick`（button==1 → `closeModel`）。**不要**用 `modelIndexOf` 找模型（它漏了 `data-restore-id`），回调里直接闭包捕获 `model`。 |

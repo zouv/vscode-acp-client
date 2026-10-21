@@ -18,8 +18,8 @@ export interface HistoryDirOption {
   /**
    * [CUSTOM- What the menu actually SHOWS: `name`, unless two candidates
    * share a basename — two checkouts of one repository, which is the normal case
-   * ("UniverseEditor" appeared twice in the first real list) — in which case it grows
-   * leftwards until it is unique ("git/UniverseEditor" vs "zdev/UniverseEditor").
+   * ("Project" appeared twice in the first real list) — in which case it grows
+   * leftwards until it is unique ("work/Project" vs "archive/Project").
    * A menu of two identical labels cannot be used to pick between them.
    */
   label: string;

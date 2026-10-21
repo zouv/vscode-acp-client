@@ -425,7 +425,13 @@ export class SessionManager extends EventEmitter {
     this.emit('model-changed', sessionId, modelId);
   }
 
-  /** The agent answers with the full option list (changing a model can cascade into other options). */
+  /**
+   * The agent answers with the full option list (changing a model can cascade into other options).
+   *
+   * [CUSTOM- `source` 只用于诊断：用户报过"选了自定义模型、发完消息又变回内置模型"，
+   * 而这条链上有四个写入方（会话响应 / 设置响应 / agent 通知 / 早到的 pending）。
+   * 每次 model 值真的变了就打一行，下一次就能直接看出是谁改的。
+   */
   async setConfigOption(sessionId: string, configId: string, value: string): Promise<SessionConfigOption[] | null> {
     const session = this.store.get(sessionId);
     const conn = session && this.connectionManager.getConnection(session.agentId);
@@ -433,16 +439,17 @@ export class SessionManager extends EventEmitter {
 
     const response = await conn.connection.setSessionConfigOption({ sessionId, configId, value });
     const options = (response as { configOptions?: SessionConfigOption[] } | null)?.configOptions ?? null;
-    this.applyConfigOptions(sessionId, options);
+    this.applyConfigOptions(sessionId, options, 'set-response');
     return options;
   }
 
-  applyConfigOptions(sessionId: string, options: SessionConfigOption[] | null): void {
+  applyConfigOptions(sessionId: string, options: SessionConfigOption[] | null, source = 'update'): void {
     const session = this.store.get(sessionId);
     if (!session) {
       this.pending.setConfig(sessionId, options ?? []);
       return;
     }
+    this.noteModelChange(sessionId, session.configOptions, options, source);
     session.configOptions = options ?? null;
     // The mode option is authoritative for "which mode"; keep legacy `modes` in step
     const modeOption = (options ?? []).find(o => (o as { category?: unknown }).category === 'mode');
@@ -451,6 +458,19 @@ export class SessionManager extends EventEmitter {
       session.modes.currentModeId = String(current);
     }
     this.emit('config-options-changed', sessionId, session.configOptions);
+  }
+
+  /** [CUSTOM- 模型值变化的一行诊断（见 setConfigOption 的注释）。 */
+  private noteModelChange(
+    sessionId: string,
+    before: SessionConfigOption[] | null,
+    after: SessionConfigOption[] | null,
+    source: string,
+  ): void {
+    const prev = modelValueOf(before);
+    const next = modelValueOf(after);
+    if (prev === next) { return; }
+    log(`SessionManager: model ${prev ?? '-'} -> ${next ?? '-'} (${source}) session=${sessionId}`);
   }
 
   applyAvailableCommands(sessionId: string, commands: AvailableCommand[]): void {
@@ -487,7 +507,8 @@ export class SessionManager extends EventEmitter {
         this.applyAvailableCommands(sessionId, data.availableCommands ?? []);
         return;
       case 'config_option_update':
-        this.applyConfigOptions(sessionId, data.configOptions ?? null);
+        // [CUSTOM- 缺字段的通知不该把整个选项表清空（那会让模型/模式选择器凭空消失）。
+        if (data.configOptions) { this.applyConfigOptions(sessionId, data.configOptions, 'notification'); }
         return;
       case 'current_mode_update':
         if (typeof data.currentModeId === 'string') { this.applyCurrentMode(sessionId, data.currentModeId); }
@@ -809,6 +830,7 @@ export class SessionManager extends EventEmitter {
 
   private applyStateFrom(session: SessionInfo, response: unknown): void {
     const r = response as { modes?: SessionInfo['modes']; models?: SessionInfo['models']; configOptions?: SessionInfo['configOptions'] } | null | undefined;
+    this.noteModelChange(session.sessionId, session.configOptions, r?.configOptions ?? null, 'session-response');
     session.modes = r?.modes ?? null;
     session.models = r?.models ?? null;
     session.configOptions = r?.configOptions ?? null;
@@ -860,4 +882,11 @@ export class SessionManager extends EventEmitter {
     this.historyStore?.upsertNew(agentName, cwd, session.sessionId);
     return session;
   }
+}
+
+/** [CUSTOM- `category === 'model'` 那个选项的当前值；没有就返回 undefined。 */
+function modelValueOf(options: SessionConfigOption[] | null): string | undefined {
+  const option = (options ?? []).find(o => (o as { category?: unknown }).category === 'model');
+  const value = (option as { currentValue?: unknown } | undefined)?.currentValue;
+  return value === undefined || value === null ? undefined : String(value);
 }

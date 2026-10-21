@@ -148,11 +148,11 @@ const FIXTURES = [
   {
     id: 'tool1', kind: 'tool', at: AT + 5000,
     toolView: {
-      toolCallId: 'call_bash_1', title: 'ls -la "D:/Git/zgame/zgame_blog_astro"', kind: 'execute',
+      toolCallId: 'call_bash_1', title: 'ls -la "D:/work/demo-site"', kind: 'execute',
       status: 'completed', toolName: 'Bash', description: '查看博客目录及父目录现有内容',
-      command: 'ls -la "D:/Git/zgame/zgame_blog_astro" 2>/dev/null && echo "---" && ls "D:/Git/zgame" 2>/dev/null',
+      command: 'ls -la "D:/work/demo-site" 2>/dev/null && echo "---" && ls "D:/work" 2>/dev/null',
       locations: [], elapsedMs: 420,
-      items: [{ type: 'content', block: { type: 'text', text: 'total 4\ndrwxr-xr-x 1 zouwei 1049089 0 Sep 29 16:06 .\ndrwxr-xr-x 1 zouwei 1049089 0 Sep 29 16:06 ..\n---\nzgame_blog\nzgame_blog_astro' } }],
+      items: [{ type: 'content', block: { type: 'text', text: 'total 4\ndrwxr-xr-x 1 user 1049089 0 Sep 29 16:06 .\ndrwxr-xr-x 1 user 1049089 0 Sep 29 16:06 ..\n---\ndemo-site\ndemo-site-astro' } }],
     },
   },
   {
@@ -330,14 +330,14 @@ function driver() {
       row('s3', '等你回答', { running: true, waiting: true }),
       row('s4', '载入历史', { loading: true }),
       row('s5', '后台有新输出', { unread: true }),
-      row('s6', '多词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/story-myriad-pavilion' }),
-      row('s7', '驼峰目录', { cwd: 'd:/Git/zgame/zgame-ai-design/AbcDeFg' }),
-      row('s8', '短横线目录', { cwd: 'd:/Git/zgame/zgame-ai-design/abc-de-fg' }),
-      row('s9', '四词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/alpha-beta-gamma-delta' }),
-      // [CUSTOM-20261013-228] 补齐 1/2 个字母两档：原来只有 SMP(3)/ADF(3)/ABGD(4)，
+      row('s6', '多词目录', { cwd: 'd:/work/demo/alpha-beta-gamma' }),
+      row('s7', '驼峰目录', { cwd: 'd:/work/demo/AbcDeFg' }),
+      row('s8', '短横线目录', { cwd: 'd:/work/demo/abc-de-fg' }),
+      row('s9', '四词目录', { cwd: 'd:/work/demo/alpha-beta-gamma-delta' }),
+      // [CUSTOM-20261013-228] 补齐 1/2 个字母两档：原来只有 ABG(3)/ADF(3)/ABGD(4)，
       // 而 228 的字号是**按字母数分档**的，缺了这两档就等于有一半没验过。
-      row('s10', '单词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/pavilion' }),
-      row('s11', '双词目录', { cwd: 'd:/Git/zgame/zgame-ai-design/story-myriad' }),
+      row('s10', '单词目录', { cwd: 'd:/work/demo/pavilion' }),
+      row('s11', '双词目录', { cwd: 'd:/work/demo/alpha-beta' }),
     ]);
     // [CUSTOM- 选一个"运行中"的 tab 作为当前项：截图要能看出选中态（底色 / 顶部强调线 /
     // 加粗）与未选中的差别 —— 这正是用户报"区分度不明显"的那一档。
@@ -552,9 +552,9 @@ function driver() {
     NS.transcriptView.reset();
     NS.transcriptView.hydrate({ sessionId: 'filechip', entries: [
       { id: 'f1', kind: 'user', at: 1000, text: '两边都提交git', attachments: [{
-        type: 'resource_link', uri: 'f:/P4/x/PianoGameplayDefine.cs',
-        name: 'PianoGameplayDefine.cs', title: 'PianoGameplayDefine.cs',
-        path: 'f:/P4/x/PianoGameplayDefine.cs',
+        type: 'resource_link', uri: 'd:/work/src/DemoFile.cs',
+        name: 'DemoFile.cs', title: 'DemoFile.cs',
+        path: 'd:/work/src/DemoFile.cs',
       }] },
       { id: 'f2', kind: 'user', at: 2000, text: '带图片的', attachments: [{
         type: 'image', mimeType: 'image/png', name: 'shot.png',
@@ -618,7 +618,7 @@ function driver() {
     NS.composer.setFocus({ sessionId: 'ref-session', agentName: 'Claude Code', title: null,
       cwd: '/tmp', createdAt: '', running: false, loading: false, unread: false }, null);
     NS.composer.setActiveFile({
-      path: 'f:/P4/x/PianoGameplayDefine.cs', name: 'PianoGameplayDefine.cs',
+      path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs',
       lineStart: 12, lineEnd: 40,
     });
   }
@@ -1070,7 +1070,7 @@ function driver() {
   // 判据也不靠肉眼：在菜单与行重叠的那个点上问 elementFromPoint「最上面是谁」。
   if (location.hash.indexOf('historyfilter') >= 0) {
     var hfRun = function () {
-      var hfSummary = { sessionId: 's1', agentName: 'Claude Code', title: 'here', cwd: 'D:/Git/alpha',
+      var hfSummary = { sessionId: 's1', agentName: 'Claude Code', title: 'here', cwd: 'D:/work/alpha',
         createdAt: '2026-09-20T00:00:00Z', loading: false, running: false, unread: false };
       NS.tabs.setSessions([hfSummary]);
       NS.tabs.setFocus(hfSummary);
@@ -1086,13 +1086,13 @@ function driver() {
           ? '会话记录 ' + (hf + 1) + ' · 这条标题很长很长很长很长很长很长，会长到伸进右侧菜单占的那块区域'
           : '会话记录 ' + (hf + 1);
         hfSessions.push({ sessionId: 'hf' + hf, title: hfTitle,
-          cwd: 'D:/Git/' + hfDir, dirKey: 'd:/git/' + hfDir, updatedAt: '2026-09-20T00:00:00Z' });
+          cwd: 'D:/work/' + hfDir, dirKey: 'd:/work/' + hfDir, updatedAt: '2026-09-20T00:00:00Z' });
       }
       NS.sessionMenu.setHistory({
         type: 'history', agentName: 'Claude Code', source: 'agent',
         sessions: hfSessions,
         directories: hfDirs.map(function (name, idx) {
-          return { key: 'd:/git/' + name, cwd: 'D:/Git/' + name, name: name, label: name,
+          return { key: 'd:/work/' + name, cwd: 'D:/work/' + name, name: name, label: name,
             count: 2, current: idx === 0 };
         }),
       });
@@ -1161,7 +1161,7 @@ function driver() {
     var histSent = [];
     var nativeHistPost = NS.bridge.post;
     NS.bridge.post = function (m) { histSent.push(m); if (nativeHistPost) { nativeHistPost(m); } };
-    var histSummary = { sessionId: 's1', agentName: 'Claude Code', title: 'here', cwd: 'D:/Git/alpha',
+    var histSummary = { sessionId: 's1', agentName: 'Claude Code', title: 'here', cwd: 'D:/work/alpha',
       createdAt: '2026-09-20T00:00:00Z', loading: false, running: false, unread: false };
     NS.tabs.setSessions([histSummary]);
     NS.tabs.setFocus(histSummary);
@@ -1169,13 +1169,13 @@ function driver() {
     NS.sessionMenu.setHistory({
       type: 'history', agentName: 'Claude Code', source: 'agent',
       sessions: [
-        { sessionId: 'a1', title: 'alpha one', cwd: 'D:/Git/alpha', dirKey: 'd:/git/alpha', updatedAt: '2026-09-20T00:00:00Z' },
-        { sessionId: 'a2', title: 'alpha two', cwd: 'D:/Git/alpha', dirKey: 'd:/git/alpha', updatedAt: '2026-09-19T00:00:00Z' },
-        { sessionId: 'b1', title: 'beta one', cwd: 'D:/Git/beta', dirKey: 'd:/git/beta', updatedAt: '2026-09-18T00:00:00Z' }
+        { sessionId: 'a1', title: 'alpha one', cwd: 'D:/work/alpha', dirKey: 'd:/work/alpha', updatedAt: '2026-09-20T00:00:00Z' },
+        { sessionId: 'a2', title: 'alpha two', cwd: 'D:/work/alpha', dirKey: 'd:/work/alpha', updatedAt: '2026-09-19T00:00:00Z' },
+        { sessionId: 'b1', title: 'beta one', cwd: 'D:/work/beta', dirKey: 'd:/work/beta', updatedAt: '2026-09-18T00:00:00Z' }
       ],
       directories: [
-        { key: 'd:/git/alpha', cwd: 'D:/Git/alpha', name: 'alpha', label: 'alpha', count: 2, current: true },
-        { key: 'd:/git/beta', cwd: 'D:/Git/beta', name: 'beta', label: 'beta', count: 1, current: false }
+        { key: 'd:/work/alpha', cwd: 'D:/work/alpha', name: 'alpha', label: 'alpha', count: 2, current: true },
+        { key: 'd:/work/beta', cwd: 'D:/work/beta', name: 'beta', label: 'beta', count: 1, current: false }
       ]
     });
     var histList = document.querySelector('#history .outline-list');
@@ -1212,13 +1212,13 @@ function driver() {
     NS.sessionMenu.setHistory({
       type: 'history', agentName: 'Claude Code', source: 'agent',
       sessions: [
-        { sessionId: 'a1', title: 'alpha one', cwd: 'D:/Git/alpha', dirKey: 'd:/git/alpha', updatedAt: '2026-09-20T00:00:00Z' },
-        { sessionId: 'a2', title: 'alpha two', cwd: 'D:/Git/alpha', dirKey: 'd:/git/alpha', updatedAt: '2026-09-19T00:00:00Z' },
-        { sessionId: 'b1', title: 'beta one', cwd: 'D:/Git/beta', dirKey: 'd:/git/beta', updatedAt: '2026-09-18T00:00:00Z' }
+        { sessionId: 'a1', title: 'alpha one', cwd: 'D:/work/alpha', dirKey: 'd:/work/alpha', updatedAt: '2026-09-20T00:00:00Z' },
+        { sessionId: 'a2', title: 'alpha two', cwd: 'D:/work/alpha', dirKey: 'd:/work/alpha', updatedAt: '2026-09-19T00:00:00Z' },
+        { sessionId: 'b1', title: 'beta one', cwd: 'D:/work/beta', dirKey: 'd:/work/beta', updatedAt: '2026-09-18T00:00:00Z' }
       ],
       directories: [
-        { key: 'd:/git/alpha', cwd: 'D:/Git/alpha', name: 'alpha', label: 'alpha', count: 2, current: true },
-        { key: 'd:/git/beta', cwd: 'D:/Git/beta', name: 'beta', label: 'beta', count: 1, current: false }
+        { key: 'd:/work/alpha', cwd: 'D:/work/alpha', name: 'alpha', label: 'alpha', count: 2, current: true },
+        { key: 'd:/work/beta', cwd: 'D:/work/beta', name: 'beta', label: 'beta', count: 1, current: false }
       ]
     });
     var rows = document.querySelectorAll('#history .session-row');
@@ -2080,7 +2080,7 @@ function driver() {
         refChipAfterAttach: (function () {
           if (!refChip || !NS.composer.setAttachments) { return null; }
           // 区间必须与当前选区一致 —— 同一性 = 路径 + 区间（207），不然这里翻不过去。
-          NS.composer.setAttachments([{ path: 'f:/P4/x/PianoGameplayDefine.cs', name: 'x', kind: 'file', lineStart: 12, lineEnd: 40 }]);
+          NS.composer.setAttachments([{ path: 'd:/work/src/DemoFile.cs', name: 'x', kind: 'file', lineStart: 12, lineEnd: 40 }]);
           return !!document.querySelector('.ref-chip');
         })(),
         attachmentIconAfterAttach: !!document.querySelector('#attachments .attachment .chip-icon'),

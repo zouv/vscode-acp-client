@@ -143,8 +143,8 @@ try {
   console.log(`\nsession/list -> ${sessions.length} sessions, nextCursor=${reply.nextCursor ?? 'none'}`);
 
   const key = (s) => String(s.cwd ?? '');
-  const mine = sessions.filter(s => key(s).toLowerCase().includes('custom-vscode-acp'));
-  console.log(`\n--- ${mine.length} of them mention custom-vscode-acp in their cwd:`);
+  const mine = sessions.filter(s => key(s).toLowerCase().includes('vscode-acp-client'));
+  console.log(`\n--- ${mine.length} of them mention vscode-acp-client in their cwd:`);
   for (const s of mine) {
     console.log(
       `  ${String(s.sessionId ?? '').slice(0, 8)}  cwd=${JSON.stringify(s.cwd)}`

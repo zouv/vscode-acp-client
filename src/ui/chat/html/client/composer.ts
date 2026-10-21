@@ -47,6 +47,8 @@ export const composerClient = `
     agentName: null,
     running: false,
     loading: false,
+    // [CUSTOM- 发送快捷键（设置面板）：'enter' | 'ctrlEnter'。
+    sendKey: 'enter',
     commands: [],
     configOptions: [],
     // [CUSTOM- 自定义模型别名（vac.customModels，来自 meta / draftOptions）。
@@ -407,6 +409,10 @@ export const composerClient = `
       if (event.key === 'Escape') { event.preventDefault(); hideSlash(); return; }
     }
     if (event.key === 'Enter' && !event.shiftKey) {
+      // [CUSTOM- 发送快捷键可配（设置面板）：Enter 或 Ctrl/Cmd+Enter。
+      // 另一种组合不拦截，交给 textarea 插入换行；Shift+Enter 始终是换行。
+      var chord = event.ctrlKey === true || event.metaKey === true;
+      if (state.sendKey === 'ctrlEnter' ? !chord : chord) { return; }
       event.preventDefault();
       // [CUSTOM- 回车**只发送，绝不停止**。
       //
@@ -728,14 +734,17 @@ export const composerClient = `
   }
 
   // [CUSTOM- 自定义模型的显示名（按 modelId 查）；没命中返回 null。
-  function customModelName(modelId) {
+  function customModelOf(modelId) {
     var custom = state.customModels || [];
     for (var i = 0; i < custom.length; i++) {
-      if (String(custom[i].modelId) === String(modelId)) {
-        return custom[i].name || custom[i].modelId;
-      }
+      if (String(custom[i].modelId) === String(modelId)) { return custom[i]; }
     }
     return null;
+  }
+
+  function customModelName(modelId) {
+    var custom = customModelOf(modelId);
+    return custom ? (custom.name || custom.modelId) : null;
   }
 
   function iconFor(category) {
@@ -805,9 +814,18 @@ export const composerClient = `
   }
 
   function menuItem(menu, option, value, label) {
+    // [CUSTOM- 自定义模型的 description 用在这里（2026-10-21）：此前只存不用。
+    // 现在它是菜单项的副标题 + 悬停 tooltip；name 覆盖 agent 给的裸 id 标签。
+    var custom = option.category === 'model' ? customModelOf(value) : null;
+    var text = custom && custom.name ? custom.name : label;
     // [CUSTOM- A real <button> — the config menus were mouse-only.
-    var item = NS.dom.el('button', 'picker-item' + (String(option.currentValue) === String(value) ? ' active' : ''), label);
+    var item = NS.dom.el('button', 'picker-item' + (String(option.currentValue) === String(value) ? ' active' : ''), '');
     item.type = 'button';
+    item.appendChild(NS.dom.el('span', 'picker-item-label', text));
+    if (custom && custom.description) {
+      item.appendChild(NS.dom.el('span', 'picker-item-desc', custom.description));
+      item.title = custom.description;
+    }
     item.setAttribute('aria-pressed', String(option.currentValue) === String(value) ? 'true' : 'false');
     item.addEventListener('click', function (event) {
       event.stopPropagation();
@@ -1368,8 +1386,7 @@ export const composerClient = `
     renderContext(lastUsage);
   }
 
-  function setMeta(meta) {
-    state.commands = meta.availableCommands || [];
+  function setMeta(meta) {    state.commands = meta.availableCommands || [];
     state.configOptions = meta.configOptions || [];
     // [CUSTOM- 自定义模型别名（来自宿主 meta）。
     state.customModels = meta.customModels || [];
@@ -1401,7 +1418,27 @@ export const composerClient = `
   // the caret into the composer (no session / still loading = it is not).
   function isComposable() { return canCompose(); }
 
+  /**
+   * [CUSTOM- 设置面板的界面项（2026-10-21）：发送快捷键 + 输入卡尺寸。
+   * 尺寸写 body 的 CSS 变量（--vac-composer-max / --vac-input-max-h），与 styles.ts 的默认值同一套。
+   */
+  function applyUiPrefs(prefs) {
+    if (!prefs) { return; }
+    if (prefs.sendKey === 'enter' || prefs.sendKey === 'ctrlEnter') { state.sendKey = prefs.sendKey; }
+    if (!document.body || !document.body.style || !document.body.style.setProperty) { return; }
+    var width = Number(prefs.composerMaxWidth);
+    var height = Number(prefs.inputMaxHeight);
+    if (isFinite(width) && width > 0) {
+      document.body.style.setProperty('--vac-composer-max', width + 'px');
+    }
+    if (isFinite(height) && height > 0) {
+      document.body.style.setProperty('--vac-input-max-h', 'min(' + height + 'px, 38vh)');
+    }
+  }
+
   NS.composer = {
+    // [CUSTOM- 设置面板的界面项：发送快捷键 + 输入卡的最大宽度/输入框最大高度。
+    applyUiPrefs: applyUiPrefs,
     // [CUSTOM- 编辑器当前文件（宿主推来）→ 引用栏那一格。
     setActiveFile: setActiveFile,
     init: init,

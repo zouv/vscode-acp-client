@@ -33,6 +33,22 @@ export const scrollClient = `
       logScrollState(fromProgram ? 'scroll-after-program' : 'user-scroll');
       onScroll();
     });
+    // [CUSTOM- 滚轮单独留一条：用户报的"点 Jump 正常、滚轮一碰又错乱"里，真正要看的是
+    // **滚轮之后**的几何（scroll 事件可能不派发：夹紧、焦点切换、内容在写入之后才长高）。
+    // 每次滚轮在下一帧采样一次，deltaY 一起记 —— 用来区分"他往上滚了一格"与"位置没动"。
+    var wheelPending = false;
+    var lastWheelDelta = 0;
+    container.addEventListener('wheel', function (event) {
+      lastWheelDelta = Math.round((event && event.deltaY) || 0);
+      if (wheelPending) { return; }
+      wheelPending = true;
+      var run = function () {
+        wheelPending = false;
+        if (!container) { return; }
+        logScrollState('wheel dy=' + lastWheelDelta, false);
+      };
+      if (NS.dom && NS.dom.schedule) { NS.dom.schedule(run); } else { run(); }
+    }, { passive: true });
     // [CUSTOM- 「我拖了滚动条，但它没动」——2026-10-05 那次真机日志里，面板停在
     // st=43 而 max=19604，**没有任何一次程序写接近过 43**（80 次程序写全在贴底跟到底），
     // 所以问题不在"我们把他拽回去"，而在**手势没作用到 #messages 上**。
@@ -219,6 +235,13 @@ export const scrollClient = `
     var last = container.lastElementChild;
     var lastRect = last && last.getBoundingClientRect ? last.getBoundingClientRect() : null;
     var composerRect = composer && composer.getBoundingClientRect ? composer.getBoundingClientRect() : null;
+    // [CUSTOM- 这次报障的**直接观测量**：滚动条已在末尾、末条记录的底边却还在输入卡底下。
+    // cov=1 就是用户看到的那个画面；gap 是被盖住的像素（负数 = 尾巴在卡片上方，健康）。
+    // 有了它，下次不用再从 st/max/pad/last 里推——「日志里 cov 全是 0」即可排除这条链。
+    var atMax = container.scrollTop >= max - PIN_THRESHOLD;
+    var visible = !!(lastRect && composerRect && composerRect.height > 0);
+    var covered = !!(atMax && visible && lastRect.bottom > composerRect.top + 1);
+    var gap = visible ? Math.round(lastRect.bottom - composerRect.top) : 0;
     // 字段名压到最短：整行必须**远小于** 400 字符，否则会被日志桥从尾巴上截掉
     // （被截掉的恰好是 last/comp 这两个"谁盖住了谁"的关键量）。
     console.warn('[vac] scroll#' + diagSeq + ' ' + reason
@@ -229,6 +252,7 @@ export const scrollClient = `
       + ' pin=' + (pinned ? 1 : 0)
       + ' jump=' + (jumpBtn ? (jumpBtn.hidden ? 0 : 1) : '?')
       + ' sh=' + Math.round(container.scrollHeight) + ' ch=' + Math.round(container.clientHeight)
+      + ' cov=' + (covered ? 1 : 0) + ' gap=' + gap
       + ' cv=' + bodyVar('--vac-composer-h')
       + ' ev=' + bodyVar('--vac-elic-h')
       + ' pv=' + bodyVar('--vac-perm-h')
@@ -279,37 +303,47 @@ export const scrollClient = `
   // （当初的截图正是 st=max 且被压住）。
   // · 贴底态（distance < PIN_THRESHOLD）：上翻看历史时内容从输入卡下面穿过是常态。
   var healing = false;
+  // [CUSTOM- 自愈**为什么没出手**也要留痕：以前的判据不满足时直接 return，日志里只剩
+  // "没有 tail-covered-heal"，读日志的人分不清"没发生"与"被某个门槛挡住"（pitfalls #42）。
+  // 只在原因**变化**时记一行，滚动热路径上不多读一次几何。
+  var lastHealSkip = null;
+  function noteHealSkip(reason) {
+    if (lastHealSkip === reason) { return; }
+    lastHealSkip = reason;
+    logScrollState('heal-skip:' + reason, true);
+  }
   function healIfTailCovered(distance) {
-    if (healing || distance >= PIN_THRESHOLD) { return; }
-    if (!container || !container.lastElementChild) { return; }
+    if (healing || distance >= PIN_THRESHOLD) { noteHealSkip('unpinned'); return; }
+    if (!container || !container.lastElementChild) { noteHealSkip('no-tail'); return; }
     var max = container.scrollHeight - container.clientHeight;
     // [CUSTOM- at-max 门槛 1px → 32px（PIN_THRESHOLD）：滚轮滚到底时浏览器常落在
     // max−N 而非精确 max，1px 容差太紧、自愈根本不触发，尾巴就一直压着（用户 2026-10-10：
     // "滚动条到底了、Jump 能恢复、滚轮又坏"）。32px 覆盖"滚轮差一格"，仍挡住"往上翻一大段"——
     // #210 教训 2 的"滚轮被吃光"是 160px 宽窗（distance<32 覆盖 pad+32），32px 远窄于它。
-    if (container.scrollTop < max - PIN_THRESHOLD) { return; }
-    if (!NS.dom || !NS.dom.qs || !NS.composer || !NS.composer.refreshHeight) { return; }
+    if (container.scrollTop < max - PIN_THRESHOLD) { noteHealSkip('not-atmax'); return; }
+    if (!NS.dom || !NS.dom.qs || !NS.composer || !NS.composer.refreshHeight) { noteHealSkip('no-api'); return; }
     var composer = NS.dom.qs('composer');
-    if (!composer || !composer.getBoundingClientRect) { return; }
+    if (!composer || !composer.getBoundingClientRect) { noteHealSkip('no-composer'); return; }
     var last = container.lastElementChild;
-    if (!last.getBoundingClientRect) { return; }
+    if (!last.getBoundingClientRect) { noteHealSkip('no-rect'); return; }
     var compRect = composer.getBoundingClientRect();
     // 卡片没显示（相位断开时 display:none ⇒ rect 全 0）：此刻没有可压的内容，不关它的事。
-    if (compRect.height <= 0) { return; }
+    if (compRect.height <= 0) { noteHealSkip('composer-hidden'); return; }
     // [CUSTOM- 变量已是正确值（composer 实高 ≈ --vac-composer-h）⇒ 尾巴被盖不是
     // 「变量失真」，而是视口本身太矮（composer 几乎占满整个视图区）。这时自愈重测毫无用处，只会
     // 反复触发：2026-10-10 日志里 104 次 tail-covered-heal 全在这类状态里打转，还伴随 composer
     // 高度 1px 的震荡。只有变量真的失真（实高比变量高出 ≥2px；2px 容差吸收亚像素取整）才值得
     // 重测 —— 那才是 210 要修的病灶格。
     var composerVar = parseFloat(bodyVar('--vac-composer-h')) || 0;
-    if (Math.abs(compRect.height - composerVar) < 2) { return; }
+    if (Math.abs(compRect.height - composerVar) < 2) { noteHealSkip('var-ok'); return; }
     var lastRect = last.getBoundingClientRect();
-    if (lastRect.bottom <= compRect.top + 1) { return; }
+    if (lastRect.bottom <= compRect.top + 1) { noteHealSkip('clear'); return; }
     // 被压住：先记一笔（记的是**修复前**的现场），再让唯一的写者重测+重写。
     // 重写会触发 reflowNow → reflow → recompute —— healing 闸门保证这条链只尝试一次，
     // 不会"判据不满足 → 修复 → 仍不满足 → 再修复"地打转。
     logScrollState('tail-covered-heal', true);
     healing = true;
+    lastHealSkip = null;
     try { NS.composer.refreshHeight(); } finally { healing = false; }
   }
 

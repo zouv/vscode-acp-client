@@ -33,13 +33,13 @@ npm run dev:host -- "F:\path\to\xxx.code-workspace"   # 指定 .code-workspace �
 
 ```powershell
 # PowerShell / CMD（code 已在 PATH 上）
-code --new-window --extensionDevelopmentPath="D:\Git\zgithub\custom-vscode-acp" "D:\Git\zgithub\custom-vscode-acp"
+code --new-window --extensionDevelopmentPath="<absolute-path-to-this-repo>" "<absolute-path-to-this-repo>"
 
 # Git Bash：编译 + 启动一步到位
-npm run compile && code --new-window --extensionDevelopmentPath="D:/Git/zgithub/custom-vscode-acp" "D:/Git/zgithub/custom-vscode-acp"
+npm run compile && code --new-window --extensionDevelopmentPath="$PWD" "$PWD"
 ```
 
-`code` 不在 PATH 时用全路径：`& "D:\Program Files\Microsoft VS Code\bin\code.cmd" --new-window ...`
+`code` 不在 PATH 时用全路径：`& "<VS Code install>\bin\code.cmd" --new-window ...`
 
 > `code` 不在 PATH 的永久解法：VS Code 命令面板 → `Shell Command: Install 'code' command in PATH`。
 

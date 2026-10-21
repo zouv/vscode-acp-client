@@ -28,6 +28,9 @@ import { composerClient } from '../ui/chat/html/client/composer';
 import { tabsClient } from '../ui/chat/html/client/tabs';
 // [CUSTOM- Times 开关的状态机（按会话记 + 默认值）。
 import { timesClient } from '../ui/chat/html/client/times';
+// [CUSTOM- 新输出自动展开（与 Times 同形态）+ 设置面板。
+import { autoExpandClient } from '../ui/chat/html/client/autoExpand';
+import { settingsPanelClient } from '../ui/chat/html/client/settingsPanel';
 // [CUSTOM- 目录抽屉（草稿页/会话页的 Working directory 浮层）。
 import { directoryMenuClient } from '../ui/chat/html/client/directoryMenu';
 // [CUSTOM- 长任务看门狗。
@@ -380,7 +383,7 @@ function loadClient(
   // [CUSTOM- `sessionMenu` joined the list for its own suite: unlike
   // boot, its IIFE runs nothing at load time (init() is called by boot, and here by
   // the test), so loading it costs the record-layer tests nothing.
-  for (const source of [domClient, iconsClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient]) {
+  for (const source of [domClient, iconsClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, autoExpandClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient]) {
     new Function('window', 'document', source)(win, doc);
   }
   return { NS, metrics, doc, docListeners, jumps, timers, win };
@@ -1010,20 +1013,20 @@ suite('chat client logic: tab strip (stub DOM)', () => {
       return els.tabs.querySelector('.tab-dot') as StubNode;
     };
     // The four tiers the CSS defines, one fixture each.
-    const one = dotFor('/git/pavilion');
+    const one = dotFor('/work/pavilion');
     assert.strictEqual(one.textContent, 'P');
     assert.strictEqual(one.getAttribute('data-len'), '1');
-    assert.strictEqual(one.title, 'Dir: /git/pavilion\nState: Idle');
+    assert.strictEqual(one.title, 'Dir: /work/pavilion\nState: Idle');
 
-    const two = dotFor('/git/story-myriad');
-    assert.strictEqual(two.textContent, 'SM');
+    const two = dotFor('/work/alpha-beta');
+    assert.strictEqual(two.textContent, 'AB');
     assert.strictEqual(two.getAttribute('data-len'), '2');
 
-    const three = dotFor('/git/story-myriad-pavilion');
-    assert.strictEqual(three.textContent, 'SMP');
+    const three = dotFor('/work/alpha-beta-gamma');
+    assert.strictEqual(three.textContent, 'ABG');
     assert.strictEqual(three.getAttribute('data-len'), '3');
 
-    const four = dotFor('/git/alpha-beta-gamma-delta');
+    const four = dotFor('/work/alpha-beta-gamma-delta');
     assert.strictEqual(four.textContent, 'ABGD');
     assert.strictEqual(four.getAttribute('data-len'), '4');
 
@@ -1044,18 +1047,18 @@ suite('chat client logic: tab strip (stub DOM)', () => {
   test('the badge tooltip names the state, ranked like the colour', () => {
     const { NS, els } = tabStrip();
     const dotFor = (over: Record<string, unknown>) => {
-      NS.tabs.setSessions([{ ...summary('s1'), cwd: '/git/pavilion', ...over }]);
+      NS.tabs.setSessions([{ ...summary('s1'), cwd: '/work/pavilion', ...over }]);
       return els.tabs.querySelector('.tab-dot') as StubNode;
     };
-    assert.strictEqual(dotFor({}).title, 'Dir: /git/pavilion\nState: Idle');
-    assert.strictEqual(dotFor({ running: true }).title, 'Dir: /git/pavilion\nState: Turn in progress');
+    assert.strictEqual(dotFor({}).title, 'Dir: /work/pavilion\nState: Idle');
+    assert.strictEqual(dotFor({ running: true }).title, 'Dir: /work/pavilion\nState: Turn in progress');
     // Waiting outranks running: the turn is alive either way, and only this one is stuck on
     // the reader — the colour ranks them the same way.
     assert.strictEqual(
       dotFor({ running: true, waiting: true }).title,
-      'Dir: /git/pavilion\nState: Waiting for your answer');
-    assert.strictEqual(dotFor({ loading: true }).title, 'Dir: /git/pavilion\nState: Loading history');
-    assert.strictEqual(dotFor({ unread: true }).title, 'Dir: /git/pavilion\nState: New output in the background');
+      'Dir: /work/pavilion\nState: Waiting for your answer');
+    assert.strictEqual(dotFor({ loading: true }).title, 'Dir: /work/pavilion\nState: Loading history');
+    assert.strictEqual(dotFor({ unread: true }).title, 'Dir: /work/pavilion\nState: New output in the background');
   });
 
   test('the close button is out of the tab order; exactly one tab is tabbable', () => {
@@ -1298,6 +1301,45 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     const tabs = els.tabs.querySelectorAll('.tab');
     assert.ok(tabs[1].className.includes('active'), 'but the strip already reads as switched');
     assert.strictEqual(els.cwdBtn.textContent, '/work/two', 'and the address bar follows at once');
+  });
+
+  // [CUSTOM- 中键关闭（2026-10-21）：四种关闭入口共用 closeModel；中键的默认行为
+  // （WebView 的自动滚动）必须在 mousedown 里就先按住。
+  test('middle-click closes a session tab through the same closeModel path', () => {
+    const { NS, els } = tabStrip();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.tabs.setSessions([summary('s1')]);
+
+    const tab = els.tabs.querySelectorAll('.tab')[0];
+    const down = { button: 1, defaultPrevented: false, preventDefault: () => { down.defaultPrevented = true; } };
+    tab.dispatch('mousedown', down);
+    assert.strictEqual(down.defaultPrevented, true, 'the middle-button autoscroll is suppressed');
+
+    tab.dispatch('auxclick', {
+      button: 1, target: tab, preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted, [{ type: 'closeSession', sessionId: 's1' }]);
+  });
+
+  test('middle-click on a draft drops it locally; on a restore tab it forgets it', () => {
+    const { NS, els } = tabStrip();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    const dropped: string[] = [];
+    NS.draft = { drop: (id: string) => { dropped.push(id); } };
+
+    NS.tabs.setDrafts([{ draftId: 'd1' }], 'd1');
+    const draft = els.tabs.querySelectorAll('.tab')[0];
+    draft.dispatch('auxclick', { button: 1, target: draft, preventDefault: () => {}, stopPropagation: () => {} });
+    assert.deepStrictEqual(dropped, ['d1'], 'a draft has no session to close');
+    assert.deepStrictEqual(posted, []);
+
+    NS.tabs.setDrafts([], null);
+    NS.tabs.setRestoring([{ agentName: 'Claude Code', sessionId: 'r1', title: 'old' }]);
+    const restore = els.tabs.querySelectorAll('.tab')[0];
+    restore.dispatch('auxclick', { button: 1, target: restore, preventDefault: () => {}, stopPropagation: () => {} });
+    assert.deepStrictEqual(posted, [{ type: 'forgetRestorable', sessionId: 'r1' }]);
   });
 });
 
@@ -1543,6 +1585,31 @@ suite('chat client logic: composer text ownership (stub DOM)', () => {
     assert.strictEqual(stopConfirm.hidden, true, '这一问不该留着');
   });
 
+  test('the send shortcut follows the setting (Enter vs Ctrl/Cmd+Enter)', () => {
+    const { NS, input } = composerWithInput();
+    const posted: Array<Record<string, any>> = [];
+    NS.bridge.post = (m: Record<string, any>) => { posted.push(m); };
+    NS.composer.setFocus(session('s1'), null);
+    const press = (ctrlKey: boolean): void => {
+      (input as unknown as { dispatch: (t: string, e: any) => void })
+        .dispatch('keydown', { key: 'Enter', ctrlKey, shiftKey: false, preventDefault: () => {} });
+    };
+
+    (input as unknown as { value: string }).value = 'hi';
+    press(true);
+    assert.deepStrictEqual(posted, [], 'Ctrl+Enter is a newline under the default');
+    press(false);
+    assert.deepStrictEqual(posted, [{ type: 'sendPrompt', sessionId: 's1', text: 'hi' }]);
+
+    posted.length = 0;
+    NS.composer.applyUiPrefs({ sendKey: 'ctrlEnter' });
+    (input as unknown as { value: string }).value = 'yo';
+    press(false);
+    assert.deepStrictEqual(posted, [], 'plain Enter no longer sends');
+    press(true);
+    assert.deepStrictEqual(posted, [{ type: 'sendPrompt', sessionId: 's1', text: 'yo' }]);
+  });
+
   // [CUSTOM- 回车**只发送、绝不停止**。
   // 用户报："输入框消息发出之后，再按一次 Enter 会触发停止" —— 旧版回车与 Send/Stop 按钮共用
   // 一条路由（running 时 cancel()），而发完消息后光标还在输入框里、手也还在键盘上。
@@ -1680,7 +1747,7 @@ suite('chat client logic: tool-card markdown round trip (stub DOM)', () => {
     const { NS } = loadClient();
     // `ls -la` 与代码片段是这条规则**故意**不碰的：拆了它们会被 md 语法吃掉
     // （缩进变代码块、'#' 开头的注释变标题、'-' 开头的行变列表）。
-    NS.toolCallView.render(toolWithText('```console\ntotal 18\ndrwxr-xr-x 1 zouwei 0 Oct 9 .\n```'), 'u2');
+    NS.toolCallView.render(toolWithText('```console\ntotal 18\ndrwxr-xr-x 1 user 0 Oct 9 .\n```'), 'u2');
     const asked = NS.toolCallView.pendingMarkdownItems() as Array<{ text: string }>;
     assert.ok(asked[0].text.includes('```console'), 'a plain console output stays a code block');
   });
@@ -1762,12 +1829,12 @@ suite('chat client logic: tool-card markdown round trip (stub DOM)', () => {
     const { NS } = loadClient({}, { syncFrames: true });
     const node = NS.toolCallView.render(toolWith({
       items: [{ type: 'content', block: { type: 'text', text: '   ' } }],
-      output: 'total 4\ndrwxr-xr-x 1 zouwei',
+      output: 'total 4\ndrwxr-xr-x 1 user',
     }), 'e6');
     assert.strictEqual(node.querySelector('.tool-text'), null, 'the blank item contributes nothing');
     const raw = node.querySelector('.tool-raw') as StubNode;
     assert.ok(raw, 'the raw output is rendered instead of an empty box');
-    assert.strictEqual(raw.textContent, 'total 4\ndrwxr-xr-x 1 zouwei');
+    assert.strictEqual(raw.textContent, 'total 4\ndrwxr-xr-x 1 user');
   });
 
   test('a visible item wins over the raw output', () => {
@@ -4140,6 +4207,8 @@ suite('chat client logic: connect card (stub DOM, )', () => {
 
   test('the offline card names the agent and offers the button', () => {
     const { NS, els } = cardWith();
+    // 真实面板在收到 boot 之前显示的是 "Starting VAC…" 占位；这条测的是 boot 之后。
+    NS.stateCard.noteBoot({ agentConnected: false, autoConnect: false, focused: false });
     assert.strictEqual(NS.stateCard.phase(), 'disconnected');
     assert.strictEqual(els.stateTitle.textContent, 'Claude Code');
     assert.strictEqual(els.emptyConnect.disabled, false);
@@ -4147,6 +4216,13 @@ suite('chat client logic: connect card (stub DOM, )', () => {
     assert.strictEqual(els.stateError.hidden, true);
     assert.strictEqual(els.stateActions.hidden, false, 'the button is on offer');
     assert.strictEqual(els.autoConnectRow.hidden, false, 'the switch is where you would look for it');
+  });
+
+  test('before the first host message the card says it is loading', () => {
+    const { NS, els } = cardWith();
+    assert.strictEqual(NS.stateCard.phase(), 'booting');
+    assert.strictEqual(els.stateTitle.textContent, 'Starting VAC…');
+    assert.strictEqual(els.stateHint.textContent, 'Loading the chat panel…');
   });
 
   test('the button asks the host and opens no draft of its own', () => {
@@ -4235,20 +4311,17 @@ suite('chat client logic: connect card (stub DOM, )', () => {
     assert.strictEqual(els.autoConnectToggle.checked, false);
   });
 
-  test('auto-connect arms one 1000ms timer and re-checks before firing', () => {
-    const { NS, timers, posted } = cardWith();
+  test('auto-connect connects as soon as the panel opens (no delay)', () => {
+    const { NS, posted } = cardWith();
     NS.stateCard.noteBoot({ agentConnected: false, autoConnect: true, focused: false });
-    const arm = withDelay(timers, 1000);
-    assert.strictEqual(arm.length, 1);
-    arm[0].fn();
     assert.deepStrictEqual(posted, [{ type: 'connectAgent' }]);
   });
 
-  test('boot is delivered twice per document, and only arms once', () => {
-    const { NS, timers } = cardWith();
+  test('boot is delivered twice per document, and only connects once', () => {
+    const { NS, posted } = cardWith();
     NS.stateCard.noteBoot({ agentConnected: false, autoConnect: true, focused: false });
     NS.stateCard.noteBoot({ agentConnected: false, autoConnect: true, focused: false });
-    assert.strictEqual(withDelay(timers, 1000).length, 1);
+    assert.strictEqual(posted.length, 1, 'the second boot must not start a second connection');
   });
 
   test('auto-connect stays out of the way when it should', () => {
@@ -4257,21 +4330,19 @@ suite('chat client logic: connect card (stub DOM, )', () => {
       { agentConnected: true, autoConnect: true, focused: false },
       { agentConnected: false, autoConnect: true, focused: true },
     ]) {
-      const { NS, timers } = cardWith();
+      const { NS, posted } = cardWith();
       NS.stateCard.noteBoot(boot);
-      assert.strictEqual(withDelay(timers, 1000).length, 0, JSON.stringify(boot));
+      assert.strictEqual(posted.length, 0, JSON.stringify(boot));
     }
   });
 
-  test('the timer re-checks, so a user who can already type is not interrupted', () => {
-    const { NS, timers, posted } = cardWith();
-    NS.stateCard.noteBoot({ agentConnected: false, autoConnect: true, focused: false });
-    const arm = withDelay(timers, 1000);
-    // Another surface opened a draft in the meantime: the composer is composable, so
-    // connecting now would be answering a question nobody asked. isComposable is the
-    // DIRECT signal for that (pitfall #25: never a proxy).
+  test('a user who can already type is not interrupted', () => {
+    const { NS, posted } = cardWith();
+    // Another surface opened a draft: the composer is composable, so connecting now
+    // would be answering a question nobody asked. isComposable is the DIRECT signal
+    // for that (pitfall #25: never a proxy).
     NS.composer.isComposable = () => true;
-    arm[0].fn();
+    NS.stateCard.noteBoot({ agentConnected: false, autoConnect: true, focused: false });
     assert.strictEqual(posted.length, 0);
   });
 
@@ -4289,6 +4360,7 @@ suite('chat client logic: connect card (stub DOM, )', () => {
     // it on the body (rather than letting each button watch the phase) also covers the
     // `connecting` phase a local click starts, which never reaches the host.
     const { NS, doc } = cardWith();
+    NS.stateCard.noteBoot({ agentConnected: false, autoConnect: false, focused: false });
     assert.strictEqual(doc.body.getAttribute('data-phase'), 'disconnected');
     NS.stateCard.beginConnect(false);
     assert.strictEqual(doc.body.getAttribute('data-phase'), 'connecting');
@@ -4616,7 +4688,7 @@ suite('chat client logic: markdown 回填分帧（stub DOM, ）', () => {
 // [CUSTOM- 目录抽屉的候选**每次打开都要回头问**。
 //
 // 用户报：「刚通过 Browse 选择的目录（并且发起了对话），但最近使用里没有这个记录」。
-// 真机日志确认那次会话确实建在那个目录里（`session/new` 的 `cwd` 是 `d:\Git\zgithub\custom-marktext`，
+// 真机日志确认那次会话确实建在那个目录里（`session/new` 的 `cwd` 是 `<another workspace>`，
 // 不是本工作区）⇒ 宿主那份"最近用过"里**有**它，问题出在客户端：`choices` 是一次拉取、终身缓存
 // （连 `reset()` 都不清），于是当天新用过的目录永远进不了「Recently used」。
 suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM, ）', () => {
@@ -5336,7 +5408,7 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     assert.deepStrictEqual(posted, [{ type: 'copy', text: 'F:\\\\dev\\\\aki' }]);
   });
 
-  test('会话 tab：Close 与 Rename（初值取行上看得见的标签）；草稿 tab 只给 Close', () => {
+  test('会话 tab：Close / Rename / Copy Session ID（初值取行上看得见的标签）；草稿 tab 只给 Close', () => {
     const { NS, posted } = withEntry();
     const tab = new StubNode('button');
     tab.className = 'tab';
@@ -5347,16 +5419,18 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     tab.appendChild(tabLabel);
 
     const items = NS.contextMenu.itemsFor(tabLabel) as Array<{ label: string; run: () => void }>;
-    assert.strictEqual(labels(items), 'Close / Rename');
+    assert.strictEqual(labels(items), 'Close / Rename / Copy Session ID');
     items[1].run();
     assert.deepStrictEqual(posted, [{ type: 'renameSession', sessionId: 's1', currentTitle: 'alpha one' }],
       '改名的初值就是标签上看得见的标题（与用户看到的一致）');
+    items[2].run();
+    assert.deepStrictEqual(posted[1], { type: 'copy', text: 's1' }, '复制的是数据上的 sessionId，不是标签文字');
 
     const draft = new StubNode('button');
     draft.className = 'tab tab-draft';
     draft.setAttribute('data-draft-id', 'd1');
     const draftItems = NS.contextMenu.itemsFor(draft) as Array<{ label: string }>;
-    assert.strictEqual(labels(draftItems), 'Close', '草稿没有会话可改名');
+    assert.strictEqual(labels(draftItems), 'Close', '草稿没有会话可改名/复制');
   });
 
   test('历史列表行：右键也给 Archive / Delete / Rename（键盘用户的入口）', () => {
@@ -5513,7 +5587,7 @@ suite('chat client logic: 引用栏的当前文件格（stub DOM, ）', () => {
     return { NS, attachments, sent };
   }
 
-  const FILE = { path: 'f:/P4/x/PianoGameplayDefine.cs', name: 'PianoGameplayDefine.cs' };
+  const FILE = { path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs' };
   const chipOf = (att: StubNode) => att.querySelector('.ref-chip');
   const toggleOf = (att: StubNode) => att.querySelector('.ref-toggle')!;
   const labelOf = (att: StubNode) => {
@@ -5528,19 +5602,19 @@ suite('chat client logic: 引用栏的当前文件格（stub DOM, ）', () => {
     assert.strictEqual(h.attachments.hidden, false, '有文件就要显示这一格（那就是"点 + 加进来"的入口）');
     assert.ok(chipOf(h.attachments), '出现了候选格');
     assert.strictEqual(String(toggleOf(h.attachments).textContent), '+', '没引用 ⇒ +');
-    assert.strictEqual(labelOf(h.attachments), 'PianoGameplayDefine.cs');
+    assert.strictEqual(labelOf(h.attachments), 'DemoFile.cs');
   });
 
   test('多行选区 ⇒ tag 末尾带行区间，点 `+` 连区间一起交上去', () => {
     const h = refBar();
     h.NS.composer.setActiveFile({ ...FILE, lineStart: 12, lineEnd: 40 });
-    assert.strictEqual(labelOf(h.attachments), 'PianoGameplayDefine.cs:12-40');
+    assert.strictEqual(labelOf(h.attachments), 'DemoFile.cs:12-40');
     dispatchClick(toggleOf(h.attachments), {});
     const post = h.sent.find(m => m.type === 'attachPath') as Record<string, any>;
     assert.ok(post, '会话页走 attachPath');
     assert.deepStrictEqual(post.paths, [FILE.path]);
     assert.deepStrictEqual(post.meta,
-      [{ name: 'PianoGameplayDefine.cs:12-40', lineStart: 12, lineEnd: 40 }]);
+      [{ name: 'DemoFile.cs:12-40', lineStart: 12, lineEnd: 40 }]);
   });
 
   test('宿主回了附件列表 ⇒ 引用栏那格消失（不在两处显示同一条），移除走附件 chip 的 ×', () => {
@@ -5597,8 +5671,8 @@ suite('chat client logic: 同一文件可引用多段（stub DOM, ）', () => {
     return { NS, attachments, sent };
   }
 
-  const PATH = 'f:/P4/x/PianoGameplayDefine.cs';
-  const NAME = 'PianoGameplayDefine.cs';
+  const PATH = 'd:/work/src/DemoFile.cs';
+  const NAME = 'DemoFile.cs';
   const ref = (lineStart?: number, lineEnd?: number) =>
     ({ path: PATH, name: NAME, ...(lineStart ? { lineStart, lineEnd } : {}) });
   const toggleOf = (att: StubNode) => att.querySelector('.ref-toggle')!;
@@ -5857,5 +5931,199 @@ suite('chat client logic: sub-agent card (stub DOM, )', () => {
     assert.strictEqual(node.querySelector('.subagent-state')!.textContent, 'Needs input');
     assert.strictEqual(node.querySelector('.subagent-state')!.getAttribute('data-state'), 'requires_action');
     assert.strictEqual(node.querySelector('.subagent-cancel')!.hidden, false, '需要用户介入时仍可取消');
+  });
+});
+
+// [CUSTOM- 新输出自动展开（2026-10-21）：只作用于 live 路径（append/patch/updateTool），
+// hydrate 不碰。状态本身在 client/autoExpand.ts，展开动作在 transcriptView。
+suite('chat client logic: auto-expand new output (stub DOM)', () => {
+  function toolView(): Record<string, unknown> {
+    return {
+      toolCallId: 't1', title: 'Run', kind: 'execute', status: 'completed',
+      command: 'ls', locations: [], items: [{ type: 'content', block: { type: 'text', text: 'out' } }],
+    };
+  }
+
+  test('a finalized thought and a tool card arrive expanded when enabled', () => {
+    const { NS } = loadClient();
+    const container = new StubNode('div');
+    NS.transcriptView.init(container);
+    NS.transcriptView.setAutoExpand(true, ['tool', 'thought', 'diff']);
+
+    NS.transcriptView.append({ id: 'th1', kind: 'thought', text: 'thinking', streaming: false, at: 1 }, undefined);
+    const thought = NS.transcriptView.node('th1') as StubNode;
+    assert.strictEqual(thought.open, true, 'a finished reasoning block stays open');
+
+    NS.transcriptView.append({ id: 'e1', kind: 'tool', toolCallId: 't1', at: 2 } as any, toolView());
+    const tool = NS.transcriptView.node('e1') as StubNode;
+    assert.strictEqual((tool.querySelector('.tool-body') as StubNode).hidden, false);
+    assert.strictEqual(tool.querySelector('.tool-head')!.getAttribute('aria-expanded'), 'true');
+  });
+
+  test('disabled keeps the historical defaults', () => {
+    const { NS } = loadClient();
+    const container = new StubNode('div');
+    NS.transcriptView.init(container);
+    NS.transcriptView.setAutoExpand(false, ['tool', 'thought']);
+
+    NS.transcriptView.append({ id: 'th2', kind: 'thought', text: 't', streaming: false, at: 1 }, undefined);
+    assert.strictEqual((NS.transcriptView.node('th2') as StubNode).open, false);
+    NS.transcriptView.append({ id: 'e2', kind: 'tool', toolCallId: 't2', at: 2 } as any, toolView());
+    assert.strictEqual((NS.transcriptView.node('e2')!.querySelector('.tool-body') as StubNode).hidden, true);
+  });
+
+  test('hydrate (history replay) is never auto-expanded', () => {
+    const { NS } = loadClient();
+    const container = new StubNode('div');
+    NS.transcriptView.init(container);
+    NS.transcriptView.setAutoExpand(true, ['thought']);
+    NS.transcriptView.hydrate({
+      sessionId: 's1',
+      entries: [{ id: 'th3', kind: 'thought', text: 'old', streaming: false, at: 1 }],
+    });
+    assert.strictEqual((NS.transcriptView.node('th3') as StubNode).open, false);
+  });
+
+  test('the kinds whitelist is honored: thought on, tool off', () => {
+    const { NS } = loadClient();
+    const container = new StubNode('div');
+    NS.transcriptView.init(container);
+    NS.transcriptView.setAutoExpand(true, ['thought']);
+    NS.transcriptView.append({ id: 'e3', kind: 'tool', toolCallId: 't3', at: 1 } as any, toolView());
+    assert.strictEqual((NS.transcriptView.node('e3')!.querySelector('.tool-body') as StubNode).hidden, true);
+  });
+});
+
+// [CUSTOM- 设置面板（2026-10-21）：左侧分组导航 + 右侧行；改动回传宿主，宿主重发整张表。
+suite('chat client logic: settings panel (stub DOM)', () => {
+  function panel() {
+    const els: Record<string, StubNode> = {
+      settingsBtn: new StubNode('button'),
+      settingsOverlay: new StubNode('div'),
+      settingsNav: new StubNode('div'),
+      settingsBody: new StubNode('div'),
+      settingsClose: new StubNode('button'),
+      // 子面板（模型列表 / JSON 编辑器）
+      settingsSubOverlay: new StubNode('div'),
+      settingsSubTitle: new StubNode('span'),
+      settingsSubBody: new StubNode('div'),
+      settingsSubClose: new StubNode('button'),
+    };
+    (els.settingsOverlay as any).hidden = true;
+    (els.settingsSubOverlay as any).hidden = true;
+    const { NS, docListeners } = loadClient(els);
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.settingsPanel.init();
+    return { NS, els, posted, docListeners };
+  }
+
+  const items = [
+    { key: 'vac.autoConnectOnOpen', group: 'general', label: 'Connect automatically', type: 'boolean', value: true },
+    { key: 'panel.autoExpandDefault', group: 'chat', label: 'Auto-expand', type: 'boolean', value: false },
+    { key: 'panel.autoExpandKinds.tool', group: 'chat', label: 'Tool calls', type: 'boolean', value: false, indent: true },
+    { key: 'vac.logTraffic', group: 'advanced', label: 'Log ACP traffic', type: 'boolean', value: true },
+    { key: 'action.openLog', group: 'advanced', label: 'Open log file', type: 'action' },
+  ];
+
+  test('the gear opens the panel and asks the host for the current values', () => {
+    const { els, posted } = panel();
+    els.settingsBtn.dispatch('click', {});
+    assert.strictEqual((els.settingsOverlay as any).hidden, false);
+    assert.deepStrictEqual(posted, [{ type: 'getSettings' }]);
+  });
+
+  test('the left nav shows only groups that have items, and switches the body', () => {
+    const { NS, els } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems(items);
+    const tabs = els.settingsNav.querySelectorAll('.settings-tab');
+    assert.deepStrictEqual(tabs.map(t => t.textContent), ['General', 'Chat', 'Advanced'],
+      'Appearance has no items here, so it is not offered');
+    assert.ok(els.settingsBody.textContent.includes('Connect automatically'), 'general is the first panel');
+
+    tabs[1].dispatch('click', {});
+    assert.ok(els.settingsBody.textContent.includes('Auto-expand'));
+    assert.ok(!els.settingsBody.textContent.includes('Connect automatically'));
+  });
+
+  test('a checkbox and an action go back to the host as messages', () => {
+    const { NS, els, posted } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems(items);
+    posted.length = 0;
+
+    const box = els.settingsBody.querySelector('.settings-check') as StubNode;
+    (box as any).checked = false;
+    box.dispatch('change', {});
+    assert.deepStrictEqual(posted, [{ type: 'setSetting', key: 'vac.autoConnectOnOpen', value: false }]);
+
+    const tabs = els.settingsNav.querySelectorAll('.settings-tab');
+    tabs[2].dispatch('click', {});
+    const action = els.settingsBody.querySelector('.settings-action') as StubNode;
+    action.dispatch('click', {});
+    assert.deepStrictEqual(posted[1], { type: 'settingAction', action: 'openLog' });
+  });
+
+  test('the custom-model editor opens in a sub-panel and round-trips a list', () => {
+    const { NS, els, posted } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems([
+      {
+        key: 'vac.customModels', group: 'advanced', label: 'Custom models', type: 'models',
+        value: [{ modelId: 'gpt-6-luna[1m]', name: 'Luna' }],
+      },
+    ]);
+    // 主面板只放一行摘要 + Edit…，不内联长列表。
+    assert.strictEqual(els.settingsBody.querySelectorAll('.settings-model-row').length, 0);
+    (els.settingsBody.querySelector('.settings-action') as StubNode).dispatch('click', {});
+    assert.strictEqual((els.settingsSubOverlay as any).hidden, false);
+
+    const rows = els.settingsSubBody.querySelectorAll('.settings-model-row');
+    assert.strictEqual(rows.length, 1);
+    const inputs = rows[0].querySelectorAll('input');
+    inputs[1].value = 'Luna 2';
+    inputs[1].dispatch('change', {});
+    assert.deepStrictEqual(posted[posted.length - 1], {
+      type: 'setSetting',
+      key: 'vac.customModels',
+      value: [{ modelId: 'gpt-6-luna[1m]', name: 'Luna 2' }],
+    });
+  });
+
+  test('invalid JSON is reported inline and never sent (sub-panel Save)', () => {
+    const { NS, els, posted } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems([
+      { key: 'vac.agents', group: 'advanced', label: 'Agents', type: 'json', value: { a: { command: 'npx' } } },
+    ]);
+    (els.settingsBody.querySelector('.settings-action') as StubNode).dispatch('click', {});
+    posted.length = 0;
+    const area = els.settingsSubBody.querySelector('.settings-json') as StubNode;
+    const buttons = els.settingsSubBody.querySelectorAll('.settings-action');
+    area.value = '{ nope';
+    buttons[0].dispatch('click', {});
+    assert.strictEqual(posted.length, 0, 'a broken edit must not reach the host');
+    assert.strictEqual(els.settingsSubBody.querySelector('.settings-json-error')!.hidden, false);
+
+    area.value = '{"a":{"command":"node"}}';
+    buttons[0].dispatch('click', {});
+    assert.deepStrictEqual(posted, [
+      { type: 'setSetting', key: 'vac.agents', value: { a: { command: 'node' } } },
+    ]);
+    assert.strictEqual((els.settingsSubOverlay as any).hidden, true, 'Save closes the editor');
+  });
+
+  test('Escape closes it, and the overlay click closes it', () => {
+    const { NS, els, docListeners } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems(items);
+    const esc = { key: 'Escape', preventDefault() {}, stopPropagation() {} };
+    for (const fn of docListeners.keydown ?? []) { fn(esc); }
+    assert.strictEqual((els.settingsOverlay as any).hidden, true, 'Escape closes the panel');
+
+    NS.settingsPanel.open();
+    els.settingsOverlay.dispatch('click', { target: els.settingsOverlay });
+    assert.strictEqual((els.settingsOverlay as any).hidden, true, 'clicking the backdrop closes it');
   });
 });

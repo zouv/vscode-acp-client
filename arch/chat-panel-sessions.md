@@ -95,7 +95,7 @@ node scripts/capture-acp-replay.mjs --out src/test/fixtures/claude-code-session-
 
 **一个被顺带修掉的现网 bug**：历史选择器展示的是 agent 侧 `session/list`（**跨目录**），
 而点开时宿主从不传 cwd ⇒ 告诉 agent 的是**当前工作区**，
-一条属于 `D:\Git\zdev\...\ai-broadcast-studio` 的会话会被当成住在这里重开。
+一条属于 `<another workspace>` 的会话会被当成住在这里重开。
 行的 `cwd` 早就取到了（只用在 tooltip 上），只是没被使用。现在客户端在行上写 `data-open-cwd` 并回传。
 **注意**：这条链还有第二层兜底——`loadSession` 会查本地历史缓存；
 但**跨工作区的会话不在那个缓存里**（`workspaceState` 是按工作区分桶的），
@@ -177,7 +177,7 @@ key 由宿主算好。
 | 控件形态 | **一个 chip 兼管两件事**（`📁 All folders ▾` / `📁 <目录名> ▾`）：点开菜单，首项 `All folders` 就是关闭过滤。"开启"与"选一个目录"本来就是同一个动作，拆成"勾选框 + 下拉框"是两步操作 |
 | 何时出现 | 候选 ≥ 2 个目录，**或过滤正生效**（否则用户关不掉它）。用 `hidden` 属性（`.picker-btn` 的 `display` 被全局 `[hidden]{display:none!important}` 压住，这是 pitfall #13 的正确用法） |
 | 候选从哪来 | **只来自列表里真实出现过的目录** + 当前会话的目录（**0 条也在**）。过滤一个列表里没有会话的目录只会得到空列表，所以「浏览…」在这里是死路；而"默认目录不在菜单里"会像一个坏掉的控件。**排序：名称字母序**（[142]：原先 current → 条数降序 → 名称，前两个键把字母序盖住了，看起来就像"根本没排序"；当前目录只保留 `current` 标记——客户端据此高亮它——不再置顶） |
-| 候选怎么显示 | `label` 而不是 `name`：**两个目录同名时标签向左长**（`git/UniverseEditor` vs `zdev/UniverseEditor`）——第一个真实列表里 "UniverseEditor" 就出现了两次（同一仓库的两份检出），两个一模一样的标签根本没法选。唯一的名字保持原样（不长） |
+| 候选怎么显示 | `label` 而不是 `name`：**两个目录同名时标签向左长**（`work/Project` vs `archive/Project`）——第一个真实列表里 "Project" 就出现了两次（同一仓库的两份检出），两个一模一样的标签根本没法选。唯一的名字保持原样（不长） |
 | **点击落在哪里，要问派发时的路径** | 关闭判定用 `event.composedPath()`，**不是 `drawer.contains(event.target)`**：选中目录会重建菜单行，把正在冒泡的那个按钮摘下来，而 `contains` 对游离节点恒为 false ⇒ 这次点击被判成"点了外面"、**整个列表关掉**（用户复验当场发现的那个 bug）。派发路径在事件派发瞬间就固定了，所以它仍然答得出"这次点击在不在抽屉里"。完整教训见 `pitfalls.md` #28 |
 | 目录同一性 | `historyDirs.directoryKey`：反斜杠→正斜杠、去尾分隔符（`D:\x\` = `D:\x`；`C:\`/`C:`/`C:/` 都折成 `c:`）、**大小写只在 win32/darwin 折叠**（linux 的 `/Home` 与 `/home` 是两个目录）。**刻意不用 `path.normalize`**：它在不同平台上行为不同，会让行为与测试都变成环境相关的 |
 | 谁算 key | **宿主**。客户端只比较两个 key —— 于是"这两个路径算不算同一个目录"只有一个地方需要想清楚。列表本来就在客户端，**换目录不产生任何往返**（那会是一次 `session/list`） |

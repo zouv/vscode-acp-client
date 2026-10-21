@@ -23,6 +23,8 @@ export function body(surface: SurfaceKey = 'view'): string {
   <div id="tabStrip" class="tab-strip">
     <div id="tabs" class="tabs" role="tablist"></div>
     <button id="newTab" class="tab-new" title="New session" aria-label="New session">+</button>
+    <!-- [CUSTOM- 设置入口（2026-10-21）。与 + 一样是 tab 条带上的固定动作，不随 tab 滚动。 -->
+    <button id="settingsBtn" class="tab-settings" title="Settings" aria-label="Settings"></button>
   </div>
 
   <div id="sessionHeader" class="session-header">
@@ -36,6 +38,11 @@ export function body(surface: SurfaceKey = 'view'): string {
          同一份数据在底部已经有一个更省地方的呈现（圆环），顶部这一条只是重复占位。 -->
     <!-- [CUSTOM- 文字 'Times' 改成图标（时钟，由 times.ts 在 init 时挂上：
          icons.ts 是图标的唯一来源）。tooltip 说明它做什么，.off 的透明度表达开关状态。 -->
+    <!-- [CUSTOM- 新输出自动展开（2026-10-21）：挨在 Times 左边，同一组右侧动作。
+        图标由 autoExpand.ts 在 init 时挂上；受影响的卡片类型在设置面板里勾选。 -->
+    <button id="autoExpandBtn" class="nest-toggle"
+            title="Expand cards as new output arrives"
+            aria-label="Auto-expand new output"></button>
     <button id="timeToggle" class="nest-toggle"
             title="Show the wall-clock time of each record"
             aria-label="Show record times"></button>
@@ -146,8 +153,8 @@ export function body(surface: SurfaceKey = 'view'): string {
       <div id="stateCard" class="state-card" role="status" aria-busy="false">
         <!-- 固定高度的转圈槽位：连接中之外它空着，但高度不变，标题不会上下跳。 -->
         <div class="state-head"><span id="stateBusy" class="spinner" hidden></span></div>
-        <p id="stateTitle" class="state-title"></p>
-        <p id="stateHint" class="state-hint"></p>
+        <p id="stateTitle" class="state-title">Starting VAC…</p>
+        <p id="stateHint" class="state-hint">Loading the chat panel…</p>
         <p id="stateError" class="state-error" hidden></p>
         <div id="stateActions" class="state-actions">
           <button id="emptyConnect" class="state-connect">Connect Claude Code</button>
@@ -274,6 +281,36 @@ export function body(surface: SurfaceKey = 'view'): string {
   <div id="imageLightbox" class="image-lightbox" hidden>
     <button class="image-lightbox-close" title="Close" aria-label="Close">&#x2715;</button>
     <img class="image-lightbox-img" alt="">
+  </div>
+
+  <!-- [CUSTOM- 设置面板（2026-10-21）：遮罩 + 居中面板；左侧分组导航、右侧设置行。
+       内容全部由 client/settingsPanel.ts 生成，宿主是唯一写者。 -->
+  <div id="settingsOverlay" class="settings-overlay" hidden>
+    <div id="settingsPanel" class="settings-panel" role="dialog" aria-modal="true" aria-label="Settings">
+      <div class="settings-head">
+        <span class="settings-title">Settings</span>
+        <button id="settingsClose" class="settings-close" type="button"
+                title="Close settings" aria-label="Close settings">&#x2715;</button>
+      </div>
+      <div class="settings-main">
+        <div id="settingsNav" class="settings-nav" role="tablist" aria-orientation="vertical"></div>
+        <div id="settingsBody" class="settings-body" role="tabpanel"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- [CUSTOM- 设置子面板（2026-10-21）：自定义模型 / Agent 配置这类可能很长的编辑器
+       单独弹一层，避免把设置主面板撑高。 -->
+  <div id="settingsSubOverlay" class="settings-overlay settings-sub-overlay" hidden>
+    <div id="settingsSubPanel" class="settings-panel settings-sub-panel"
+         role="dialog" aria-modal="true" aria-label="Settings editor">
+      <div class="settings-head">
+        <span id="settingsSubTitle" class="settings-title"></span>
+        <button id="settingsSubClose" class="settings-close" type="button"
+                title="Close" aria-label="Close">&#x2715;</button>
+      </div>
+      <div id="settingsSubBody" class="settings-body"></div>
+    </div>
   </div>
 </body>
 </html>`;

@@ -113,6 +113,10 @@ export interface RecoverableSession {
   sessionId: string;
   cwd?: string;
   title?: string;
+  /** [CUSTOM- 写下这条快照时所在的 IDE（VS Code / Insiders / VSCodium…）。
+   * 各 fork 默认各有 userData 目录，快照不会串；但 portable / 共享 --user-data-dir 时会，
+   * 所以每条自带环境名，卡片上标出来。 */
+  app?: string;
 }
 
 /** [CUSTOM- 重开面板时的策略：每次问 / 直接恢复 / 不问也不恢复。 */
@@ -138,6 +142,53 @@ export interface UiPrefs {
   // 侧栏里是**这个会话**的对话大纲，A 开着不代表 B 要开着（用户明确要求）。空表 = 还没有任何记录。
   outlineOpenBySession?: Record<string, boolean>;
   outlineOpenDefault?: boolean;
+  // [CUSTOM- 「新输出自动展开」（2026-10-21）：与 Times 同一形态 ——
+  // autoExpandBySession 记用户在那个会话里拨的值，autoExpandDefault 是没有记录的会话的默认。
+  // autoExpandKinds 是**全局**的卡片类型白名单（tool / thought / diff），来自设置面板。
+  autoExpandBySession?: Record<string, boolean>;
+  autoExpandDefault?: boolean;
+  autoExpandKinds?: string[];
+  // [CUSTOM- 自动展开后的卡片**最大高度**（px，0 = 不限）。超出部分在卡片内部滚动。
+  // 只作用于"自动展开"的那几张卡；用户手动点开的卡不受限。
+  autoExpandToolHeight?: number;
+  autoExpandThoughtHeight?: number;
+  // [CUSTOM- 子代理工具卡紧跟父卡分组显示（true = 平铺）。默认 undefined = 分组。
+  flatTools?: boolean;
+  // [CUSTOM- 输入卡最大宽度 / 输入框最大高度（px）。0/undefined = 用 CSS 默认值。
+  composerMaxWidth?: number;
+  inputMaxHeight?: number;
+  // [CUSTOM- 发送快捷键：enter（默认）或 ctrlEnter。
+  sendKey?: 'enter' | 'ctrlEnter';
+  // [CUSTOM- 每个 agent 的默认模型（新建会话时套用）；空串/缺省 = 由 agent 决定。
+  defaultModelByAgent?: Record<string, string>;
+}
+
+/** [CUSTOM- 设置面板的分组。左侧导航按这个顺序排；没有条目的分组不显示。 */
+export type SettingsGroup = 'general' | 'chat' | 'appearance' | 'advanced';
+
+export interface SettingOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * [CUSTOM- 设置面板的一行。宿主是**唯一写者**：它按 key 决定写 VS Code 配置还是面板 UiPrefs；
+ * 客户端只渲染与回传。`type: 'action' | 'info'` 的行没有 value（按钮 / 只读信息）。
+ */
+export interface SettingItem {
+  key: string;
+  group: SettingsGroup;
+  label: string;
+  description?: string;
+  type: 'boolean' | 'select' | 'number' | 'text' | 'action' | 'info' | 'json' | 'models';
+  /** [CUSTOM- boolean / string / number；`json` 是对象、`models` 是数组。客户端按 type 解释。 */
+  value?: unknown;
+  options?: SettingOption[];
+  warning?: string;
+  /** `action` 行的按钮文案（缺省 = "Run"）。 */
+  actionLabel?: string;
+  /** 子项：卡片类型复选框缩进显示在主开关下面。 */
+  indent?: boolean;
 }
 
 /**
@@ -196,7 +247,9 @@ export type ExtToChat =
   // [CUSTOM- 大纲钉住/宽度偏好，随 boot 一起带回（跨窗口重载存活）。
   // [CUSTOM- 外加 tab 栏的手工顺序（同一条记录）。
   // [CUSTOM- 外加 Times 的按会话记录 + 默认值（同一条记录）。
-  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean }
+  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string> }
+  // [CUSTOM- 设置面板的数据（回复 getSettings，也在每次 setSetting 之后重发）。宿主是唯一写者。
+  | { type: 'settings'; items: SettingItem[] }
   // 历史会话列表（回复 `listHistory`）。
   // `source` 说明这份列表从哪来：agent 侧 `session/list`，还是本地 workspaceState 缓存
   // （未连接时不去 spawn agent，见 ChatPanelHost.handleListHistory）。
@@ -277,7 +330,11 @@ export type ChatToExt =
   // 由宿主**合并**（重建会把对方那一半抹掉）。缺的字段 = 这一轮没改它。
   // [CUSTOM- Times 同样走这条（第三个写者）：timesBySession 整份发上来
   // （与 tabOrder 同一形态 —— 顺序与开关都是"一整张表"，逐条 delta 反而要宿主维护版本）。
-  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean }
+  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string> }
+  // [CUSTOM- 设置面板：宿主是唯一写者（配置项写 VS Code 设置，面板项写 UiPrefs）。
+  | { type: 'getSettings' }
+  | { type: 'setSetting'; key: string; value: unknown }
+  | { type: 'settingAction'; action: string }
   // [CUSTOM- 状态卡上的自动连接开关。**非会话作用域**（正是没有会话时
   // 才需要它），所以必须放在 verifySession 守卫**之前**处理，与 setUiPref 同一位置。
   | { type: 'setAutoConnect'; value: boolean }

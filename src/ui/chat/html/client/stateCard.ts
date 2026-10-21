@@ -38,21 +38,24 @@ export const stateCardClient = `
   // 连接成功后由 boot 消费（见 boot 的 case 'connection'）。
   var draftIntent = false;
   var armed = false;
-  var armTimer = null;
+  // [CUSTOM- 收到过宿主的 boot（或 connection）消息没有 —— 没收到前显示 booting 占位。
+  var booted = false;
   var slowTimer = null;
   // [CUSTOM- 连接中显示的东西：agent 最近一行 stderr（说明为什么在等）与秒表。
   var detail = '';
   var connectStartedAt = 0;
   var tickTimer = null;
 
-  // [CUSTOM- 500ms 太赶：面板刚渲染完就自动连接，用户还没看清这张卡片上
-  // 写着什么。1s 让"卡片出现 → 开始连接"有个可感知的先后（用户要求）。
-  var AUTO_CONNECT_DELAY_MS = 1000;
+  // [CUSTOM- 打开面板即自动连接（2026-10-21）：原来的 1s 等待已去掉（用户要求）。
   // 超过这么久还没有回话时**不谎报失败**：ensureConnected 本身没有超时，首次 npx 下载
   // 可以几分钟。只把按钮放开（让用户能再点一次）并说明原因——谎报失败比慢更糟。
   var SLOW_CONNECT_MS = 45000;
 
   var TITLES = {
+    // [CUSTOM- 首帧占位（2026-10-21）：面板打开到收到第一条 host 消息之间，
+    // 客户端脚本还没跑起来 —— body.ts 里已经把同样的文案静态写好了，这里负责 JS 接管后
+    // 继续显示同一句话，直到 boot/connection 到达。用户看到的"黑屏"就是这一格。
+    booting: 'Starting VAC\\u2026',
     disconnected: 'Claude Code',
     connecting: 'Connecting to Claude Code\\u2026',
     // [CUSTOM- 不是 'Connected to Claude Code'：那串字在扫读时会被当成
@@ -63,6 +66,7 @@ export const stateCardClient = `
     creating: 'Creating this session\\u2026'
   };
   var HINTS = {
+    booting: 'Loading the chat panel\\u2026',
     disconnected: 'Connect to start a session in this panel.',
     connecting: 'Starting the agent process. npx may need to download the package the first time.',
     ready: 'Type your first message below to start a session.',
@@ -91,7 +95,10 @@ export const stateCardClient = `
     var parts = [];
     for (var i = 0; i < recoverSessions.length && i < 3; i++) {
       var s = recoverSessions[i] || {};
-      parts.push(s.title || String(s.sessionId || '').slice(0, 8) || 'session');
+      var label = s.title || String(s.sessionId || '').slice(0, 8) || 'session';
+      // [CUSTOM- 只有跨 IDE 环境的那几条才带 app（宿主已把与当前环境相同的剥掉）。
+      if (s.app) { label += ' (' + s.app + ')'; }
+      parts.push(label);
     }
     if (recoverSessions.length > 3) { parts.push('\u2026'); }
     return parts.join(' \u00b7 ');
@@ -105,6 +112,9 @@ export const stateCardClient = `
     // （那时 Connect 按钮该回来），而不是把用户留在一张永远转圈的卡片上。
     if (creating && connected) { return 'creating'; }
     if (connected) { return 'ready'; }
+    // 还没收到宿主的任何消息：显示"正在加载"，而不是一张空的/黑的卡片。
+    // 放在最后：任何已发生的相位（连接中/已连接）都优先于占位。
+    if (!booted) { return 'booting'; }
     return 'disconnected';
   }
 
@@ -120,7 +130,7 @@ export const stateCardClient = `
     var p = phase();
     // [CUSTOM- 「在等」的两态：连接中 / 建会话中。转圈、aria-busy 与"按钮退场"
     // 三条都按它算 —— 免得两个相位各写一遍、迟早漏一处。
-    var waiting = (p === 'connecting' || p === 'creating');
+    var waiting = (p === 'connecting' || p === 'creating' || p === 'booting');
     var asking = p === 'restore';
     setText(els.title, asking ? restoreTitle() : TITLES[p]);
     // [CUSTOM- 连接中若拿到了 agent 的 stderr（npx 在下载那几行），就**用它**代替
@@ -142,7 +152,7 @@ export const stateCardClient = `
     }
     // ready 态的按钮整块退场（连同它的间距），不是只把它藏起来。[195] 建会话中同理：
     // 那一刻按 Connect 没有意义（而且 connect 按钮的相位文案会跟卡片的标题打架）。
-    if (els.actions) { els.actions.hidden = asking || p === 'ready' || p === 'creating'; }
+    if (els.actions) { els.actions.hidden = asking || p === 'ready' || p === 'creating' || p === 'booting'; }
     // [CUSTOM- 提问那一组自己一套按钮 + 一行"记住我的选择"。
     if (els.restoreActions) { els.restoreActions.hidden = !asking; }
     if (els.restoreAccept) {
@@ -153,7 +163,7 @@ export const stateCardClient = `
     // 已连接时也不问"要不要自动连接"：连上了，用户要的是
     // 去下面打字，而开关管的是"下次打开这个面板"，留在这儿只是噪音。它仍然只在**未连接**时
     // 出现——那正是用户会想关掉它的时刻。
-    if (els.autoRow) { els.autoRow.hidden = asking || p === 'ready' || p === 'creating'; }
+    if (els.autoRow) { els.autoRow.hidden = asking || p === 'ready' || p === 'creating' || p === 'booting'; }
     if (els.card) { els.card.setAttribute('aria-busy', waiting ? 'true' : 'false'); }
     // [CUSTOM- 相位是**整块面板**的状态，不只属于卡片：header 上的按钮要不要
     // 露出来（未连接时只剩历史和地址）由 CSS 按这个属性决定。写在 body 上，而不是让每个
@@ -214,6 +224,7 @@ export const stateCardClient = `
   }
 
   function onConnection(message) {
+    booted = true;
     var state = message && message.state;
     if (state === 'connecting') {
       connecting = true;
@@ -246,6 +257,8 @@ export const stateCardClient = `
   // agentConnected is what says the process is DOWN (its socket died), which no
   // connection phase can express.
   function setConnected(value) {
+    // 宿主已经说话了 ⇒ 不再显示 booting 占位。
+    booted = true;
     connected = value === true;
     if (connected) { connecting = false; clearSlowTimer(); }
     render();
@@ -287,12 +300,13 @@ export const stateCardClient = `
   }
 
   /**
-   * Arm the auto-connect timer, once per document. Re-checked when it fires:
-   * the panel may have connected, or the user may already be typing in another
-   * draft, by the time 500ms are up.
+   * [CUSTOM- 打开面板即自动连接（2026-10-21，用户要求去掉原来的 1s 等待）。
+   * 仍然**立刻复查**一次：boot 会在同一个文档上投递两次，且用户可能已经能打字
+   * （isComposable 是直接信号，pitfall #25）。
    */
   function noteBoot(info) {
     var boot = info || {};
+    booted = true;
     connected = boot.agentConnected === true;
     if (boot.autoConnect !== undefined) { setAutoConnect(boot.autoConnect === true); }
     render();
@@ -301,13 +315,8 @@ export const stateCardClient = `
     if (boot.focused === true) { return; }
     if (!autoConnect || connected || connecting) { return; }
     armed = true;
-    armTimer = window.setTimeout(function () {
-      armTimer = null;
-      if (!autoConnect || connected || connecting) { return; }
-      // The direct signal for "the user can already type" (pitfall #25: never a proxy).
-      if (NS.composer && NS.composer.isComposable && NS.composer.isComposable()) { return; }
-      beginConnect(false);
-    }, AUTO_CONNECT_DELAY_MS);
+    if (NS.composer && NS.composer.isComposable && NS.composer.isComposable()) { return; }
+    beginConnect(false);
   }
 
   /** Consume the '+' intent: true exactly once, if it was pressed while offline. */
@@ -373,6 +382,7 @@ export const stateCardClient = `
    * 'askable' 由 boot 算（只有它知道有没有聚焦会话/草稿），本模块只按它决定画不画提问态。
    */
   function setRestore(payload) {
+    booted = true;
     var next = (payload && payload.sessions) || [];
     recoverSessions = next;
     restorePref = (payload && payload.pref) || 'ask';
@@ -384,7 +394,7 @@ export const stateCardClient = `
     init: init,
     // [CUSTOM- 会话恢复：喂数据 + 问"现在是不是该问用户"。
     setRestore: setRestore,
-    setRestorePref: function (value) { restorePref = value || 'ask'; render(); },
+    setRestorePref: function (value) { booted = true; restorePref = value || 'ask'; render(); },
     isRestorePending: function () { return phase() === 'restore'; },
     noteBoot: noteBoot,
     setConnected: setConnected,

@@ -27,10 +27,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     permissionBridge?: PermissionBridge,
     globalState?: vscode.Memento,
     elicitationBridge?: ElicitationBridge,
+    // [CUSTOM- 扩展的 globalStorage：设置面板的「打开/清除 agent 运行时缓存」用。
+    storageRoot?: string,
   ) {
     this.host = new ChatPanelHost(
       extensionUri, sessionManager, sessionUpdateHandler, permissionBridge, globalState, elicitationBridge,
     );
+    this.host.setStorageRoot(storageRoot);
     this.editor = new ChatEditorPanel(this.host, sessionManager, extensionUri, () => this.context());
     sessionManager.on('active-session-changed', () => this.syncFocus());
   }
@@ -43,6 +46,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       this.view = null;
     });
     log('chat-view: resolving sidebar chat view');
+    // [CUSTOM- 先拉 agent，再渲染面板：首次连接慢在 npx 冷启动（实测 initialize 36s），
+    // 这段等待应当和 webview 渲染重叠，而不是排在它后面。
+    this.host.prewarm();
     this.host.attach(webviewView, this.context());
   }
 
@@ -55,6 +61,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   openEditorChat(): void {
+    // [CUSTOM- 编辑区是第二种 surface：从命令/标签栏打开时同样先预热（见 prewarm）。
+    this.host.prewarm();
     this.editor.open();
   }
 

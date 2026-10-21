@@ -11,12 +11,15 @@
 // · 两个 surface（侧边栏视图 / 编辑区面板）共享本实例：`post()` 广播、`boot` 只回给发起者
 // （，见 ChatSurface.ts）。
 import * as vscode from 'vscode';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { ContentBlock, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
 
 import type { SessionManager, SessionInfo } from '../../core/SessionManager';
 import type { SessionUpdateHandler, SessionUpdateListener } from '../../handlers/SessionUpdateHandler';
-import { log } from '../../utils/Logger';
+import { log, logFilePath } from '../../utils/Logger';
+import { buildStamp, readPackageVersion } from '../../utils/BuildInfo';
 import { renderChatHtml, createNonce } from './html';
 import { SafeMarkdown } from './markdown';
 // [CUSTOM- 回放里文件引用是一段文本（`[@名](file:///…)`），得先认出来。
@@ -33,13 +36,15 @@ import type {
   RestoreChoice,
   SessionMeta,
   SessionSummary,
+  SettingItem,
+  SettingOption,
   TranscriptSnapshotWire,
   UiPrefs,
 } from './protocol';
 // [CUSTOM- 自定义模型读取迁到 config 层（SessionManager 也要读同一份）。
-import { readCustomModels, type CustomModel } from '../../config/CustomModels';
+import { readCustomModels, normalizeCustomModels, type CustomModel } from '../../config/CustomModels';
 import type { IChatPanel, PanelContext } from './panelContract';
-import { primaryAgentName } from '../../config/AgentConfig';
+import { primaryAgentName, getAgentNames } from '../../config/AgentConfig';
 import { viewSurface, type ChatSurface, type SurfaceKey } from './ChatSurface';
 // [CUSTOM- 会话状态通知（等待权限 / 等待表单 / 轮次完成）。宿主只认这个类型，
 // 测试塞假 channel；真实的 vscode 通知调用在下面（vscodeNoticeChannel —— 本文件不 import 它
@@ -268,6 +273,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // 草稿页在自己的显式选择之前要先 `await` 它落地，否则两个 setConfigOption 谁后到谁赢
   // （用户刚选的模式可能被"默认模式"盖回去）。
   private readonly modeApply: Map<string, Promise<void>> = new Map();
+  // [CUSTOM- 每个 agent 的默认模型（设置面板）也只在**新建**会话时套用；
+  // 与 modeApply 同一形态：草稿页的显式选择要排在它之后。
+  private readonly modelApply: Map<string, Promise<void>> = new Map();
 
   // [CUSTOM- 轮次之外还在干活的后台子任务（见 noteBackgroundTask）。
   // 存在的理由：`running` 原本只看"轮次请求还没返回"，而 Claude Code 的后台子任务（Task 工具
@@ -374,6 +382,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       if (origin === 'new') {
         const applied = this.applyRememberedMode(sessionId);
         this.modeApply.set(sessionId, applied);
+        // [CUSTOM- 默认模型（设置面板）同样只套用到新建会话；草稿页的选择排在它后面。
+        this.modelApply.set(sessionId, this.applyRememberedModel(sessionId));
       }
     });
     on('session-closed', (sessionId: string, _agentName: string, reason: CloseReason) => {
@@ -401,6 +411,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       this.turnSeq.delete(sessionId);
       // [CUSTOM- …and a mode application that never got awaited.
       this.modeApply.delete(sessionId);
+      this.modelApply.delete(sessionId);
       // [CUSTOM- …and any wait on a background task of this session.
       this.endBackgroundTask(sessionId, 'closed');
       // [CUSTOM- Session ids are never reused: drop the title bookkeeping too.
@@ -468,6 +479,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       vscode.workspace.onDidChangeConfiguration(e => {
         if (e.affectsConfiguration(AUTO_CONNECT_KEY)) { this.postAutoConnectPref(); }
         if (e.affectsConfiguration(RESTORE_KEY)) { this.postRestorePref(); }
+        // [CUSTOM- 设置面板里的配置项（自动批准 / 协议日志 / 默认目录）也可能在
+        // VS Code 的 Settings UI 里被改：面板上的控件不能显示过期值。
+        if (e.affectsConfiguration('vac')) { this.postSettings(); }
       }),
     );
     // [CUSTOM- 编辑器里"当前打开的文件/选区"→ 输入框的引用栏（见 pushActiveFile）。
@@ -841,6 +855,18 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // [CUSTOM- 大纲侧栏的"按会话开/关"（第四个写者，同一形状）。
         const outlineOpenBySession = (msg as { outlineOpenBySession?: unknown }).outlineOpenBySession;
         const outlineOpenDefault = (msg as { outlineOpenDefault?: unknown }).outlineOpenDefault;
+        // [CUSTOM- 新输出自动展开（第五个写者，同一形状：按会话 + 默认值 + 全局卡片类型）。
+        const autoExpandBySession = (msg as { autoExpandBySession?: unknown }).autoExpandBySession;
+        const autoExpandDefault = (msg as { autoExpandDefault?: unknown }).autoExpandDefault;
+        const autoExpandKinds = (msg as { autoExpandKinds?: unknown }).autoExpandKinds;
+        const autoExpandToolHeight = (msg as { autoExpandToolHeight?: unknown }).autoExpandToolHeight;
+        const autoExpandThoughtHeight = (msg as { autoExpandThoughtHeight?: unknown }).autoExpandThoughtHeight;
+        // [CUSTOM- 2026-10-21 第二批设置：子代理分组、输入卡尺寸、发送键、默认模型。
+        const flatTools = (msg as { flatTools?: unknown }).flatTools;
+        const composerMaxWidth = (msg as { composerMaxWidth?: unknown }).composerMaxWidth;
+        const inputMaxHeight = (msg as { inputMaxHeight?: unknown }).inputMaxHeight;
+        const sendKey = (msg as { sendKey?: unknown }).sendKey;
+        const defaultModelByAgent = (msg as { defaultModelByAgent?: unknown }).defaultModelByAgent;
         const next: UiPrefs = {
           outlineMode: mode === undefined
             ? previous.outlineMode
@@ -861,11 +887,60 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         if (openMap !== undefined) { next.outlineOpenBySession = openMap; }
         const openDef = outlineOpenDefault === undefined ? previous.outlineOpenDefault : outlineOpenDefault === true;
         if (openDef !== undefined) { next.outlineOpenDefault = openDef; }
+        const expandMap = autoExpandBySession === undefined
+          ? previous.autoExpandBySession
+          : sanitizeSessionFlags(autoExpandBySession);
+        if (expandMap !== undefined) { next.autoExpandBySession = expandMap; }
+        const expandDef = autoExpandDefault === undefined ? previous.autoExpandDefault : autoExpandDefault === true;
+        if (expandDef !== undefined) { next.autoExpandDefault = expandDef; }
+        const kinds = autoExpandKinds === undefined
+          ? previous.autoExpandKinds
+          : sanitizeAutoExpandKinds(autoExpandKinds);
+        if (kinds !== undefined) { next.autoExpandKinds = kinds; }
+        const toolHeight = autoExpandToolHeight === undefined
+          ? previous.autoExpandToolHeight
+          : clampExpandHeight(autoExpandToolHeight, 360);
+        if (toolHeight !== undefined) { next.autoExpandToolHeight = toolHeight; }
+        const thoughtHeight = autoExpandThoughtHeight === undefined
+          ? previous.autoExpandThoughtHeight
+          : clampExpandHeight(autoExpandThoughtHeight, 240);
+        if (thoughtHeight !== undefined) { next.autoExpandThoughtHeight = thoughtHeight; }
+        if (flatTools !== undefined) { next.flatTools = flatTools === true; }
+        const width = composerMaxWidth === undefined
+          ? previous.composerMaxWidth
+          : clampNumber(composerMaxWidth, 360, 1200, 720);
+        if (width !== undefined) { next.composerMaxWidth = width; }
+        const height = inputMaxHeight === undefined
+          ? previous.inputMaxHeight
+          : clampNumber(inputMaxHeight, 80, 800, 320);
+        if (height !== undefined) { next.inputMaxHeight = height; }
+        if (sendKey !== undefined) { next.sendKey = sendKey === 'ctrlEnter' ? 'ctrlEnter' : 'enter'; }
+        const models = defaultModelByAgent === undefined
+          ? previous.defaultModelByAgent
+          : sanitizeStringMap(defaultModelByAgent);
+        if (models !== undefined) { next.defaultModelByAgent = models; }
         this.uiPrefs = next;
         this.globalState?.update(UI_PREFS_KEY, this.uiPrefs);
         // [CUSTOM- 另外那个面（侧边栏 / 编辑区）也要跟着换序，否则它下次被重开
         // 之前会一直用旧顺序 —— 同一份偏好，两个写者，必须回话（pitfall #29 的老规矩）。
         this.post({ type: 'uiPrefs', ...this.uiPrefs });
+        return;
+      }
+      // [CUSTOM- 设置面板（2026-10-21）：与 setUiPref 一样**非会话作用域**，放在
+      // verifySession 守卫之前。宿主是唯一写者：配置项写 VS Code 设置，面板项写 UiPrefs；
+      // 每次写完都把整张表重发一遍，两个面看到的是同一份真值。
+      case 'getSettings': {
+        this.postSettings();
+        return;
+      }
+      case 'setSetting': {
+        const key = String((msg as { key?: unknown }).key ?? '');
+        void this.handleSetSetting(key, (msg as { value?: unknown }).value).catch(e => this.reportError(null, e));
+        return;
+      }
+      case 'settingAction': {
+        const action = String((msg as { action?: unknown }).action ?? '');
+        void this.handleSettingAction(action).catch(e => this.reportError(null, e));
         return;
       }
       // [CUSTOM- The start card's auto-connect switch. NOT session-scoped
@@ -904,8 +979,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       case 'closeSession': {
         const agentName = sessionOf(this.sessionManager, sessionId)?.agentName;
         if (!agentName) { return; }
-        void this.sessionManager.closeSession(agentName, sessionId)
-          .catch(e => this.reportError(sessionId, e));
+        // [CUSTOM- 运行中的会话先问一句（2026-10-21）。放在宿主而不是客户端：
+        // ×、Delete、右键 Close、中键四条关入口都会走到这里，一次覆盖全部。
+        void this.closeSessionWithConfirm(agentName, sessionId);
         return;
       }
       // [CUSTOM- 取消一个 sub-agent 子会话（子会话 id 走 `subagentSessionId`，不是 sessionId）。
@@ -2071,6 +2147,29 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   /**
+   * [CUSTOM- 关闭运行中的会话前弹一次原生模态确认（与 Delete Session 同一个先例）。
+   * 确认后仍走 `SessionManager.closeSession`：它会在 `session/close` 之前先 `cancelTurn`，
+   * 并保证待决的权限/表单请求被回答（ACP 契约）。
+   */
+  private async closeSessionWithConfirm(agentName: string, sessionId: string): Promise<void> {
+    if (this.isSessionRunning(sessionId)) {
+      const title = this.sessionTitles.get(sessionId)
+        ?? this.sessionManager.getSession(sessionId)?.title
+        ?? sessionId;
+      const answer = await vscode.window.showWarningMessage(
+        `Close "${title}"? The agent is still working — closing cancels the current turn.`,
+        { modal: true }, 'Close',
+      );
+      if (answer !== 'Close') { return; }
+    }
+    try {
+      await this.sessionManager.closeSession(agentName, sessionId);
+    } catch (e) {
+      this.reportError(sessionId, e);
+    }
+  }
+
+  /**
    * [CUSTOM- Clicking a notification: bring that session up.
    *
    * `force` is the established way to focus a session the host already considers
@@ -2205,6 +2304,27 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   /**
+   * [CUSTOM- 面板一出现就把 agent 拉起来，不等 webview 渲染完再回一句 connectAgent。
+   *
+   * 首次连接慢在 npx 冷启动（真机日志里 initialize 花了 36s），而面板打开到发 connectAgent
+   * 之间还隔着一整轮 HTML 渲染 + 1s 自动连接延时 —— 这段时间完全可以和 npx 重叠。
+   * 只预热连接、**不建会话**：有可恢复会话时仍由空态卡片先问用户（同 handleConnectAgent）。
+   * 失败不在这里报错：真正的连接流程会重试一次，并把原因显示在状态卡上。
+   */
+  prewarm(): void {
+    if (!this.prefs.getAutoConnect()) { return; }
+    const agent = this.panelAgent();
+    if (!agent) { return; }
+    // 已经有活的会话/连接 ⇒ ensureConnected 会直接命中缓存，这里只是省一次日志噪声。
+    if (this.sessionManager.getSessionIdsForAgent(agent).length > 0) { return; }
+    const startedAt = Date.now();
+    log(`${LOG_PREFIX}: prewarming ${agent} while the panel renders`);
+    void this.sessionManager.ensureConnected(agent)
+      .then(() => log(`${LOG_PREFIX}: prewarm connected in ${Date.now() - startedAt}ms`))
+      .catch(e => log(`${LOG_PREFIX}: prewarm failed after ${Date.now() - startedAt}ms: ${(e as any)?.message ?? String(e)}`));
+  }
+
+  /**
    * [CUSTOM- "Connect" button.
    *
    * [CUSTOM- Now means "make sure the process is up, then hand back
@@ -2233,9 +2353,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       return;
     }
     log(`${LOG_PREFIX}: connect requested for ${agent}`);
+    const startedAt = Date.now();
     this.postConnection('connecting');
     void this.sessionManager.ensureConnected(agent)
       .then(async () => {
+        // [CUSTOM- 把"慢在哪一段"写进日志：spawn+npx+initialize 与 session/new 分开计时。
+        log(`${LOG_PREFIX}: ${agent} initialized in ${Date.now() - startedAt}ms`);
         const ids = this.sessionManager.getSessionIdsForAgent(agent);
         const newest = ids[ids.length - 1];
         if (newest) {
@@ -2256,6 +2379,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
             // away; `session/close` does not remove it from history (058), and that is the
             // trade the user chose over a half-usable composer.
             await this.sessionManager.createSession(agent, { focus: true });
+            log(`${LOG_PREFIX}: ${agent} session ready in ${Date.now() - startedAt}ms`);
           }
         }
         // [CUSTOM- 'connected' goes out AFTER the focus/creation above, and the
@@ -2777,6 +2901,46 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   /**
+   * [CUSTOM- 把设置面板里的「默认模型」套用到新建会话（2026-10-21）。
+   * 与记住的模式同一组门槛：选项还在、值仍是候选、相同就跳过；失败只记日志，不打扰用户。
+   */
+  private async applyRememberedModel(sessionId: string): Promise<void> {
+    const session = sessionOf(this.sessionManager, sessionId);
+    if (!session) { return; }
+    const modelId = this.uiPrefs?.defaultModelByAgent?.[session.agentName];
+    if (!modelId) { return; }
+    const option = (session.configOptions ?? []).find(
+      o => (o as { category?: string }).category === 'model',
+    ) as { id?: string; currentValue?: unknown; options?: unknown } | undefined;
+    if (!option || typeof option.id !== 'string') {
+      log(`${LOG_PREFIX}: default model ${modelId} is not offered by ${sessionId} (agent ${session.agentName}); skipped`);
+      return;
+    }
+    if (String(option.currentValue ?? '') === modelId) { return; }
+    const values = selectValues(option as SessionConfigOption);
+    const custom = this.customModels().some(model => model.modelId === modelId);
+    if (!values.includes(modelId) && !custom) {
+      log(`${LOG_PREFIX}: default model ${modelId} is no longer a candidate; skipped`);
+      return;
+    }
+    try {
+      await this.sessionManager.setConfigOption(sessionId, option.id, modelId);
+      const state = this.choiceState(sessionId);
+      if (state) { this.choices.set(sessionId, state); }
+      this.pushMeta(sessionId);
+      log(`${LOG_PREFIX}: applied default model ${option.id}=${modelId} to ${sessionId}`);
+    } catch (e: any) {
+      log(`${LOG_PREFIX}: applying the default model failed (ignored): ${e?.message ?? e}`);
+    }
+  }
+
+  private async awaitModelApply(sessionId: string): Promise<void> {
+    const pending = this.modelApply.get(sessionId);
+    this.modelApply.delete(sessionId);
+    if (pending) { await pending; }
+  }
+
+  /**
    * [CUSTOM- 草稿页问"这个 agent 的输入卡该显示什么"。
    *
    * 必须**无条件回话**（哪怕是空的）：客户端要靠这条应答才把选择器/斜杠列表布置好，让它在
@@ -2920,14 +3084,16 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
     try {
       const session = await this.sessionManager.createSession(agent, { cwd: target, focus: true, additionalDirectories });
-      // Resolve the draft BEFORE starting the turn: `handleSendPrompt` awaits the
-      // whole turn (it is what carries the stop reason back), and the client must
-      // be able to swap its draft tab for the real one immediately.
-      this.post({ type: 'draftResolved', draftId, sessionId: session.sessionId }, to);
-      // [CUSTOM- 先等"记住的默认模式"落地（session-created 那次应用），再应用用户
-      // 在草稿页显式选过的值：两个都是同一条连接上的 setConfigOption，后到的赢 —— 顺序反了
-      // 的话用户刚选的模式会被默认值盖回去。
+      // [CUSTOM- 草稿页选过的模式/模型先落到位，再让客户端把草稿换成真会话。
+      // 顺序反了的话，客户端会先收到 `focus` 里那份**会话创建时**的选项（如 opus），
+      // 再等一条 `meta` 把用户选的模型推回去 —— 用户看到的就是"选好的模型自己弹回内置模型"。
+      // 先等"记住的默认模式"落地（session-created 那次应用），再应用用户显式选过的值：
+      // 两个都是同一条连接上的 setConfigOption，后到的赢。
       await this.awaitModeApply(session.sessionId);
+      // [CUSTOM- 默认模型也要先落地，避免和草稿页的显式模型选择抢同一条连接（后到的赢）。
+      await this.awaitModelApply(session.sessionId);
+      await this.applyDraftSelections(session, selections);
+      this.post({ type: 'draftResolved', draftId, sessionId: session.sessionId }, to);
       // [CUSTOM- 草稿页攒的附件：会话已经有了，**走与普通附件完全相同的那条路**
       // （handleAttachImage / handleAttachPaths），于是 handleSendPrompt 读 this.attachments /
       // imageData 时自然就带上了 —— 这里不另存一份，避免两份账（pitfall #19）。
@@ -2935,9 +3101,6 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         this.handleAttachImage(session.sessionId, image.id, image.name, image.mimeType, image.dataUrl);
       }
       if (paths.length > 0) { this.handleAttachPaths(session.sessionId, paths); }
-      // [CUSTOM- 草稿页上选过的模式/模型只能在这里落到会话上（会话存在之前没有
-      // 地方可下发），而且必须在首条消息**之前**——第一轮就该跑在用户选的设置上。
-      await this.applyDraftSelections(session, selections);
       void this.handleSendPrompt(session.sessionId, text)
         .catch(e => this.reportError(session.sessionId, e));
     } catch (e: any) {
@@ -3133,11 +3296,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   /** 活着的会话，按客户端那份手工顺序排（不在表里的按 SessionManager 的顺序接在后面）。 */
   private liveSessionsInTabOrder(): RecoverableSession[] {
+    const app = ideLabel();
     const out: RecoverableSession[] = this.sessionManager.getLiveSessions().map(session => ({
       agentName: session.agentName,
       sessionId: session.sessionId,
       ...(session.cwd ? { cwd: session.cwd } : {}),
       ...(session.title ? { title: session.title } : {}),
+      ...(app ? { app } : {}),
     }));
     const rank = new Map<string, number>();
     (this.uiPrefs?.tabOrder ?? []).forEach((id, index) => rank.set(id, index));
@@ -3158,7 +3323,450 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     if (this.prefs.getRestore() === 'never') { return []; }
     const snapshot = this.openSessions;
     if (!snapshot || snapshot.sessions.length === 0) { return []; }
-    return snapshot.sessions.filter(s => !this.sessionManager.getSession(s.sessionId));
+    // [CUSTOM- 与当前 IDE 相同的 app 就不必送到面板上：只有"跨环境"的那几条才需要标注。
+    const self = ideLabel();
+    return snapshot.sessions
+      .filter(s => !this.sessionManager.getSession(s.sessionId))
+      .map(({ app, ...rest }) => (app && self && app === self ? rest : { ...rest, app }));
+  }
+
+  /**
+   * [CUSTOM- 设置面板的数据源（2026-10-21）。宿主是唯一写者：
+   * · `vac.*` 键 → VS Code 配置（全局）；
+   * · `panel.*` 键 → 面板 UiPrefs（globalState，跨窗口/两个面共享）；
+   * · `action.*` / `about.*` → 按钮与只读信息。
+   * 新增一项设置 = 这里加一行 + `handleSetSetting` 加一个 case。
+   */
+  private settingsItems(): SettingItem[] {
+    const config = vscode.workspace.getConfiguration('vac');
+    const prefs = this.uiPrefs ?? { outlineMode: 'popup' as const, outlineWidth: 240 };
+    // [CUSTOM- 从未写过时与客户端同一份默认（推理块 + 工具卡）；写过空数组就是"全不展开"。
+    const kinds = prefs.autoExpandKinds === undefined
+      ? ['thought', 'tool']
+      : sanitizeAutoExpandKinds(prefs.autoExpandKinds);
+    const logPath = logFilePath();
+    return [
+      {
+        key: 'vac.autoConnectOnOpen', group: 'general', type: 'boolean',
+        label: 'Connect automatically',
+        description: 'Start the agent as soon as the chat panel opens.',
+        value: this.prefs.getAutoConnect(),
+      },
+      {
+        key: 'vac.restoreSessionsOnOpen', group: 'general', type: 'select',
+        label: 'Restore sessions on open',
+        description: 'What to do with the sessions that were open when the window closed.',
+        value: this.prefs.getRestore(),
+        options: [
+          { value: 'ask', label: 'Ask me' },
+          { value: 'always', label: 'Always restore' },
+          { value: 'never', label: 'Never restore' },
+        ],
+      },
+      {
+        key: 'vac.defaultWorkingDirectory', group: 'general', type: 'text',
+        label: 'Default working directory',
+        description: 'Leave empty to use the current workspace folder.',
+        value: config.get<string>('defaultWorkingDirectory') ?? '',
+      },
+      {
+        key: 'panel.autoExpandDefault', group: 'chat', type: 'boolean',
+        label: 'Auto-expand new output',
+        description: 'Expand cards as new output arrives (sessions without their own setting).',
+        value: prefs.autoExpandDefault === true,
+      },
+      {
+        key: 'panel.autoExpandKinds.tool', group: 'chat', type: 'boolean', indent: true,
+        label: 'Tool calls', value: kinds.includes('tool'),
+      },
+      {
+        key: 'panel.autoExpandKinds.thought', group: 'chat', type: 'boolean', indent: true,
+        label: 'Reasoning blocks', value: kinds.includes('thought'),
+      },
+      {
+        key: 'panel.autoExpandKinds.diff', group: 'chat', type: 'boolean', indent: true,
+        label: 'Diffs inside tool calls', value: kinds.includes('diff'),
+      },
+      {
+        key: 'panel.flatTools', group: 'chat', type: 'boolean',
+        label: 'Group sub-agent tool calls',
+        description: 'Show a sub-agent’s tool calls under the call that started it.',
+        value: prefs.flatTools !== true,
+      },
+      {
+        key: 'panel.sendKey', group: 'chat', type: 'select',
+        label: 'Send with',
+        description: 'Shift+Enter always inserts a newline.',
+        value: prefs.sendKey === 'ctrlEnter' ? 'ctrlEnter' : 'enter',
+        options: [
+          { value: 'enter', label: 'Enter' },
+          { value: 'ctrlEnter', label: 'Ctrl/Cmd+Enter' },
+        ],
+      },
+      ...this.defaultModelItems(prefs),
+      {
+        key: 'vac.autoApprovePermissions', group: 'chat', type: 'select',
+        label: 'Permission requests',
+        description: 'How permission requests from the agent are answered.',
+        value: config.get<string>('autoApprovePermissions') ?? 'ask',
+        options: [
+          { value: 'ask', label: 'Ask me' },
+          { value: 'allowAll', label: 'Approve everything' },
+        ],
+        warning: 'Approving everything lets the agent edit files and run tools without asking.',
+      },
+      {
+        key: 'panel.timesDefault', group: 'appearance', type: 'boolean',
+        label: 'Show record times',
+        description: 'Default for sessions that have no per-session value.',
+        value: prefs.timesDefault === true,
+      },
+      {
+        key: 'panel.outlineMode', group: 'appearance', type: 'select',
+        label: 'Outline layout',
+        description: 'Where the conversation outline lives.',
+        value: prefs.outlineMode === 'sidebar' ? 'sidebar' : 'popup',
+        options: [
+          { value: 'popup', label: 'Dropdown' },
+          { value: 'sidebar', label: 'Pinned sidebar' },
+        ],
+      },
+      {
+        key: 'panel.outlineWidth', group: 'appearance', type: 'number',
+        label: 'Outline width (px)',
+        description: 'Pinned sidebar width, between 160 and 480.',
+        value: prefs.outlineWidth,
+      },
+      {
+        key: 'panel.composerMaxWidth', group: 'appearance', type: 'number',
+        label: 'Composer width (px)',
+        description: 'Maximum width of the input card, between 360 and 1200.',
+        value: prefs.composerMaxWidth ?? 720,
+      },
+      {
+        key: 'panel.inputMaxHeight', group: 'appearance', type: 'number',
+        label: 'Input box max height (px)',
+        description: 'Between 80 and 800; also capped at 38% of the panel height.',
+        value: prefs.inputMaxHeight ?? 320,
+      },
+      {
+        key: 'panel.autoExpand.toolHeight', group: 'appearance', type: 'number',
+        label: 'Expanded tool card height (px)',
+        description: 'For auto-expanded cards; 0 = no limit, taller output scrolls inside the card.',
+        value: prefs.autoExpandToolHeight ?? 360,
+      },
+      {
+        key: 'panel.autoExpand.thoughtHeight', group: 'appearance', type: 'number',
+        label: 'Expanded reasoning height (px)',
+        description: 'For auto-expanded cards; 0 = no limit, taller reasoning scrolls inside the block.',
+        value: prefs.autoExpandThoughtHeight ?? 240,
+      },
+      {
+        key: 'vac.logTraffic', group: 'advanced', type: 'boolean',
+        label: 'Log ACP traffic',
+        description: 'Write the JSON-RPC stream to the VAC Traffic channel and the log file.',
+        value: config.get<boolean>('logTraffic') !== false,
+      },
+      {
+        key: 'vac.customModels', group: 'advanced', type: 'models',
+        label: 'Custom models',
+        description: 'Injected into the agent as extra model choices (per agent support).',
+        value: this.customModels(),
+      },
+      {
+        key: 'vac.agents', group: 'advanced', type: 'json',
+        label: 'Agent configuration',
+        description: 'JSON object: name → { command, args, env, kind }. Saved globally.',
+        value: config.get('agents') ?? {},
+      },
+      {
+        key: 'action.openAgentCache', group: 'advanced', type: 'action', actionLabel: 'Open',
+        label: 'Open agent cache folder',
+        description: this.agentCacheDir() ?? 'No cached runtime yet.',
+      },
+      {
+        key: 'action.clearAgentCache', group: 'advanced', type: 'action', actionLabel: 'Clear',
+        label: 'Clear agent runtime cache',
+        description: 'Deletes the local agent install; the next start re-creates it with npm.',
+      },
+      {
+        key: 'action.resetPanelPrefs', group: 'advanced', type: 'action', actionLabel: 'Reset',
+        label: 'Reset panel preferences',
+        description: 'Restore the panel UI defaults (outline, Times, auto-expand, composer size).',
+      },
+      {
+        key: 'action.openLog', group: 'advanced', type: 'action', actionLabel: 'Open',
+        label: 'Open log file',
+        description: logPath ?? 'Not available yet.',
+      },
+      {
+        key: 'action.copyBuildInfo', group: 'advanced', type: 'action', actionLabel: 'Copy',
+        label: 'Copy build info',
+        description: buildStamp(),
+      },
+      { key: 'about.version', group: 'advanced', type: 'info', label: 'Version', value: readPackageVersion() || '—' },
+      { key: 'about.agent', group: 'advanced', type: 'info', label: 'Agent', value: this.panelAgent() ?? '—' },
+    ];
+  }
+
+  // [CUSTOM- 扩展的 globalStorage 根目录：设置面板里的「打开/清除 agent 运行时缓存」
+  // 需要它（缓存位于 `<root>/agents/<agent>`，见 core/AgentInstall.ts）。
+  private storageRoot?: string;
+
+  /** [CUSTOM- 由 ChatViewProvider 在构造后注入（避免把 9 个位置参数的顺序耦合进测试桩）。 */
+  setStorageRoot(root: string | undefined): void {
+    this.storageRoot = root;
+  }
+
+  private agentCacheDir(): string | undefined {
+    return this.storageRoot ? join(this.storageRoot, 'agents') : undefined;
+  }
+
+  /** [CUSTOM- 每个 agent 一行「默认模型」：有候选就下拉，没候选就退化成文本输入。 */
+  private defaultModelItems(prefs: UiPrefs): SettingItem[] {
+    return getAgentNames().map((agent): SettingItem => {
+      const key = `panel.defaultModel.${agent}`;
+      const value = prefs.defaultModelByAgent?.[agent] ?? '';
+      const choices = this.modelChoicesFor(agent);
+      return choices
+        ? {
+          key, group: 'chat', type: 'select', indent: true,
+          label: `${agent} default model`,
+          value,
+          options: choices,
+        }
+        : {
+          key, group: 'chat', type: 'text', indent: true,
+          label: `${agent} default model`,
+          description: 'Empty = the agent default. Enter a model id.',
+          value,
+        };
+    });
+  }
+
+  private modelChoicesFor(agent: string): SettingOption[] | null {
+    const snapshot = this.draftOptions.get(agent);
+    const option = (snapshot?.configOptions ?? []).find(
+      o => (o as { category?: string }).category === 'model',
+    ) as { options?: unknown } | undefined;
+    if (!option || !Array.isArray(option.options)) { return null; }
+    const names = new Map<string, string>();
+    for (const model of this.customModels()) { names.set(model.modelId, model.name || model.modelId); }
+    const out: SettingOption[] = [{ value: '', label: 'Agent default' }];
+    for (const entry of option.options as Array<{ value?: unknown; name?: unknown; options?: unknown }>) {
+      if (entry && Array.isArray(entry.options)) {
+        for (const grouped of entry.options as Array<{ value?: unknown; name?: unknown }>) {
+          if (grouped?.value === undefined) { continue; }
+          const id = String(grouped.value);
+          out.push({ value: id, label: names.get(id) || String(grouped.name ?? id) });
+        }
+      } else if (entry && entry.value !== undefined) {
+        const id = String(entry.value);
+        out.push({ value: id, label: names.get(id) || String(entry.name ?? id) });
+      }
+    }
+    return out.length > 1 ? out : null;
+  }
+
+  private postSettings(): void {
+    if (this.attachedCount === 0) { return; }
+    this.post({ type: 'settings', items: this.settingsItems() });
+  }
+
+  private async handleSetSetting(key: string, value: unknown): Promise<void> {
+    const config = vscode.workspace.getConfiguration('vac');
+    const global = vscode.ConfigurationTarget.Global;
+    switch (key) {
+      case 'vac.autoConnectOnOpen':
+        await this.prefs.setAutoConnect(value === true);
+        this.postAutoConnectPref();
+        break;
+      case 'vac.restoreSessionsOnOpen':
+        await this.prefs.setRestore(resolveRestoreChoice(value));
+        this.postRestorePref();
+        break;
+      case 'vac.defaultWorkingDirectory':
+        await config.update('defaultWorkingDirectory', String(value ?? '').trim(), global);
+        break;
+      case 'vac.autoApprovePermissions':
+        await config.update('autoApprovePermissions', value === 'allowAll' ? 'allowAll' : 'ask', global);
+        break;
+      case 'vac.logTraffic':
+        await config.update('logTraffic', value === true, global);
+        break;
+      case 'panel.autoExpandDefault':
+        this.patchUiPrefs({ autoExpandDefault: value === true });
+        break;
+      case 'panel.autoExpandKinds.tool':
+        this.patchUiPrefs({ autoExpandKinds: this.toggledKind('tool', value === true) });
+        break;
+      case 'panel.autoExpandKinds.thought':
+        this.patchUiPrefs({ autoExpandKinds: this.toggledKind('thought', value === true) });
+        break;
+      case 'panel.autoExpandKinds.diff':
+        this.patchUiPrefs({ autoExpandKinds: this.toggledKind('diff', value === true) });
+        break;
+      case 'panel.autoExpand.toolHeight':
+        this.patchUiPrefs({ autoExpandToolHeight: clampExpandHeight(value, 360) });
+        break;
+      case 'panel.autoExpand.thoughtHeight':
+        this.patchUiPrefs({ autoExpandThoughtHeight: clampExpandHeight(value, 240) });
+        break;
+      case 'panel.flatTools':
+        // 复选框语义是"分组显示"；存储的是相反值（flatTools）。
+        this.patchUiPrefs({ flatTools: value !== true });
+        break;
+      case 'panel.sendKey':
+        this.patchUiPrefs({ sendKey: value === 'ctrlEnter' ? 'ctrlEnter' : 'enter' });
+        break;
+      case 'panel.composerMaxWidth':
+        this.patchUiPrefs({ composerMaxWidth: clampNumber(value, 360, 1200, 720) });
+        break;
+      case 'panel.inputMaxHeight':
+        this.patchUiPrefs({ inputMaxHeight: clampNumber(value, 80, 800, 320) });
+        break;
+      case 'vac.customModels':
+        await config.update('customModels', normalizeCustomModels(value), global);
+        break;
+      case 'vac.agents':
+        await config.update('agents', sanitizeAgentsConfig(value), global);
+        break;
+      case 'panel.timesDefault':
+        this.patchUiPrefs({ timesDefault: value === true });
+        break;
+      case 'panel.outlineMode':
+        this.patchUiPrefs({ outlineMode: value === 'sidebar' ? 'sidebar' : 'popup' });
+        break;
+      case 'panel.outlineWidth': {
+        const width = Math.max(160, Math.min(480, Number(value) || 240));
+        this.patchUiPrefs({ outlineWidth: width });
+        break;
+      }
+      default:
+        // [CUSTOM- 每个 agent 的默认模型走同一族 key（`panel.defaultModel.<agent>`）。
+        if (key.startsWith('panel.defaultModel.')) {
+          const agent = key.slice('panel.defaultModel.'.length);
+          const map = { ...(this.uiPrefs?.defaultModelByAgent ?? {}) };
+          const modelId = typeof value === 'string' ? value.trim() : '';
+          if (modelId) { map[agent] = modelId; } else { delete map[agent]; }
+          this.patchUiPrefs({ defaultModelByAgent: sanitizeStringMap(map) });
+          break;
+        }
+        log(`${LOG_PREFIX}: unknown setting ${key}`);
+        return;
+    }
+    // 值可能被夹紧/规整过（宽度、枚举），回发整张表让控件显示真实值。
+    this.postSettings();
+  }
+
+  /** [CUSTOM- 设置面板 + 地址栏开关共用的一条写路径：合并、落盘、广播给两个面。 */
+  private patchUiPrefs(patch: Partial<UiPrefs>): void {
+    const next: UiPrefs = { ...(this.uiPrefs ?? { outlineMode: 'popup' as const, outlineWidth: 240 }), ...patch };
+    this.uiPrefs = next;
+    void this.globalState?.update(UI_PREFS_KEY, next);
+    this.post({ type: 'uiPrefs', ...next });
+  }
+
+  private toggledKind(kind: string, on: boolean): string[] {
+    const current = this.uiPrefs?.autoExpandKinds === undefined
+      ? ['thought', 'tool']
+      : sanitizeAutoExpandKinds(this.uiPrefs.autoExpandKinds);
+    return on
+      ? sanitizeAutoExpandKinds([...current, kind])
+      : current.filter(entry => entry !== kind);
+  }
+
+  private async handleSettingAction(action: string): Promise<void> {
+    if (action === 'openAgentCache') {
+      const dir = this.agentCacheDir();
+      if (!dir || !existsSync(dir)) {
+        void vscode.window.showInformationMessage('No cached agent runtime yet.');
+        return;
+      }
+      mkdirSync(dir, { recursive: true });
+      await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(dir));
+      return;
+    }
+    if (action === 'clearAgentCache') {
+      const dir = this.agentCacheDir();
+      if (!dir || !existsSync(dir)) {
+        void vscode.window.showInformationMessage('No cached agent runtime to clear.');
+        return;
+      }
+      try {
+        rmSync(dir, { recursive: true, force: true });
+        log(`${LOG_PREFIX}: cleared the agent runtime cache at ${dir}`);
+        void vscode.window.showInformationMessage('Agent runtime cache cleared. It will be re-created on the next start.');
+      } catch (e) {
+        // Windows 上正在运行的 node 可能锁住已加载的模块文件。
+        void vscode.window.showWarningMessage(
+          `Could not clear the agent runtime cache: ${(e as Error)?.message ?? String(e)}`,
+        );
+      }
+      this.postSettings();
+      return;
+    }
+    if (action === 'resetPanelPrefs') {
+      // [CUSTOM- 一键恢复面板 UI 默认值；不动 VS Code 配置项（那些在 General/Advanced 里）。
+      // 广播时必须**显式带上每一项的默认值**：客户端的契约是"缺字段 = 这一项没改"，
+      // 只发大纲两项的话，Times / 自动展开 / 输入卡尺寸会保留旧值（直到窗口重开）。
+      this.uiPrefs = { outlineMode: 'popup', outlineWidth: 240 };
+      void this.globalState?.update(UI_PREFS_KEY, this.uiPrefs);
+      this.post({
+        type: 'uiPrefs',
+        outlineMode: 'popup',
+        outlineWidth: 240,
+        timesBySession: {},
+        timesDefault: false,
+        outlineOpenBySession: {},
+        outlineOpenDefault: false,
+        autoExpandBySession: {},
+        autoExpandDefault: false,
+        autoExpandKinds: ['thought', 'tool'],
+        autoExpandToolHeight: 360,
+        autoExpandThoughtHeight: 240,
+        flatTools: false,
+        composerMaxWidth: 720,
+        inputMaxHeight: 320,
+        sendKey: 'enter',
+        defaultModelByAgent: {},
+      });
+      this.postSettings();
+      void vscode.window.showInformationMessage('Panel preferences reset.');
+      return;
+    }
+    if (action === 'pickDefaultWorkingDirectory') {
+      // [CUSTOM- 系统目录选择器（2026-10-21）：与输入框并排的 Browse… 按钮。
+      const config = vscode.workspace.getConfiguration('vac');
+      const current = (config.get<string>('defaultWorkingDirectory') ?? '').trim();
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: 'Use this folder',
+        ...(current ? { defaultUri: vscode.Uri.file(current) } : {}),
+      });
+      if (picked && picked[0]) {
+        await config.update('defaultWorkingDirectory', picked[0].fsPath, vscode.ConfigurationTarget.Global);
+        this.postSettings();
+      }
+      return;
+    }
+    if (action === 'openLog') {
+      const path = logFilePath();
+      if (!path) {
+        void vscode.window.showInformationMessage('The VAC log file is not available yet.');
+        return;
+      }
+      await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path));
+      return;
+    }
+    if (action === 'copyBuildInfo') {
+      await vscode.env.clipboard.writeText(buildStamp());
+      void vscode.window.showInformationMessage('VAC build info copied.');
+      return;
+    }
+    log(`${LOG_PREFIX}: unknown settings action ${action}`);
   }
 
   private postRestorePref(): void {
@@ -3599,6 +4207,86 @@ function verifySession(manager: SessionManager, msg: { sessionId?: string }): st
   const sessionId = msg?.sessionId;
   if (typeof sessionId !== 'string' || sessionId.length === 0) { return null; }
   return manager.getSession(sessionId) ? sessionId : null;
+}
+
+/** 自动展开的类型白名单：只有这三种卡片有可展开的折叠面。 */
+const AUTO_EXPAND_KINDS = ['tool', 'thought', 'diff'] as const;
+
+function sanitizeAutoExpandKinds(value: unknown): string[] {
+  if (!Array.isArray(value)) { return []; }
+  const out: string[] = [];
+  for (const entry of value) {
+    const kind = String(entry);
+    if ((AUTO_EXPAND_KINDS as readonly string[]).includes(kind) && !out.includes(kind)) { out.push(kind); }
+    if (out.length >= AUTO_EXPAND_KINDS.length) { break; }
+  }
+  return out;
+}
+
+/** 自动展开卡片的限高：0 = 不限；其余夹到 80–2000px（亚像素取整到整数）。 */
+function clampExpandHeight(value: unknown, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) { return fallback; }
+  if (n <= 0) { return 0; }
+  return Math.max(80, Math.min(2000, Math.round(n)));
+}
+
+/** 通用数值夹紧：非数字落回默认值，整数取整。 */
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) { return fallback; }
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+/** agent → 默认模型 id 的小表（键/值都有长度上限，最多 20 条）。 */
+function sanitizeStringMap(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!value || typeof value !== 'object') { return out; }
+  let count = 0;
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (count >= 20) { break; }
+    const name = String(key).trim().slice(0, 80);
+    const modelId = typeof raw === 'string' ? raw.trim().slice(0, 120) : '';
+    if (!name) { continue; }
+    if (!modelId) { continue; }
+    out[name] = modelId;
+    count += 1;
+  }
+  return out;
+}
+
+/** `vac.agents` 的形状校验：必须是 name → { command: string, ... } 的对象。 */
+function sanitizeAgentsConfig(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Agent configuration must be a JSON object.');
+  }
+  const out: Record<string, unknown> = {};
+  for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error(`Agent "${name}" must be a JSON object.`);
+    }
+    const entry = raw as Record<string, unknown>;
+    if (typeof entry.command !== 'string' || !entry.command.trim()) {
+      throw new Error(`Agent "${name}" needs a non-empty "command".`);
+    }
+    out[name] = entry;
+  }
+  return out;
+}
+
+/**
+ * [CUSTOM- 快照里那条会话是在哪个 IDE 里开着的（VS Code / Insiders / VSCodium / Cursor…）。
+ * 各 fork 默认各用各的 userData，快照本来不会串；portable 或共享 `--user-data-dir` 时会，
+ * 所以按条记下来、只用于标注，不参与任何筛选。
+ */
+function ideLabel(): string | undefined {
+  const name = vscode.env.appName?.trim();
+  if (!name) { return undefined; }
+  if (/insiders/i.test(name)) { return 'VS Code Insiders'; }
+  if (/vscodium/i.test(name)) { return 'VSCodium'; }
+  if (/cursor/i.test(name)) { return 'Cursor'; }
+  if (/visual studio code/i.test(name)) { return 'VS Code'; }
+  return name;
 }
 
 function toolKey(sessionId: string, toolCallId: string): string {

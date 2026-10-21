@@ -169,6 +169,8 @@ export const bootClient = `
     // [CUSTOM- Times 按会话记：换会话就要换成**那个会话**的值（没有记录就是默认值，
     // 草稿页与空态走的也是这一条）。状态机在 client/times.ts，这里只做"焦点变了"这一声通知。
     if (NS.times) { NS.times.setFocus(currentSessionId); }
+    // [CUSTOM- 自动展开也是按会话记的（同 Times 的形态），同一个咽喉点。
+    if (NS.autoExpand) { NS.autoExpand.setFocus(currentSessionId); }
     // [CUSTOM- 置顶条按会话记着自己的收缩状态 —— 在重置它之前把会话同步过去
     // （这是焦点变化唯一的咽喉点，与 elicitationView.setSession 同一形态）。
     if (NS.stickyUser && NS.stickyUser.setSession) { NS.stickyUser.setSession(currentSessionId); }
@@ -527,6 +529,7 @@ export const bootClient = `
         restorePref = message.restorePref || 'ask';
         NS.tabs.setSessions(message.sessions || []);
         if (NS.times) { NS.times.noteSessions(message.sessions || []); }
+        if (NS.autoExpand) { NS.autoExpand.noteSessions(message.sessions || []); }
         // [CUSTOM- 没有聚焦会话时地址栏显示什么（宿主解析的默认目录）。
         if (NS.tabs && NS.tabs.setDefaultCwd) { NS.tabs.setDefaultCwd(message.defaultCwd); }
         applyEmptyState(message.agentConnected);
@@ -556,6 +559,16 @@ export const bootClient = `
         if (NS.tabs && NS.tabs.applyPrefs) { NS.tabs.applyPrefs(message); }
         // [CUSTOM- 同一条记录里还有 Times 的两份状态（按会话 + 默认值）。
         if (NS.times) { NS.times.applyPrefs(message); }
+        // [CUSTOM- 以及新输出自动展开的两份状态 + 全局卡片类型（设置面板改的就是它）。
+        if (NS.autoExpand) { NS.autoExpand.applyPrefs(message); }
+        // [CUSTOM- 子代理分组、发送快捷键、输入卡尺寸（2026-10-21 第二批设置）。
+        if (typeof message.flatTools === 'boolean') { applyGrouping(message.flatTools); }
+        if (NS.composer && NS.composer.applyUiPrefs) { NS.composer.applyUiPrefs(message); }
+        break;
+
+      // [CUSTOM- 设置面板的数据（回复 getSettings，以及每次 setSetting 之后的重发）。
+      case 'settings':
+        if (NS.settingsPanel) { NS.settingsPanel.setItems(message.items || []); }
         break;
 
       // [CUSTOM- The auto-connect setting's live value: changed on the other
@@ -574,6 +587,7 @@ export const bootClient = `
       case 'sessionsChanged':
         NS.tabs.setSessions(message.sessions || []);
         if (NS.times) { NS.times.noteSessions(message.sessions || []); }
+        if (NS.autoExpand) { NS.autoExpand.noteSessions(message.sessions || []); }
         applyEmptyState(message.agentConnected);
         syncFocusedState(message.sessions || []);
         break;
@@ -1038,7 +1052,10 @@ export const bootClient = `
         var messages = NS.dom.qs('messages');
         var flat = !(messages && messages.classList.contains('flat-tools'));
         applyGrouping(flat);
+        // [CUSTOM- 2026-10-21：分组开关也进了设置面板，所以两个写者要看到同一份真值 ——
+        // 宿主的 UiPrefs 是权威，本地那份只留作旧版本迁移。
         persistUi({ flatTools: flat });
+        NS.bridge.post({ type: 'setUiPref', flatTools: flat });
       });
     }
 
@@ -1050,6 +1067,10 @@ export const bootClient = `
     // globalState 里按会话记（client/times.ts），由这里的 init 与另外三声通知驱动
     // （applyFocus / uiPrefs / sessionsChanged）。
     if (NS.times) { NS.times.init(); }
+    // [CUSTOM- 新输出自动展开：按钮 + 状态机（按会话记）；设置面板负责卡片类型。
+    if (NS.autoExpand) { NS.autoExpand.init(); }
+    // [CUSTOM- 设置面板：Tab 栏右侧齿轮 + 遮罩/导航/行渲染。
+    if (NS.settingsPanel) { NS.settingsPanel.init(); }
 
     window.addEventListener('message', onMessage);
     NS.bridge.post({ type: 'ready' });

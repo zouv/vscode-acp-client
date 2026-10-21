@@ -127,6 +127,11 @@ export const contextMenuClient = `
             });
           }
         });
+        // [CUSTOM- 会话 tab 上的 id 只在这里露出：草稿/待恢复的没有会话 id，自然不出现。
+        tabItems.push({
+          label: 'Copy Session ID',
+          run: function () { copy(tab.getAttribute('data-session-id')); }
+        });
       }
       return tabItems;
     }

@@ -42,6 +42,13 @@ export function styles(): string {
      max-content 求解，结果是每个标签都被撑到最宽那个的宽度、整条标签栏变形。 */
   .outline-item, .picker-item, .slash-item, .tool-head, .diff-head { width: 100%; }
   .picker-item, .slash-item { display: block; }
+  /* [CUSTOM- 自定义模型的副标题（description）：主标签下一行，次要色。 */
+  .picker-item-label { display: block; }
+  .picker-item-desc {
+    display: block; margin-top: 2px;
+    font-size: 0.82em; color: var(--vscode-descriptionForeground);
+    white-space: normal;
+  }
   /* .rail-dot 也是 <button>：它自带 background（两级样式权重更高），但 '.turn' 那档
      **只设了 background、没设 border**，不抹掉 UA 的 2px outset 就会多出一圈边框。
      padding 同理——它的尺寸完全由 CSS 决定，多 1px 就会偏位。 */
@@ -118,14 +125,18 @@ export function styles(): string {
     gap: 2px;
     padding: 4px 6px 0;
     border-bottom: 1px solid var(--vscode-panel-border);
-    overflow-x: auto;
+    /* [CUSTOM- 动作按钮（+ / 设置）固定在右侧，只有 #tabs 自己滚动；
+       旧实现让整条 strip 滚，tab 一多就把按钮挤出视口。 */
+    overflow: hidden;
     scrollbar-width: thin;
   }
-  .tabs { display: flex; gap: 2px; flex: 0 0 auto; }
+  .tabs { display: flex; gap: 2px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
   .tab {
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    /* [CUSTOM- 不参与收缩：tab 多了要让 .tabs 横向滚动，而不是把每个标签挤成省略号。 */
+    flex: 0 0 auto;
     max-width: 200px;
     padding: 4px 6px;
     border: 1px solid transparent;
@@ -263,6 +274,15 @@ export function styles(): string {
     font-family: inherit; font-size: 14px; line-height: 1.2;
   }
   .tab-new:hover { background: var(--vscode-list-hoverBackground); }
+  /* [CUSTOM- Tab 栏右侧的设置入口：与 + 一样固定在动作区，只显示图标。 */
+  .tab-settings {
+    flex: 0 0 auto; margin-left: auto; padding: 2px 6px; cursor: pointer;
+    display: inline-flex; align-items: center;
+    background: transparent; color: var(--vscode-foreground);
+    border: 1px solid transparent; border-radius: 3px;
+  }
+  .tab-settings:hover { background: var(--vscode-list-hoverBackground); border-color: var(--vscode-panel-border); }
+  .tab-settings .btn-icon { display: inline-flex; }
 
   /* --- Session header / usage ------------------------------------------ */
   .session-header {
@@ -283,7 +303,7 @@ export function styles(): string {
   /* [CUSTOM- 把右侧那一组（Times / Sub-agents / ☰）钉在右边。原先靠 '.session-title'
      的 flex: 1 吃掉剩余宽度把它们顶过去 —— 那一格一旦不显示了（上面那种空态），整组就会滑到
      ↺ 旁边。有 flex 项能成长时 auto margin 分不到任何空间，所以这条对原有布局零影响。 */
-  .session-header > #timeToggle { margin-left: auto; }
+  .session-header > #autoExpandBtn { margin-left: auto; }
   /* --- Conversation outline () ---------------------- */
   /* 抽屉从标题栏下沿展开。.session-header 没有 overflow: hidden（已核对），
      否则绝对定位的抽屉会被裁掉——这是这类浮层最常见的失灵原因。 */
@@ -433,7 +453,7 @@ export function styles(): string {
   .row-action-icon { display: inline-flex; }
   /* [ 修] 历史行：标题不再吃满整行。.outline-text 的 flex: 1 会把右端推满，
      目录名于是被挤到最右侧、与悬停的 Archive/Rename 重叠（用户 2026-10-09 报，图里就是"图标压在
-     aki_work 上"）。改 0 1 auto：标题按内容占位、过长才收缩出省略号，目录名紧跟其后（"(aki_work)"），
+     workspace 上"）。改 0 1 auto：标题按内容占位、过长才收缩出省略号，目录名紧跟其后（"(workspace)"），
      右端空档留给 .row-actions。**只限历史行**（.session-row 前缀）——大纲行的 .outline-text 仍是
      flex: 1，那条行的时刻要贴右缘。 */
   .session-row .outline-text { flex: 0 1 auto; }
@@ -620,6 +640,18 @@ export function styles(): string {
      加 flex-shrink: 0 之后，溢出的内容会交给 .messages 的 overflow-y: auto 去滚。
      对照：.tab-strip 同样是 flex + overflow，但它的子项早就写了 flex: 0 0 auto，所以从没出过这个问题。 */
   .messages > * { flex: 0 0 auto; }
+
+  /* [CUSTOM- 「新输出自动展开」的卡片限高（2026-10-21）：只有带 .auto-expanded 的卡
+     吃这两个变量（手动点开的不受限）。变量由 client/autoExpand.ts 写到 body 上；
+     0 / 'none' = 不限。超出的内容在卡片内部滚动，而不是把整条消息拉成一堵墙。 */
+  .messages .tool.auto-expanded .tool-body {
+    max-height: var(--vac-tool-expand-h, 360px);
+    overflow-y: auto;
+  }
+  .messages details.thought.auto-expanded .thought-body {
+    max-height: var(--vac-thought-expand-h, 240px);
+    overflow-y: auto;
+  }
 
   /* [CUSTOM- Drop feedback: shown while a file is dragged over the
      panel. Uses the focus border so it is visible in every theme. */
@@ -1998,5 +2030,123 @@ export function styles(): string {
     font-size: 16px; line-height: 1;
   }
   .image-lightbox-close:hover { background: rgba(255, 255, 255, 0.32); }
+
+  /* --- Settings panel -------------------------------------------------- */
+  /* [CUSTOM- 设置面板：遮罩 + 居中面板；左侧竖排分组、右侧设置行。
+     窄面板退化为顶部横排分组（用户明确要求"Tab 按钮放左侧"，只在宽度不够时才换向）。 */
+  .settings-overlay {
+    position: fixed; inset: 0; z-index: 80;
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px; background: rgba(0, 0, 0, 0.45);
+  }
+  .settings-panel {
+    display: flex; flex-direction: column;
+    width: min(720px, 100%);
+    /* [CUSTOM- 固定尺寸（2026-10-21）：高度不随内容自适应 —— 换分组、改值时面板不跳。
+       视口太矮时 max-height 兜底，内容在内层滚动。 */
+    height: clamp(320px, 80vh, 640px);
+    max-height: calc(100vh - 32px);
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+    color: var(--vscode-foreground);
+    border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+    border-radius: 8px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+  }
+  .settings-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border);
+  }
+  .settings-title { font-weight: 600; }
+  .settings-close {
+    padding: 2px 6px; border: none; border-radius: 3px; cursor: pointer;
+    background: transparent; color: inherit; font-size: 14px; line-height: 1;
+  }
+  .settings-close:hover { background: var(--vscode-list-hoverBackground); }
+  .settings-main { display: flex; flex: 1 1 auto; min-height: 0; }
+  .settings-nav {
+    display: flex; flex-direction: column; gap: 2px;
+    flex: 0 0 132px; padding: 8px;
+    border-right: 1px solid var(--vscode-panel-border); overflow-y: auto;
+  }
+  .settings-tab {
+    padding: 6px 8px; border: none; border-radius: 4px; cursor: pointer;
+    background: transparent; color: inherit; text-align: left;
+    font-family: inherit; font-size: 0.95em;
+  }
+  .settings-tab:hover { background: var(--vscode-list-hoverBackground); }
+  .settings-tab.active {
+    background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+  }
+  .settings-body { flex: 1 1 auto; min-width: 0; padding: 12px 16px; overflow-y: auto; }
+  .settings-row {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+    padding: 8px 0; border-bottom: 1px solid var(--vscode-panel-border);
+  }
+  .settings-row:last-child { border-bottom: none; }
+  .settings-row.indent { padding-left: 16px; }
+  .settings-text { min-width: 0; }
+  .settings-label { font-size: 0.95em; }
+  .settings-desc { margin-top: 2px; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+  .settings-warning {
+    margin-top: 4px; font-size: 0.82em;
+    color: var(--vscode-editorWarning-foreground, var(--vscode-errorForeground));
+  }
+  .settings-control { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding-top: 2px; }
+  .settings-check { width: 14px; height: 14px; accent-color: var(--vscode-button-background); }
+  .settings-select, .settings-number, .settings-text-input {
+    padding: 2px 4px; border-radius: 3px; font-family: inherit;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  }
+  .settings-number { width: 76px; }
+  .settings-text-input { width: 220px; max-width: 100%; }
+  .settings-action {
+    padding: 2px 10px; border-radius: 3px; cursor: pointer; font-family: inherit;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid var(--vscode-panel-border);
+  }
+  .settings-action:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  .settings-value {
+    max-width: 280px; text-align: right; font-size: 0.85em;
+    color: var(--vscode-descriptionForeground); overflow-wrap: anywhere;
+  }
+  /* [CUSTOM- JSON / 模型列表这类宽控件：整行纵向排。 */
+  .settings-row.wide { flex-direction: column; align-items: stretch; }
+  .settings-row.wide .settings-control { width: 100%; }
+  .settings-json {
+    width: 100%; min-height: 140px; resize: vertical; box-sizing: border-box;
+    padding: 6px 8px; border-radius: 3px;
+    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  }
+  .settings-json-error { margin-top: 4px; font-size: 0.8em; color: var(--vscode-errorForeground); }
+  .settings-models { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+  .settings-model-row { display: flex; gap: 6px; align-items: center; }
+  .settings-model-row .settings-text-input { width: auto; flex: 1 1 0; min-width: 0; }
+  .settings-model-row .settings-model-id { flex: 1.4 1 0; }
+  .settings-model-remove {
+    padding: 2px 6px; border: none; border-radius: 3px; cursor: pointer;
+    background: transparent; color: inherit;
+  }
+  .settings-model-remove:hover {
+    background: var(--vscode-list-hoverBackground); color: var(--vscode-errorForeground);
+  }
+  .settings-model-add { align-self: flex-start; margin-top: 2px; }
+  /* [CUSTOM- 设置子面板（模型列表 / JSON 编辑器）：盖在主面板之上、尺寸更小。 */
+  .settings-sub-overlay { z-index: 85; }
+  .settings-sub-panel { width: min(640px, 100%); height: clamp(300px, 65vh, 560px); }
+  .settings-sub-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+  .settings-done { align-self: flex-start; margin-top: 10px; }
+  @media (max-width: 520px) {
+    .settings-main { flex-direction: column; }
+    .settings-nav {
+      flex: 0 0 auto; flex-direction: row; overflow-x: auto;
+      border-right: none; border-bottom: 1px solid var(--vscode-panel-border);
+    }
+    .settings-body { padding: 8px 12px; }
+  }
 </style>`;
 }

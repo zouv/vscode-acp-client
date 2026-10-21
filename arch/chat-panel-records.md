@@ -451,7 +451,7 @@ uri 片段）；真 Chromium 的 `#refchip` 档（`toggle:'+'`、`label`、`href
 
 ### 5.49 「尾巴被输入卡压住」的按结果自愈、可见性重判与日志轮转（CUSTOM-20261009-210）
 
-**症状**（用户 2026-10-09 第三次报，截图在 aki_work 会话）：滚动条已触底、消息却没拉到底部 ——
+**症状**（用户 2026-10-09 第三次报，截图在 workspace 会话）：滚动条已触底、消息却没拉到底部 ——
 到底时最后一条记录被悬浮输入卡压住，而且**滚无可滚**。像素量化：截图刻底部留白只剩 ~24px
 （变量的缺省值），而卡片实高 ~80–104px ⇒ `--vac-composer-h` 停在 0 而卡片可见。
 
@@ -527,8 +527,8 @@ button；行仍是真 `<button>`）绝对定位浮在右端，默认 `opacity:0;
 改名走原生 `showInputBox`（清空 / 取消都当"没改"——清空意味着"回到原始标题"，
 而底层标题（agent/缓存/磁盘）列表这边拿不到，不猜）。
 
-**行内布局（212 修）**：目录名从"行最右端"改成**会话名后的括号后缀**（`(aki_work)`，靠左）——
-2026-10-09 用户报：原来它与右端的悬停图标重叠（图里就是"图标压在 aki_work 上"）。
+**行内布局（212 修）**：目录名从"行最右端"改成**会话名后的括号后缀**（`(workspace)`，靠左）——
+2026-10-09 用户报：原来它与右端的悬停图标重叠（图里就是"图标压在 workspace 上"）。
 CSS 上 `.session-row .outline-text { flex: 0 1 auto }`（标题按内容占位、过长才省略，右端空档
 留给 `.row-actions`）；**只限历史行**——大纲行的 `.outline-text` 仍是 `flex: 1`（时刻贴右缘）。
 
@@ -554,7 +554,7 @@ applyAction 摘行换标签且不重置过滤）；真 Chromium 的 `#historyrow
 
 **颜色分工（226 修订，用户报"完成态看不见"）**：首版把状态色写在 `color:` 上，而 `background: currentColor` 会把 color 当背景用 —— 完成态（无状态类）时 color 是 `descriptionForeground`（灰）、背景灰、文字近黑 ⇒ 看不见。现在**状态色只给 background-color，文字色固定在 color 上**（不再吃状态类）；外圈单独读 `--tab-dot-state` 自定义属性（background-color 不能给 currentColor 用）。
 
-缩写规则：'story-myriad-pavilion' → 'SMP'，'AbcDeFg' → 'ADF'，'abc-de-fg' → 'ADF'。
+缩写规则：'alpha-beta-gamma' → 'ABG'，'AbcDeFg' → 'ADF'，'abc-de-fg' → 'ADF'。
 
 **踩坑**：拆词不用正则 lookbehind（本文件要走 check-webview-client.mjs 的 new Function 解析，lookbehind 在它的目标解析里会报 Unexpected token）—— 用两轮拆分（先按非字母数字切，再按驼峰边界切）。预览主题里原先没有 `--vscode-charts-orange/yellow/blue` 三个 token，waiting/loading/attention 三态的 background-color 算出来是透明 —— 补齐后探针才验得出对比色。
 

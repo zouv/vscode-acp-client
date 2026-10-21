@@ -76,7 +76,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/agents/AgentProfile.ts` | 按 `kind`（claude / codex / generic）分化的 agent 专有行为：会话请求的 `_meta`（自定义模型） | 新增 agent 专有差异 |
 | `src/config/AgentConfig.ts` | 读 `vac.agents`；`getAgentNames` 把第一个 Claude 排最前；`getAgentKind` | agent 列表读取/排序 |
 | `src/config/CustomModels.ts` | `vac.customModels` 的读取与规整（纯函数 + 读配置） | 自定义模型配置 |
-| `src/core/AgentManager.ts` | agent 子进程生命周期：`spawnAgent`/`killAgent`/`killAll`；Windows 走 `cmd.exe`，类 Unix 走 login shell（修 npx ENOENT）；进程组 + `taskkill /T /F` 一并收子孙 | agent 起不来 / 平台差异 / 进程泄漏 |
+| `src/core/AgentManager.ts` | agent 子进程生命周期：`spawnAgent`/`killAgent`/`killAll`；Windows 走 `cmd.exe`，类 Unix 走 login shell（修 npx ENOENT）；进程组 + `taskkill /T /F` 一并收子孙；**npx 启动的 agent 命中本地缓存时直接 `node <entry>`**（`scheduleInstall` 在首次连接 15s 后后台缓存） | agent 起不来 / 平台差异 / 进程泄漏 |
+| `src/core/AgentInstall.ts` | **agent 运行时本地缓存**（纯逻辑 + node fs）：`npxSpecOf` 拆 spec、`installDirFor`/`readInstalled`（7 天 TTL）、`entryFromInstall` 从 `package.json`+`bin` 找回入口。绕过 `npm exec` 每次 11–17s 的 reify；缓存目录 `globalStorage/agents/<agent>`（约 320MB/个） | 首次连接慢 / npx 启动开销 |
 | `src/core/ConnectionManager.ts` | stdio → Web Streams → `ndJsonStream`；建 `ClientSideConnection`；`initialize`（含 `clientCapabilities`）；解析 `_meta.steering`；traffic tap | 协议握手 / 抓包 / SDK 升级 |
 | `src/core/AgentConnector.ts` | agent 名 ↔ 进程 id 索引、`ensure()` 合并并发连接、能力摘要缓存、**每连接控制面串行队列** `enqueue()` | 连接去重 / 能力协商 / RPC 排队 |
 | `src/core/SessionManager.ts` | 编排器：`connectToAgent`/`createSession`/`newConversation`/`closeSession`/`disconnectAgent`/`ensureConnected`/`sendPrompt`/`steerPrompt`/`cancelTurn`/`setMode`/`setModel`/`setConfigOption`/`listSessions`/`openExistingSession`/`loadSession`/`resumeSession`；**订阅 `SessionUpdateHandler`**，把 `available_commands_update` / `config_option_update` / `current_mode_update` 落成状态（`applyAvailableCommands`/`applyConfigOptions`/`applyCurrentMode`，会话未注册时进 `PendingSessionState`） | 会话状态机 / 新事件 / 能力协商 |
@@ -127,6 +128,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 修进程残留 / 关不干净 | `terminateTree()` | 类 Unix 杀进程组，Windows 用 `taskkill /T /F` |
 | 改 agent 是否已连接的判定 | `AgentConnector.isConnected` / `agentIdOf` | 以**进程索引**为准，不是「有没有会话」 |
 | 避免一个 agent 被并发拉起两个进程 | `AgentConnector.ensure()` | 单飞（single-flight）合并 |
+| 首次连接慢 / npx 启动开销 | `AgentManager.spawnAgent`（缓存命中走 `node <entry>`）+ `scheduleInstall`/`runInstall`；纯逻辑在 `AgentInstall.ts` | 实测 npx 11–17s vs 直启 0.6s；缓存目录 `globalStorage/agents/`，7 天过期 |
 | 控制面 RPC 排队 | `AgentConnector.enqueue()` | 只排 new/load/resume/close，**prompt 不排** |
 
 ### 2.2 协议与握手（`src/core/ConnectionManager.ts`）
@@ -177,6 +179,11 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | sub-agent 子会话卡 | `html/client/transcriptView.ts` 的 `buildSubagent` / `patchSubagent`（记录类型 `subagent`） | 状态/标题走 `revise` 就地补丁；Cancel 发 `cancelSubagent` |
 | 编辑区标签栏右侧入口 | `package.json(menus.editor/title)` → `vac.openChatFromEditorTab`（动作同 `vac.openChatInEditor`） | 图标用 `resources/icon-editor-color.svg`（全彩徽标）—— 路径图标按**图片**渲染，颜色按 SVG 自己的来；Chat 面板已在编辑区激活时隐藏 |
 | 历史列表行的悬停动作 | `html/client/sessionMenu.ts` 的 `buildRowActions` + `applyAction` | Archive 只写本地标签；**Delete 走 `deleteSession`（真删除，宿主先弹确认）**，两条同走 `sessionAction` 回执对账 |
+| 会话 tab 右键菜单 | `html/client/contextMenu.ts` 的 `itemsFor`（`.tab` 分支） | Close / Rename / **Copy Session ID**；草稿与待恢复 tab 没有 `data-session-id`，只有 Close |
+| 会话 tab 中键关闭 | `html/client/tabs.ts` `renderTabs`（`mousedown` button==1 + `auxclick`） | 与 × / Delete / 右键 Close 汇入 `closeModel`；运行中会话的确认在宿主 `closeSessionWithConfirm`（原生模态） |
+| 设置面板 | `html/client/settingsPanel.ts`（渲染）+ `ChatPanelHost.settingsItems` / `handleSetSetting` / `handleSettingAction` | 左侧分组导航、右侧行；宿主是唯一写者（`vac.*` 写配置，`panel.*` 写 UiPrefs）。**每个 agent 的默认模型**在 `session-created('new')` 由 `applyRememberedModel` 落地（草稿页的显式选择排在它之后）。自定义模型是结构化列表编辑器，Agent 配置是 JSON 编辑器，二者都在**子面板**里打开（主面板只显示摘要 + Edit…）；操作项含打开/清除运行时缓存与重置面板偏好 |
+| 新输出自动展开 | `html/client/autoExpand.ts`（状态 + 地址栏按钮）+ `transcriptView.setAutoExpand` / `expandEntry` | 按会话（`autoExpandBySession` + 默认值）与全局卡片类型（`autoExpandKinds`：tool / thought / diff）；只作用于 live append/patch/updateTool，hydrate 不碰 |
+| 首屏连接预热 / 连接耗时 | `ChatPanelHost.prewarm`（由 `ChatViewProvider.resolveWebviewView` / `openEditorChat` 调用） | 只预热 `ensureConnected`、不建会话；日志里有 `prewarm connected in Nms` 与 `initialized in Nms` / `session ready in Nms` |
 | webview 样式 | `html/styles.ts` | 按 §5 的锚点搜 |
 
 ### 2.6 能力实现（`src/handlers/`）
@@ -262,6 +269,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 宿主 ↔ Chat webview | `postMessage`（协议见 `ui/chat/protocol.ts`） | CSP + nonce，`localResourceRoots` 限定 | 一个视图只有一个 `onDidReceiveMessage` 监听器 |
 | 宿主 ↔ Dashboard webview | `postMessage`（见 `dashboard/DashboardModel.ts`） | CSP + nonce；命令走白名单 | 只投递 `snapshot`；不可见时不投 |
 | 会话缓存 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.sessionHistory.v1`，**改名即丢历史** |
+| 会话恢复快照 | `globalState`（`ChatPanelHost.saveOpenSessions`） | —— | key `vac.openSessions.v1`；每条 `RecoverableSession` 可带 `app`（写入时的 IDE 标签），与当前环境相同的会在下发前剥掉，只用于标注 |
+| 模型切换诊断 | `SessionManager.noteModelChange` | —— | `model <旧> -> <新> (<source>)`，source = `session-response` / `set-response` / `notification`；只在值真的变化时写 |
 | 用量索引 | `globalStorageUri` 下 `usage-index.json` | —— | 原子写（临时文件 + rename），损坏则重建 |
 
 **数据/单位铁律**：

@@ -15,29 +15,27 @@
 
 ## 状态快照
 
-- **最近更新**：2026-10-19
-- **整体状态**：✅ **无进行中的开发任务。v1.3.1 已发布**（GitHub Release 附
-  `vscode-acp-client-1.3.1.vsix`，423.35 KB / 10 文件）。本轮 = 用户两轮反馈（共 11 条）：
-  历史会话最后一条 markdown 渲染 + 复制双路径/诊断 + `Copy selection`；编辑区图标全彩、
-  置顶卡框选不跳转、历史弹窗头部顺序、Times 图标化、tab 切换先本地高亮、tab 涟漪修复、
-  tab 选中态区分度。已归档到 `CHANGELOG [1.3.1]`。
-- **当前分支（必填）**：`main`，与 `origin/main` 同步。
-- **最后验证状态**（2026-10-19，v1.3.1 发布）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（91 项）·
-  `npm test`（真实宿主）✅ **488 项** · `npm run vsix` ✅ 生成
-  `release/vscode-acp-client-1.3.1.vsix`（10 文件，含 `resources/icon-editor-color.svg`）。
-  ⚠️ 仍未做 `npm run dev:host` 真机验收（见「下一步」第 1 条）。
+- **最近更新**：2026-10-21
+- **整体状态**：✅ **无进行中任务。v1.4.0 已发布**（GitHub Release 附
+  `vscode-acp-client-1.4.0.vsix`）。本轮 = M4（5 项反馈）+ M5（设置面板 / 自动展开 / 中键关闭 / 首帧）
+  + 隐私清理，已归档到 `CHANGELOG [1.4.0]`。
+- **当前分支（必填）**：`main`（已提交并推送，与 `origin/main` 同步）。
+- **最后验证状态**（2026-10-21，v1.4.0 发布）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（101 项）·
+  `check-webview-client` ✅（24 个客户端模块）· `npm test`（真实宿主）✅ **503 项** ·
+  `check-docs.sh` ✅ · `npm run vsix` ✅（`release/vscode-acp-client-1.4.0.vsix`）。
+  ⚠️ 仍未做 `npm run dev:host` 真机验收（见「下一步」）。
 
 ---
 
 ## 当前任务（In Progress）
 
-- （无。v1.3.1 已发布并归档；剩下的只有真机验收，见「下一步」。）
+- （无。v1.4.0 已发布并归档；剩下的只有真机验收与 Marketplace。）
 
 ---
 
 ## 待归档暂存区（仅本轮未归档的完成项）
 
-- （无。）
+- （无。已写入 `CHANGELOG [1.4.0]`。）
 
 ## 进行中（半成品 / 未提交）
 
@@ -46,31 +44,30 @@
 ## 阻塞 / 待决策（Blockers）
 
 - **上架前的截图**：README 与 Marketplace 列表都还没有截图（`ROADMAP.md` P2-5 待办项之一）。
-  准备放 `docs/images/` 并在 README「特性」上方引用。
 
 ---
 
 ## 下一步（Next Steps）
 
-> 均来自 `ROADMAP.md` 的近期规划；接手时按用户实际指定挑一条，先按 §0.5 定范围再动手。
-
-1. **v1.3.1 真机验收（最高优先）**：`npm run dev:host` 后逐条确认：①大会话历史会话的
-   **最后一条 markdown**；②地址栏/消息卡 Copy（判据：`[vac] copy` → `copied N char(s)`；
-   失败看 `clipboard write failed`）；③编辑器标题栏图标为全彩徽标；④置顶卡内拖选文本松手不跳转；
-   ⑤历史弹窗筛选在左、计数在右；⑥Times 为时钟图标 + tooltip；⑦切 tab 高亮立即切换
-   （看 `[vac] focus: hydrate N entries in Xms`）；⑧运行中 tab 的颜色 + 外圈涟漪；
-   ⑨当前 tab 的同色底 + 顶部强调线 + 加粗。
-2. **P1-2 宿主实测验收（v1.3.0 遗留）**：`npm run dev:host` 目视确认 Dashboard 统计/连接状态、
-   聊天面板（发消息 → 流式 → 工具调用 → 权限卡）、Agents 树/历史弹窗的 **Delete**、
-   助手消息右键 **Fork from here**、**sub-agent 卡**的 Cancel、编辑区标签栏入口图标、
-   会话 tab 的目录徽标（真机字号）、Dashboard 标题栏两颗按钮、表单（231）抽屉与回执卡、
-   目录筛选菜单的层叠。
-3. **P1-1 Codex 端到端**：用真实 `codex-acp` 跑通连接与一次会话；核对
-   `src/dashboard/usage/CodexUsageSource.ts` 的用量口径。
-4. **P1-3 打包瘦身**：`dist/extension.js` 1.48 MB（压缩后），主要来自 ACP SDK 全量引入；
-   注意 `.vscodeignore` 的忽略**不支持通配嵌套路径**，排除 dist 下的文件要写精确路径。
-5. **P2-5 上架 Marketplace**：已具备图标（`npm run icon` 生成）；剩余注册 publisher、准备截图、发布。
-6. 用户若指定新需求：按 `ARCHITECTURE.md` §0.5 定范围 → 定位函数 → 实施 → 文档同步。
+1. **v1.4.0 真机验收（M4+M5）**（最高优先）：`npm run dev:host` 后确认：
+   ① 齿轮面板：四组、固定尺寸、`+` 紧跟最后一个 tab、齿轮固定右侧；Browse… 弹系统目录选择器；
+   ② 设置改动落盘并与 VS Code Settings 同步；子面板里的自定义模型 / Agent JSON 编辑器；
+   ③ 地址栏自动展开：新输出展开、历史回放不展开；卡片类型与高度在 **Appearance** 里调（0 = 不限）；
+   ④ 中键关闭（运行中弹确认；草稿/待恢复各自语义）；打开面板即连接；首帧 `Starting VAC…`。
+2. **其中 M4 遗留项**：
+   ① 新建草稿页选 `<custom-model>` → 发送 → 模型不再弹回 opus（看日志 `SessionManager: model ... (source)`）；
+   ② 会话 tab 右键出现 **Copy Session ID** 且内容正确；
+   ③ 关闭窗口再打开 → 恢复卡片能显示 `(VS Code Insiders)` 之类的跨环境标注（用共享 user-data 复现）；
+   ④ 首次连接：日志出现 `prewarm connected in ...ms`；首次连接后约 15s 起看
+   `Agent runtime cached for "Claude Code" in ...ms`，**下一次启动**应变成
+   `Spawning agent ... (cached runtime v0.91.0)`，连接降到 ~1s；
+   ⑤ 滚动问题复现时抓 `~/.vac/vac.log` 的 `scroll#` 行：`cov=1` 即定案，`heal-skip:` 说明自愈为何没出手。
+2. **v1.3.1 真机验收（遗留）**：见 `CHANGELOG [1.3.1]` 的 9 条（markdown / Copy / 图标 / 置顶卡 / 历史弹窗 /
+   Times / tab 高亮与涟漪）。
+3. **P1-2 宿主实测验收（v1.3.0 遗留）**：Dashboard、聊天面板、树/历史弹窗 Delete、Fork、sub-agent 卡等。
+4. **P1-1 Codex 端到端**：用真实 `codex-acp` 跑通连接与一次会话；核对 `CodexUsageSource.ts` 的用量口径。
+5. **P1-3 打包瘦身**：`dist/extension.js` 主要来自 ACP SDK 全量引入。
+6. **P2-5 上架 Marketplace**：注册 publisher、准备截图、发布。
 
 ---
 

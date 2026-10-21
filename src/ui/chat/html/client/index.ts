@@ -32,6 +32,11 @@ import { stickyUserClient } from './stickyUser';
 // [CUSTOM- 记录区「Times」开关的状态机（按会话记 + 一个默认值）。与 stateCard 同类：
 // 加载期不碰 DOM，全部由 boot 的 init() 驱动，因此能在桩 DOM 里被单独加载。
 import { timesClient } from './times';
+// [CUSTOM- 新输出自动展开（与 Times 同一形态：按会话 + 默认值 + 全局卡片类型）。
+// 它只改 transcriptView 的状态，init 在 boot 里调用。
+import { autoExpandClient } from './autoExpand';
+// [CUSTOM- 设置面板（Tab 栏右侧齿轮）。宿主是唯一写者，模块只渲染与回传。
+import { settingsPanelClient } from './settingsPanel';
 // [CUSTOM- 长任务看门狗（记录区 markdown 回填分帧的验收手段，也是"点了没反应"
 // 这类症状的常驻证据）。
 import { perfClient } from './perf';
@@ -70,6 +75,9 @@ const MODULES: ReadonlyArray<string> = [
   stickyUserClient,
   // [CUSTOM- Times 开关（它 apply 时要重渲染置顶副本，所以排在 stickyUser 之后）。
   timesClient,
+  // [CUSTOM- 自动展开开关与设置面板：加载期不碰 DOM（init 由 boot 调），可在桩里单独驱动。
+  autoExpandClient,
+  settingsPanelClient,
   // [CUSTOM- 看门狗：boot 的 init 里装（加载期不碰 DOM，可在桩里单独驱动）。
   perfClient,
   bootClient,

@@ -127,6 +127,74 @@ export const transcriptViewClient = `
     if (NS.outline && NS.outline.invalidate) { NS.outline.invalidate(); }
   }
 
+  // [CUSTOM- 新输出自动展开（2026-10-21）：状态由 client/autoExpand.ts 喂进来。
+  // 只作用于 **live** 路径（append / patch / updateTool）；hydrate（历史回放）刻意不碰 ——
+  // 打开大会话就整屏展开既卡又抢滚动位置（用户选的是"仅新输出"）。
+  var autoExpandOn = false;
+  var autoExpandKinds = [];
+
+  function setAutoExpand(on, kinds) {
+    autoExpandOn = on === true;
+    autoExpandKinds = [];
+    for (var i = 0; kinds && i < kinds.length; i++) {
+      var kind = String(kinds[i]);
+      if (autoExpandKinds.indexOf(kind) < 0) { autoExpandKinds.push(kind); }
+    }
+  }
+
+  function wantsKind(kind) { return autoExpandOn && autoExpandKinds.indexOf(kind) >= 0; }
+
+  /** 展开一张刚到达的卡片：只切折叠状态（details.open / hidden），不读几何。 */
+  function expandEntry(node, kind) {
+    if (!node) { return; }
+    if (kind === 'thought' && wantsKind('thought')) {
+      // 推理块的记录节点**自己就是** <details>。
+      if (node.open !== undefined) { node.open = true; }
+      else {
+        var det = node.querySelector ? node.querySelector('details.thought') : null;
+        if (det) { det.open = true; }
+      }
+      markAutoExpanded(node);
+    }
+    if (kind === 'tool' && wantsKind('tool')) { expandToolCard(node); }
+  }
+
+  /** 打上标记：只有"自动展开"的卡才吃 --vac-*-expand-h 的限高，手动点开的不受限。 */
+  function markAutoExpanded(node) {
+    if (!node) { return; }
+    if (node.classList && node.classList.add) { node.classList.add('auto-expanded'); return; }
+    var cls = typeof node.className === 'string' ? node.className : '';
+    if (cls.indexOf('auto-expanded') < 0) {
+      node.className = (cls ? cls + ' ' : '') + 'auto-expanded';
+    }
+  }
+
+  function expandToolCard(node) {
+    if (!node || !node.querySelector) { return; }
+    markAutoExpanded(node);
+    var body = node.querySelector('.tool-body');
+    var head = node.querySelector('.tool-head');
+    if (body && body.hidden) {
+      body.hidden = false;
+      if (head) { head.setAttribute('aria-expanded', 'true'); }
+      var caret = head && head.querySelector ? head.querySelector('.tool-caret') : null;
+      if (caret) { caret.textContent = '\\u25be'; }
+    }
+    if (!wantsKind('diff') || !node.querySelectorAll) { return; }
+    var heads = node.querySelectorAll('.diff-head[data-diff-toggle]');
+    for (var i = 0; i < heads.length; i++) {
+      var diffHead = heads[i];
+      var diffBody = diffHead.parentNode && diffHead.parentNode.querySelector
+        ? diffHead.parentNode.querySelector('.diff-body')
+        : null;
+      if (!diffBody || !diffBody.hidden) { continue; }
+      diffBody.hidden = false;
+      diffHead.setAttribute('aria-expanded', 'true');
+      var diffCaret = diffHead.querySelector ? diffHead.querySelector('.tool-caret') : null;
+      if (diffCaret) { diffCaret.textContent = '\\u25be'; }
+    }
+  }
+
   // Only these keys may be copied onto a stored entry. Narrowing the write
   // prevents a future message shape from silently corrupting entry objects.
   // [CUSTOM- 这四个替换型键名必须与**记录字段名**逐字相同
@@ -1188,6 +1256,7 @@ export const transcriptViewClient = `
           existing.parentNode.replaceChild(rebuilt, existing);
           nodes[entry.id] = rebuilt;
           watchNode(rebuilt);
+          if (autoExpandOn) { expandEntry(rebuilt, 'tool'); }
           refreshGroupingSoon();
         } else {
           updateTool(entry.id, toolView);
@@ -1200,6 +1269,8 @@ export const transcriptViewClient = `
     var placed = place(entry, toolView);
     messagesEl.appendChild(placed);
     watchNode(placed);
+    // [CUSTOM- 自动展开：在 follow 之前改高度，视口按最终尺寸跟到底。
+    if (autoExpandOn) { expandEntry(placed, entry.kind); }
     // [CUSTOM- The fold decision for a user message is a measurement.
     if (entry.kind === 'user') { settleUserFold(placed, entry); }
     if (entry.kind === 'tool') { refreshGroupingSoon(); }
@@ -1285,7 +1356,9 @@ export const transcriptViewClient = `
         // viewport. Its finalize fires exactly when the answer starts (or the
         // turn ends), which is precisely when the reader wants it out of the
         // way. The node itself IS the <details> element, so set .open on it.
-        node.open = false;
+        // [CUSTOM- 但用户开了「新输出自动展开」并勾了推理块时，这条折叠**不生效** ——
+        // 那正是他要的相反语义（2026-10-21）。
+        if (!wantsKind('thought')) { node.open = false; }
       }
     } else if (entry.kind === 'plan') {
       var rebuilt = buildPlan(entry);
@@ -1341,6 +1414,8 @@ export const transcriptViewClient = `
     } else {
       NS.toolCallView.update(node, tool, entryId);
     }
+    // [CUSTOM- 正文重建（空壳卡）会把折叠面重置成收起 —— 自动展开且勾了工具卡时补回来。
+    if (wantsKind('tool')) { expandToolCard(nodes[entryId]); }
     NS.scroll.follow();
   }
 
@@ -1386,6 +1461,8 @@ export const transcriptViewClient = `
     setFoldSession: setFoldSession,
     userCollapsed: userCollapsed,
     setUserCollapsed: setUserCollapsed,
+    // [CUSTOM- 新输出自动展开：状态由 client/autoExpand.ts 推进来（只作用于 live 路径）。
+    setAutoExpand: setAutoExpand,
     // [CUSTOM- Called by the rail when a record gains a real size.
     resolvePendingFolds: resolvePendingFolds,
     ordered: ordered,

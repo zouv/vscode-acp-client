@@ -1102,6 +1102,28 @@ suite('chat panel: draft page creates the session on first send', () => {
       'the first turn has to run with what the draft page showed');
   });
 
+  test('a model picked on the draft page is applied BEFORE the first message (and sticks)', async function () {
+    // [CUSTOM- 用户报「草稿页选好自定义模型，发出消息后自己变回内置模型」。
+    // 这条把顺序钉住：apply 必须在 send 之前，且会话最后那份 configOptions 就是用户选的。
+    const { harness, manager } = draftHarness();
+    manager.configOptionsForNew = NEW_SESSION_OPTIONS;
+    harness.host.onMessage({
+      type: 'createDraftAndSend', draftId: 'd5', cwd: '/dir', text: 'hi',
+      configSelections: [{ configId: 'model', value: 'opus' }],
+    });
+    await waitFor(() => manager.sent.length > 0, 'the prompt to be sent');
+
+    assert.deepStrictEqual(manager.applied, [{ configId: 'model', value: 'opus' }]);
+    assert.deepStrictEqual(manager.order, ['apply:model=opus', 'send'],
+      'the first turn has to run with the model the draft page showed');
+    const model = (manager.getSession(manager.sent[0].sessionId)?.configOptions ?? [])
+      .find(option => (option as { category?: string }).category === 'model') as { currentValue?: unknown };
+    assert.strictEqual(String(model?.currentValue), 'opus',
+      'the session must still carry the picked model after the turn starts');
+    assert.strictEqual(messagesOf(harness, 'draftResolved').length, 1);
+    assert.strictEqual(messagesOf(harness, 'draftFailed').length, 0);
+  });
+
   test('a value this session no longer offers is skipped, and the message still goes out', async function () {
     const { harness, manager } = draftHarness();
     manager.configOptionsForNew = NEW_SESSION_OPTIONS;
@@ -1781,8 +1803,8 @@ suite('chat panel: history picker directory filter', () => {
   // it is verified by hand, see dev-workflow.md's split.
 
   test('directory identity folds case on Windows/macOS, not on Linux', () => {
-    assert.strictEqual(directoryKey('D:\\Git\\Repo\\', 'win32'), 'd:/git/repo');
-    assert.strictEqual(directoryKey('d:/git/repo', 'win32'), 'd:/git/repo');
+    assert.strictEqual(directoryKey('D:\\work\\repo\\', 'win32'), 'd:/work/repo');
+    assert.strictEqual(directoryKey('d:/work/repo', 'win32'), 'd:/work/repo');
     // The case rule is a property of the PLATFORM: on Linux these are two folders.
     assert.notStrictEqual(directoryKey('/Home/Me', 'linux'), directoryKey('/home/me', 'linux'));
     assert.strictEqual(directoryKey('/home/me/', 'linux'), '/home/me');
@@ -1799,12 +1821,12 @@ suite('chat panel: history picker directory filter', () => {
   test('candidates come from the list; the current folder is always offered', () => {
     const options = directoryOptions(
       [
-        { cwd: 'D:\\Git\\alpha' },
-        { cwd: 'D:\\Git\\alpha\\' },   // same folder, different spelling → ONE option
-        { cwd: 'D:\\Git\\beta' },
+        { cwd: 'D:\\work\\alpha' },
+        { cwd: 'D:\\work\\alpha\\' },   // same folder, different spelling → ONE option
+        { cwd: 'D:\\work\\beta' },
         { cwd: undefined },            // nothing to filter by
       ],
-      'D:/Git/alpha',
+      'D:/work/alpha',
       'win32',
     );
     assert.deepStrictEqual(options.map(o => [o.name, o.count, o.current]), [
@@ -1828,12 +1850,12 @@ suite('chat panel: history picker directory filter', () => {
   });
 
   test('two candidates with the same folder name are told apart', () => {
-    // The first real list had "UniverseEditor" twice (two checkouts of one repo), and
+    // The first real list had "Project" twice (two checkouts of one repo), and
     // two identical labels cannot be picked between — so the label grows leftwards.
-    const options = directoryOptions([{ cwd: '/x/git/UniverseEditor' }, { cwd: '/y/zdev/UniverseEditor' }]);
+    const options = directoryOptions([{ cwd: '/x/work/Project' }, { cwd: '/y/archive/Project' }]);
     assert.deepStrictEqual(options.map(o => [o.name, o.label]), [
-      ['UniverseEditor', 'git/UniverseEditor'],
-      ['UniverseEditor', 'zdev/UniverseEditor'],
+      ['Project', 'work/Project'],
+      ['Project', 'archive/Project'],
     ]);
     // A unique name stays as short as it was.
     assert.deepStrictEqual(
@@ -2396,7 +2418,7 @@ suite('chat panel: replay fidelity ()', () => {
   // 是**上下文**，不是用户说过的话。它以前按普通 user chunk 走 ⇒ 同一条消息渲染成**两个**蓝色气泡
   // （用户报："附加的文件没有合并到一个对话里（预期是跟图片附件一样显示），现在是分成了两条对话"）。
   // 现在：块不建记录，文件作为 **chip 挂到同一条消息的用户气泡**上（与官方插件同款：chip 在上、正文在下）。
-  const IDE_BLOCK = '<ide_opened_file>The user opened the file f:/P4/x/PianoGameplayDefine.cs in the IDE. '
+  const IDE_BLOCK = '<ide_opened_file>The user opened the file d:/work/src/DemoFile.cs in the IDE. '
     + 'This may or may not be related to the current task.</ide_opened_file>';
 
   function feedUserChunks(sessionId: string, chunks: string[]): Harness {
@@ -2420,8 +2442,8 @@ suite('chat panel: replay fidelity ()', () => {
     assert.strictEqual(users[0].text, '两边都提交git', '气泡里是正文，不是那段注入文本');
     const attachments = (users[0] as { attachments?: Array<{ path?: string; name?: string }> }).attachments ?? [];
     assert.strictEqual(attachments.length, 1, '文件成了这条消息上的 chip');
-    assert.strictEqual(attachments[0].path, 'f:/P4/x/PianoGameplayDefine.cs', '点它走 openFile');
-    assert.strictEqual(attachments[0].name, 'PianoGameplayDefine.cs', 'chip 显示文件名（官方插件同款）');
+    assert.strictEqual(attachments[0].path, 'd:/work/src/DemoFile.cs', '点它走 openFile');
+    assert.strictEqual(attachments[0].name, 'DemoFile.cs', 'chip 显示文件名（官方插件同款）');
     assert.strictEqual(state.entries.filter(e => e.kind === 'notice').length, 0, '也不是提示条');
   });
 
@@ -2521,7 +2543,7 @@ suite('chat panel: replay fidelity ()', () => {
     try {
       const bucket = path.join(root, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
       fs.mkdirSync(bucket, { recursive: true });
-      const target = 'f%3A/P4/AKI/aki_dev_zouwei/Source/Client/GrapplingHookPointComponent.cs';
+      const target = 'd%3A/work/project/Source/Client/GrapplingHookPointComponent.cs';
       fs.writeFileSync(path.join(bucket, 's-ref.jsonl'), [
         JSON.stringify({
           type: 'user', uuid: 'u-ref', timestamp: '2026-10-09T10:00:00.000Z',
@@ -2559,7 +2581,7 @@ suite('chat panel: replay fidelity ()', () => {
       assert.strictEqual(user.attachments!.length, 1);
       assert.strictEqual(user.attachments![0].type, 'resource_link');
       // `path` 存在 ⇒ chip 点击走 openFile（039/205 的既有约定），与发送时那条同形。
-      assert.strictEqual(user.attachments![0].path, 'f:\\P4\\AKI\\aki_dev_zouwei\\Source\\Client\\GrapplingHookPointComponent.cs');
+      assert.strictEqual(user.attachments![0].path, 'f:\\P4\\AKI\\aki_dev\\Source\\Client\\GrapplingHookPointComponent.cs');
       // 名字归一成 live chip 的写法（composer.ts refLabel 的 `<name>:<start>-<end>`）。
       assert.strictEqual(user.attachments![0].name, 'GrapplingHookPointComponent.cs:437-440');
     } finally {
@@ -4171,7 +4193,7 @@ suite('chat panel: the connecting card hears why it is slow', () => {
 // `readActiveFileFrom` 收一个**结构子集**（同 `pickDefaultCwd` 的既有做法）。
 suite('chat panel: active editor file → composer reference ()', () => {
   const editor = (over: Partial<ActiveEditorLike> = {}): ActiveEditorLike => ({
-    document: { uri: { scheme: 'file', fsPath: 'f:/P4/x/PianoGameplayDefine.cs' } },
+    document: { uri: { scheme: 'file', fsPath: 'd:/work/src/DemoFile.cs' } },
     selection: { isEmpty: true, start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
     ...over,
   });
@@ -4186,7 +4208,7 @@ suite('chat panel: active editor file → composer reference ()', () => {
 
   test('a file with no selection is the whole file', () => {
     assert.deepStrictEqual(readActiveFileFrom(editor()), {
-      path: 'f:/P4/x/PianoGameplayDefine.cs', name: 'PianoGameplayDefine.cs',
+      path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs',
     });
   });
 
@@ -4194,15 +4216,15 @@ suite('chat panel: active editor file → composer reference ()', () => {
     // 0 基 2..5 → 界面上的 3-5
     assert.deepStrictEqual(
       readActiveFileFrom(editor({ selection: { isEmpty: false, start: { line: 2, character: 4 }, end: { line: 5, character: 9 } } })),
-      { path: 'f:/P4/x/PianoGameplayDefine.cs', name: 'PianoGameplayDefine.cs', lineStart: 3, lineEnd: 6 });
+      { path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs', lineStart: 3, lineEnd: 6 });
     // 拖到下一行行首（character 0）时那一行不算选中 ⇒ 3-5 而不是 3-6（与编辑器显示一致）
     assert.deepStrictEqual(
       readActiveFileFrom(editor({ selection: { isEmpty: false, start: { line: 2, character: 4 }, end: { line: 5, character: 0 } } })),
-      { path: 'f:/P4/x/PianoGameplayDefine.cs', name: 'PianoGameplayDefine.cs', lineStart: 3, lineEnd: 5 });
+      { path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs', lineStart: 3, lineEnd: 5 });
     // 单行选区不带区间（引用整个文件）
     assert.deepStrictEqual(
       readActiveFileFrom(editor({ selection: { isEmpty: false, start: { line: 4, character: 1 }, end: { line: 4, character: 8 } } })),
-      { path: 'f:/P4/x/PianoGameplayDefine.cs', name: 'PianoGameplayDefine.cs' });
+      { path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs' });
   });
 
   test('attachPath 的 meta 进了附件（显示名带行区间），发送时 uri 带 #L 片段', async () => {
@@ -4221,13 +4243,13 @@ suite('chat panel: active editor file → composer reference ()', () => {
     harness.surface.sent.length = 0;
 
     harness.host.onMessage({
-      type: 'attachPath', sessionId: 'ref-session', paths: ['f:/P4/x/PianoGameplayDefine.cs'],
-      meta: [{ name: 'PianoGameplayDefine.cs:12-40', lineStart: 12, lineEnd: 40 }],
+      type: 'attachPath', sessionId: 'ref-session', paths: ['d:/work/src/DemoFile.cs'],
+      meta: [{ name: 'DemoFile.cs:12-40', lineStart: 12, lineEnd: 40 }],
     });
     const attachments = harness.surface.sent.filter(m => m.type === 'attachments').pop() as unknown as
       { attachments: Array<Record<string, unknown>> };
     assert.ok(attachments, '宿主必须把附件列回给客户端（chat 才会把 + 变成 ×）');
-    assert.strictEqual(attachments.attachments[0].name, 'PianoGameplayDefine.cs:12-40');
+    assert.strictEqual(attachments.attachments[0].name, 'DemoFile.cs:12-40');
     assert.strictEqual(attachments.attachments[0].lineStart, 12);
 
     harness.host.onMessage({ type: 'sendPrompt', sessionId: 'ref-session', text: '两边都提交git' });
@@ -4239,14 +4261,14 @@ suite('chat panel: active editor file → composer reference ()', () => {
     const link = blocks.find(b => b.type === 'resource_link');
     assert.ok(link, '提示里应有 resource_link：' + JSON.stringify(blocks));
     assert.ok(String(link!.uri).endsWith('#L12-40'), '行区间进 uri 片段（agent 也看得到）: ' + link!.uri);
-    assert.strictEqual(link!.name, 'PianoGameplayDefine.cs:12-40');
+    assert.strictEqual(link!.name, 'DemoFile.cs:12-40');
   });
 });
 
 // [CUSTOM- 引用的同一性 = 路径 + 行区间：同一个文件可以引用**多段**，
 // 摘除也只摘那一段（不带区间的拖拽/粘贴仍按路径去重/全摘，行为不变）。
 suite('chat panel: one file, several referenced ranges ()', () => {
-  const PATH = 'f:/P4/x/PianoGameplayDefine.cs';
+  const PATH = 'd:/work/src/DemoFile.cs';
 
   function listed(harness: Harness): Array<Record<string, unknown>> {
     const msg = harness.surface.sent.filter(m => m.type === 'attachments').pop() as unknown as
