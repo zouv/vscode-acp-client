@@ -5400,12 +5400,12 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     const { NS, posted } = withEntry();
     const addr = new StubNode('button');
     addr.className = 'session-title';                 // body.ts 的 #cwdBtn
-    addr.textContent = 'F:\\\\dev\\\\aki';
+    addr.textContent = 'D:\\\\work\\\\demo';
 
     const items = NS.contextMenu.itemsFor(addr) as Array<{ label: string; run: () => void }>;
     assert.strictEqual(labels(items), 'Copy');
     items[0].run();
-    assert.deepStrictEqual(posted, [{ type: 'copy', text: 'F:\\\\dev\\\\aki' }]);
+    assert.deepStrictEqual(posted, [{ type: 'copy', text: 'D:\\\\work\\\\demo' }]);
   });
 
   test('会话 tab：Close / Rename / Copy Session ID（初值取行上看得见的标签）；草稿 tab 只给 Close', () => {
@@ -6101,13 +6101,15 @@ suite('chat client logic: settings panel (stub DOM)', () => {
     posted.length = 0;
     const area = els.settingsSubBody.querySelector('.settings-json') as StubNode;
     const buttons = els.settingsSubBody.querySelectorAll('.settings-action');
+    // Cancel 在左、Save 在右（用户指定），所以 Save 是第二个。
+    const save = buttons[1];
     area.value = '{ nope';
-    buttons[0].dispatch('click', {});
+    save.dispatch('click', {});
     assert.strictEqual(posted.length, 0, 'a broken edit must not reach the host');
     assert.strictEqual(els.settingsSubBody.querySelector('.settings-json-error')!.hidden, false);
 
     area.value = '{"a":{"command":"node"}}';
-    buttons[0].dispatch('click', {});
+    save.dispatch('click', {});
     assert.deepStrictEqual(posted, [
       { type: 'setSetting', key: 'vac.agents', value: { a: { command: 'node' } } },
     ]);

@@ -2112,21 +2112,35 @@ export function styles(): string {
     max-width: 280px; text-align: right; font-size: 0.85em;
     color: var(--vscode-descriptionForeground); overflow-wrap: anywhere;
   }
-  /* [CUSTOM- JSON / 模型列表这类宽控件：整行纵向排。 */
-  .settings-row.wide { flex-direction: column; align-items: stretch; }
-  .settings-row.wide .settings-control { width: 100%; }
+  /* [CUSTOM- 设置子面板（模型列表 / JSON 编辑器）：盖在主面板之上、尺寸更小。
+     内容区是纵向 flex：编辑器自己占满，底部按钮靠右下。 */
+  .settings-sub-overlay { z-index: 85; }
+  .settings-sub-panel { width: min(640px, 100%); height: clamp(320px, 65vh, 560px); }
+  #settingsSubBody { display: flex; flex-direction: column; overflow: hidden; }
+  .settings-editor { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 8px; }
+  .settings-editor-intro { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+  .settings-editor-footer {
+    margin-top: auto; padding-top: 8px;
+    display: flex; justify-content: flex-end; gap: 8px;
+  }
   .settings-json {
-    width: 100%; min-height: 140px; resize: vertical; box-sizing: border-box;
+    flex: 1 1 auto; min-height: 80px; width: 100%; resize: none; box-sizing: border-box;
     padding: 6px 8px; border-radius: 3px;
     font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
   }
   .settings-json-error { margin-top: 4px; font-size: 0.8em; color: var(--vscode-errorForeground); }
-  .settings-models { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-  .settings-model-row { display: flex; gap: 6px; align-items: center; }
-  .settings-model-row .settings-text-input { width: auto; flex: 1 1 0; min-width: 0; }
-  .settings-model-row .settings-model-id { flex: 1.4 1 0; }
+  .settings-model-head, .settings-model-row {
+    display: grid; grid-template-columns: 1.5fr 1fr 1.2fr 24px; gap: 6px; align-items: center;
+  }
+  .settings-model-head { padding: 0 2px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
+  .settings-models {
+    display: flex; flex-direction: column; gap: 6px;
+    flex: 0 1 auto; min-height: 60px; overflow-y: auto;
+  }
+  .settings-model-row .settings-text-input { width: 100%; }
+  .settings-model-add { align-self: flex-end; }
   .settings-model-remove {
     padding: 2px 6px; border: none; border-radius: 3px; cursor: pointer;
     background: transparent; color: inherit;
@@ -2134,12 +2148,6 @@ export function styles(): string {
   .settings-model-remove:hover {
     background: var(--vscode-list-hoverBackground); color: var(--vscode-errorForeground);
   }
-  .settings-model-add { align-self: flex-start; margin-top: 2px; }
-  /* [CUSTOM- 设置子面板（模型列表 / JSON 编辑器）：盖在主面板之上、尺寸更小。 */
-  .settings-sub-overlay { z-index: 85; }
-  .settings-sub-panel { width: min(640px, 100%); height: clamp(300px, 65vh, 560px); }
-  .settings-sub-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
-  .settings-done { align-self: flex-start; margin-top: 10px; }
   @media (max-width: 520px) {
     .settings-main { flex-direction: column; }
     .settings-nav {

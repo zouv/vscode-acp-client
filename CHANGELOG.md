@@ -11,6 +11,21 @@
 
 ---
 
+## [1.4.1] - 2026-10-22
+
+### 变更
+- 设置子面板排版：Agent configuration 的 JSON 输入框铺满面板，Save / Cancel 靠右下（Cancel 在左）；
+  Custom models 增加说明行与表头（Model id / Alias / Description），Add model 靠右紧跟列表，Done 靠右下。
+- Custom models / Agent configuration 的摘要移到文字列，Edit… 按钮与其它设置的控件右缘对齐。
+
+### 安全
+- 新增 `docs/dev-workflow.md`「隐私与个人信息（提交 / 发布前必查）」：禁止清单、三条检查命令、
+  真机夹具采集规范与泄露后的处理流程；`AGENTS.md` §3 增加对应铁律。
+- 清理测试与文档里残留的内部项目路径/文件名（`F:\dev\aki`、`f:\P4\…`、`GrapplingHookPointComponent`
+  等），统一为中性占位。
+
+---
+
 ## [1.4.0] - 2026-10-21
 
 ### 新增
@@ -56,9 +71,9 @@
   用于追查"选了自定义模型后又变回内置模型"。
 
 ### 安全
-- 清理了仓库内的个人/本机信息：测试夹具与文档里的本机用户名、`C:\Users\…` 临时路径、内部项目目录
-  （`f:\P4\…` / `D:\Git\…` 等）统一替换为中性占位（`user` / `D:\work\…` / `<another workspace>`）；
-  预览脚本与开发文档同步。项目自身的发布者标识（`zouv`）与 MIT 版权保持不变。
+- 清理了仓库内的个人/本机信息：测试夹具与文档里的本机用户名、用户临时目录、内网盘符与内部项目目录，
+  统一替换为中性占位（`user` / `D:\work\…` / `<another workspace>`）；预览脚本与开发文档同步。
+  项目自身的发布者标识（`zouv`）与 MIT 版权保持不变。
 
 ---
 

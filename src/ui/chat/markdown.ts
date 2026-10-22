@@ -89,7 +89,7 @@ export function fileLinkTarget(href: string): { path: string; line?: number } | 
 // 回放里的「文件引用」不是内容块，是一段文本。
 //
 // 现象（用户报）：引用了文件的消息发送时气泡里有 chip，**会话 reload 后**变成原样显示的一串
-// `[@GrapplingHookPointComponent.cs](file:///f%3A/P4/…#L437-440)`。
+// `[@DemoFile.cs](file:///d%3A/work/…#L437-440)`。
 //
 // 根因：面板把引用按 ACP `resource_link` 块发出去，而 Claude Code 把它**序列化成一段文本**存进
 // 自己的转录（`[{text: 正文}, {text: '[@名](file:///…)'}]`），`session/load` 回放时又把这两块各发

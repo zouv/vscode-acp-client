@@ -108,11 +108,17 @@ export const settingsPanelClient = `
   }
 
   function renderRow(item) {
-    var wide = item.type === 'json' || item.type === 'models';
-    var row = NS.dom.el('div', 'settings-row' + (item.indent ? ' indent' : '') + (wide ? ' wide' : ''));
+    var row = NS.dom.el('div', 'settings-row' + (item.indent ? ' indent' : ''));
     var text = NS.dom.el('div', 'settings-text');
     text.appendChild(NS.dom.el('div', 'settings-label', item.label || item.key));
     if (item.description) { text.appendChild(NS.dom.el('div', 'settings-desc', item.description)); }
+    // [CUSTOM- 摘要放在文字列（不是控件列）：这样 Edit… 与其它设置的控件右缘对齐。
+    if (item.type === 'models' || item.type === 'json') {
+      var summary = item.type === 'models'
+        ? (Object.prototype.toString.call(item.value) === '[object Array]' ? item.value.length : 0) + ' model(s)'
+        : 'JSON object';
+      text.appendChild(NS.dom.el('div', 'settings-desc settings-summary', summary));
+    }
     if (item.warning) { text.appendChild(NS.dom.el('div', 'settings-warning', item.warning)); }
     row.appendChild(text);
     row.appendChild(renderControl(item));
@@ -178,10 +184,7 @@ export const settingsPanelClient = `
     }
     if (item.type === 'json' || item.type === 'models') {
       // [CUSTOM- 编辑器单独弹子面板（2026-10-21）：模型一多，内联列表会把主面板撑爆。
-      var summary = item.type === 'models'
-        ? (Object.prototype.toString.call(item.value) === '[object Array]' ? item.value.length : 0) + ' model(s)'
-        : 'JSON object';
-      wrap.appendChild(NS.dom.el('span', 'settings-value', summary));
+      // 摘要已放在文字列，这里只留按钮，右缘与其它控件对齐。
       var edit = NS.dom.el('button', 'settings-action', 'Edit\\u2026');
       edit.type = 'button';
       edit.addEventListener('click', function () { openEditor(item); });
@@ -261,32 +264,52 @@ export const settingsPanelClient = `
     if (!subOverlay || !subBody) { return; }
     if (subTitle) { subTitle.textContent = item.label || item.key; }
     NS.dom.clear(subBody);
+    var editor = NS.dom.el('div', 'settings-editor');
+    if (item.description) {
+      editor.appendChild(NS.dom.el('div', 'settings-editor-intro', item.description));
+    }
     if (item.type === 'models') {
+      // [CUSTOM- 表头 + 右对齐的动作（2026-10-21 排版调整）。
+      editor.appendChild(NS.dom.el('div', 'settings-editor-intro',
+        'Model id is sent to the agent; Alias is the label in the picker; Description is its subtitle and tooltip.'));
+      var head = NS.dom.el('div', 'settings-model-head');
+      head.appendChild(NS.dom.el('span', '', 'Model id'));
+      head.appendChild(NS.dom.el('span', '', 'Alias'));
+      head.appendChild(NS.dom.el('span', '', 'Description'));
+      head.appendChild(NS.dom.el('span', '', ''));
+      editor.appendChild(head);
+
       var list = NS.dom.el('div', 'settings-models');
       var rows = Object.prototype.toString.call(item.value) === '[object Array]' ? item.value : [];
       for (var m = 0; m < rows.length; m++) {
         list.appendChild(modelRow(item.key, list, rows[m]));
       }
+      editor.appendChild(list);
+
       var add = NS.dom.el('button', 'settings-action settings-model-add', 'Add model');
       add.type = 'button';
       add.addEventListener('click', function () {
         // 空行只存在于本地：一提交就会被宿主的 normalize 丢掉（那不是"新增失败"）。
         list.appendChild(modelRow(item.key, list, { modelId: '', name: '', description: '' }));
       });
-      list.appendChild(add);
-      subBody.appendChild(list);
-      // 模型的改动是即时的（每个 input 的 change 都会 send），这里只需要一个 Done。
-      var done = NS.dom.el('button', 'settings-action settings-done', 'Done');
+      editor.appendChild(add);
+
+      var footer = NS.dom.el('div', 'settings-editor-footer');
+      var done = NS.dom.el('button', 'settings-action', 'Done');
       done.type = 'button';
       done.addEventListener('click', closeEditor);
-      subBody.appendChild(done);
+      footer.appendChild(done);
+      editor.appendChild(footer);
     } else {
       var area = NS.dom.el('textarea', 'settings-json');
       area.rows = 14;
       area.value = JSON.stringify(item.value === undefined ? {} : item.value, null, 2);
       var error = NS.dom.el('div', 'settings-json-error');
       error.hidden = true;
-      var actions = NS.dom.el('div', 'settings-sub-actions');
+      var actions = NS.dom.el('div', 'settings-editor-footer');
+      var cancel = NS.dom.el('button', 'settings-action', 'Cancel');
+      cancel.type = 'button';
+      cancel.addEventListener('click', closeEditor);
       var save = NS.dom.el('button', 'settings-action', 'Save');
       save.type = 'button';
       save.addEventListener('click', function () {
@@ -301,15 +324,14 @@ export const settingsPanelClient = `
         send(item.key, parsed);
         closeEditor();
       });
-      var cancel = NS.dom.el('button', 'settings-action', 'Cancel');
-      cancel.type = 'button';
-      cancel.addEventListener('click', closeEditor);
-      actions.appendChild(save);
+      // Cancel 在左、Save 在右（用户指定）。
       actions.appendChild(cancel);
-      subBody.appendChild(area);
-      subBody.appendChild(error);
-      subBody.appendChild(actions);
+      actions.appendChild(save);
+      editor.appendChild(area);
+      editor.appendChild(error);
+      editor.appendChild(actions);
     }
+    subBody.appendChild(editor);
     subOverlay.hidden = false;
     if (subClose && subClose.focus) { subClose.focus(); }
   }

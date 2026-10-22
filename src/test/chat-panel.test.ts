@@ -2055,7 +2055,7 @@ suite('chat panel: image attachments ()', () => {
     harness.host.onMessage({
       // 盘符绝对路径（真实场景的形状）：POSIX 风格 /tmp/... 在 Windows 测试宿主上会经 Uri.file
       // 变成 file:///tmp/... —— fileURLToPath 解不出盘符（ERR_INVALID_FILE_URL_PATH）⇒ path 为空。
-      type: 'attachPath', sessionId: 'image-session', paths: ['F:/P4/x/notes.txt'],
+      type: 'attachPath', sessionId: 'image-session', paths: ['d:/work/src/notes.txt'],
       meta: [{ name: 'notes.txt:12-40', lineStart: 12, lineEnd: 40 }],
     });
     harness.host.onMessage({ type: 'sendPrompt', sessionId: 'image-session', text: '看下这个引用' });
@@ -2543,13 +2543,13 @@ suite('chat panel: replay fidelity ()', () => {
     try {
       const bucket = path.join(root, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
       fs.mkdirSync(bucket, { recursive: true });
-      const target = 'd%3A/work/project/Source/Client/GrapplingHookPointComponent.cs';
+      const target = 'd%3A/work/project/Source/Client/DemoFile.cs';
       fs.writeFileSync(path.join(bucket, 's-ref.jsonl'), [
         JSON.stringify({
           type: 'user', uuid: 'u-ref', timestamp: '2026-10-09T10:00:00.000Z',
           message: { role: 'user', content: [
             { type: 'text', text: '还是很多波浪线' },
-            { type: 'text', text: `[@GrapplingHookPointComponent.cs#L437-440](file:///${target}#L437-440)` },
+            { type: 'text', text: `[@DemoFile.cs#L437-440](file:///${target}#L437-440)` },
           ] },
         }),
       ].join('\n'));
@@ -2566,7 +2566,7 @@ suite('chat panel: replay fidelity ()', () => {
         sessionId: 's-ref',
         update: {
           sessionUpdate: 'user_message_chunk', messageId: 'u-ref',
-          content: { type: 'text', text: `[@GrapplingHookPointComponent.cs#L437-440](file:///${target}#L437-440)` },
+          content: { type: 'text', text: `[@DemoFile.cs#L437-440](file:///${target}#L437-440)` },
         },
       } as any);
 
@@ -2581,9 +2581,9 @@ suite('chat panel: replay fidelity ()', () => {
       assert.strictEqual(user.attachments!.length, 1);
       assert.strictEqual(user.attachments![0].type, 'resource_link');
       // `path` 存在 ⇒ chip 点击走 openFile（039/205 的既有约定），与发送时那条同形。
-      assert.strictEqual(user.attachments![0].path, 'f:\\P4\\AKI\\aki_dev\\Source\\Client\\GrapplingHookPointComponent.cs');
+      assert.strictEqual(user.attachments![0].path, 'd:\\work\\project\\Source\\Client\\DemoFile.cs');
       // 名字归一成 live chip 的写法（composer.ts refLabel 的 `<name>:<start>-<end>`）。
-      assert.strictEqual(user.attachments![0].name, 'GrapplingHookPointComponent.cs:437-440');
+      assert.strictEqual(user.attachments![0].name, 'DemoFile.cs:437-440');
     } finally {
       if (previous === undefined) { delete process.env.CLAUDE_CONFIG_DIR; }
       else { process.env.CLAUDE_CONFIG_DIR = previous; }

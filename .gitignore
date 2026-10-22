@@ -7,3 +7,14 @@ out/
 .DS_Store
 release/
 .claude/explore-results/
+
+
+# Local AI/editor session settings (shared skills and rules remain tracked)
+/.claude/settings.local.json
+/.claude/sessions/
+/.codex/sessions/
+/.codex/logs/
+/.codex/config.local.toml
+/.opencode/sessions/
+/.history/
+

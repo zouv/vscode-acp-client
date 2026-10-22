@@ -15,14 +15,14 @@
 
 ## 状态快照
 
-- **最近更新**：2026-10-21
-- **整体状态**：✅ **无进行中任务。v1.4.0 已发布**（GitHub Release 附
-  `vscode-acp-client-1.4.0.vsix`）。本轮 = M4（5 项反馈）+ M5（设置面板 / 自动展开 / 中键关闭 / 首帧）
-  + 隐私清理，已归档到 `CHANGELOG [1.4.0]`。
+- **最近更新**：2026-10-22
+- **整体状态**：✅ **无进行中任务。v1.4.1 已发布**（GitHub Release 附
+  `vscode-acp-client-1.4.1.vsix`）：设置子面板排版、Edit 按钮对齐，以及「隐私与个人信息」开发指南
+  与残留内部路径清理。发布内容见 `CHANGELOG [1.4.1]`。
 - **当前分支（必填）**：`main`（已提交并推送，与 `origin/main` 同步）。
-- **最后验证状态**（2026-10-21，v1.4.0 发布）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（101 项）·
+- **最后验证状态**（2026-10-22，v1.4.1 发布）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（101 项）·
   `check-webview-client` ✅（24 个客户端模块）· `npm test`（真实宿主）✅ **503 项** ·
-  `check-docs.sh` ✅ · `npm run vsix` ✅（`release/vscode-acp-client-1.4.0.vsix`）。
+  `check-docs.sh` ✅ · `npm run vsix` ✅（`release/vscode-acp-client-1.4.1.vsix`）。
   ⚠️ 仍未做 `npm run dev:host` 真机验收（见「下一步」）。
 
 ---
@@ -53,7 +53,9 @@
    ① 齿轮面板：四组、固定尺寸、`+` 紧跟最后一个 tab、齿轮固定右侧；Browse… 弹系统目录选择器；
    ② 设置改动落盘并与 VS Code Settings 同步；子面板里的自定义模型 / Agent JSON 编辑器；
    ③ 地址栏自动展开：新输出展开、历史回放不展开；卡片类型与高度在 **Appearance** 里调（0 = 不限）；
-   ④ 中键关闭（运行中弹确认；草稿/待恢复各自语义）；打开面板即连接；首帧 `Starting VAC…`。
+   ④ 中键关闭（运行中弹确认；草稿/待恢复各自语义）；打开面板即连接；首帧 `Starting VAC…`；
+   ⑤ v1.4.1 排版：Agent JSON 铺满 + Cancel/Save 右下；Custom models 说明行/表头/Add 右对齐/Done 右下；
+      Custom models 与 Agent configuration 的 Edit… 与其它控件右缘对齐。
 2. **其中 M4 遗留项**：
    ① 新建草稿页选 `<custom-model>` → 发送 → 模型不再弹回 opus（看日志 `SessionManager: model ... (source)`）；
    ② 会话 tab 右键出现 **Copy Session ID** 且内容正确；
