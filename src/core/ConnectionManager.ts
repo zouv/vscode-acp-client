@@ -94,6 +94,8 @@ export class ConnectionManager {
         // Draft (agent-client-protocol #1992): the adapter then reports each Claude Code
         // sub-agent as a child session (`subagent_update`), which we surface as a card.
         subagents: {},
+        // The composer renders boolean options; without this agents must not send any.
+        session: { configOptions: { boolean: {} } },
       },
     });
     log(`ConnectionManager: initialized. Agent: ${initResponse.agentInfo?.name || 'unknown'} v${initResponse.agentInfo?.version || '?'}`);

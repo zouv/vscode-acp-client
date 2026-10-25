@@ -8,6 +8,8 @@
 // 不同 agent 的键名不同、甚至可能没有，所以推断必须可插拔、且**默认是空实现**。
 //
 // 诚实性原则：推断出来的边必须在 UI 上可区分（`inferredParent`），绝不伪装成协议事实。
+import { profileFor } from '../../../agents/AgentProfile';
+import { getAgentKind } from '../../../config/AgentConfig';
 import type { ToolInvocation } from '../transcript/types';
 import { ClaudeCodeNesting } from './ClaudeCodeNesting';
 
@@ -30,12 +32,9 @@ export interface NestingStrategy {
   apply(all: readonly ToolInvocation[]): string[];
 }
 
-/**
- * Pick the strategy for an agent. Matched against the `vac.agents`
- * configuration key, same as the panel router.
- */
+/** Pick the strategy for an agent from its profile (`kind`), not from its configured name. */
 export function resolveNestingStrategy(agentName: string | null | undefined): NestingStrategy {
-  if (agentName === 'Claude Code') {
+  if (agentName && profileFor(getAgentKind(agentName)).nesting === 'claude-code') {
     return claudeCodeNesting;
   }
   return flatNesting;

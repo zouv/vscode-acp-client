@@ -79,6 +79,25 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
       void vscode.window.showInformationMessage(`Disconnected from ${agentName}.`);
     },
 
+    'vac.logoutAgent': async (arg?: TreeArg) => {
+      const agentName = agentNameOf(arg) ?? await vscode.window.showQuickPick(getAgentNames(), {
+        placeHolder: 'Select an agent to log out of',
+        title: 'Log Out of Agent',
+      });
+      if (!agentName) { return; }
+      const confirm = await vscode.window.showWarningMessage(
+        `Log out of ${agentName}? Its stored credentials are cleared; the next request asks you to sign in again.`,
+        { modal: true }, 'Log Out');
+      if (confirm !== 'Log Out') { return; }
+      try {
+        await withProgress(`Logging out of ${agentName}...`, () => sessions.logout(agentName));
+        void vscode.window.showInformationMessage(`Logged out of ${agentName}.`);
+      } catch (e) {
+        logError('Logout failed', e);
+        void vscode.window.showErrorMessage(`Failed to log out: ${errorMessage(e)}`);
+      }
+    },
+
     'vac.openChat': () => vscode.commands.executeCommand('vac-chat.focus'),
     'vac.sendPrompt': () => vscode.commands.executeCommand('vac-chat.focus'),
     'vac.openChatInEditor': () => chat.openEditorChat(),

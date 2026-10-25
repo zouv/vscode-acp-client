@@ -34,6 +34,8 @@ export interface AgentCapabilitySummary {
   delete: boolean;
   fork: boolean;
   additionalDirectories: boolean;
+  /** `logout` (advertised as `agentCapabilities.auth.logout`). */
+  logout: boolean;
 }
 
 export type SessionCloseReason = 'user' | 'agent-disconnected';

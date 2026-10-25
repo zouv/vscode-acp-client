@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ClaudeUsageSource } from './ClaudeUsageSource';
+import { ClaudeUsageSource, defaultClaudeProjectsDir } from './ClaudeUsageSource';
 import { emptySourceState } from './types';
 
 const NEWLINE = String.fromCharCode(10);
@@ -200,5 +200,12 @@ describe('ClaudeUsageSource', () => {
     const res = await new ClaudeUsageSource(path.join(root, 'nope')).scan(emptySourceState());
     expect(res.events).toHaveLength(0);
     expect(res.state.files).toEqual({});
+  });
+});
+
+describe('defaultClaudeProjectsDir', () => {
+  it('honours CLAUDE_CONFIG_DIR and falls back to ~/.claude', () => {
+    expect(defaultClaudeProjectsDir({ CLAUDE_CONFIG_DIR: path.join('x', 'claude') })).toBe(path.join('x', 'claude', 'projects'));
+    expect(defaultClaudeProjectsDir({})).toBe(path.join(os.homedir(), '.claude', 'projects'));
   });
 });

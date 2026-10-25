@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CodexLineParser, CodexUsageSource } from './CodexUsageSource';
+import { CodexLineParser, CodexUsageSource, defaultCodexSessionsDir } from './CodexUsageSource';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -161,5 +161,12 @@ describe('CodexUsageSource', () => {
     expect(events[0].model).toBe('unknown');
     expect(events[0].project).toBe('');
     expect(events[1].model).toBe('unknown');
+  });
+});
+
+describe('defaultCodexSessionsDir', () => {
+  it('honours CODEX_HOME and falls back to ~/.codex', () => {
+    expect(defaultCodexSessionsDir({ CODEX_HOME: path.join('x', 'codex') })).toBe(path.join('x', 'codex', 'sessions'));
+    expect(defaultCodexSessionsDir({})).toBe(path.join(os.homedir(), '.codex', 'sessions'));
   });
 });

@@ -115,7 +115,7 @@ npm run dev:host      # 编译 + 打开 Extension Development Host
 | 名称 | `kind` | 命令 |
 |---|---|---|
 | Claude Code | `claude` | `npx -y github:zouv/claude-agent-acp` |
-| Codex CLI | `codex` | `npx @zed-industries/codex-acp@latest` |
+| Codex CLI | `codex` | `npx -y @agentclientprotocol/codex-acp` |
 
 要接别的 agent，加一条 `vac.agents` 配置即可（`kind` 可省略，会按名称/命令自动推断）；详见[配置](#配置)。
 
@@ -309,7 +309,7 @@ arch/                   ARCHITECTURE 分册（面向 AI，按模块拆分）
 - [Agent Client Protocol](https://agentclientprotocol.com/) —— VAC 实现的协议本身；ACP 把「编辑器」与「agent」解耦，VAC 是这个约定下的一枚客户端。
 - [`@agentclientprotocol/sdk`](https://www.npmjs.com/package/@agentclientprotocol/sdk) —— 客户端侧的协议类型与连接实现。
 - [`zouv/claude-agent-acp`](https://github.com/zouv/claude-agent-acp) —— Claude Code 的 ACP 适配器，本项目默认配置使用的就是它。
-- [`@zed-industries/codex-acp`](https://www.npmjs.com/package/@zed-industries/codex-acp) —— Codex CLI 的 ACP 适配器。
+- [`@agentclientprotocol/codex-acp`](https://www.npmjs.com/package/@agentclientprotocol/codex-acp) —— Codex 的 ACP 适配器（基于 Codex App Server）。
 
 ## 许可证
 

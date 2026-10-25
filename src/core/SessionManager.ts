@@ -20,7 +20,7 @@ import type { PermissionBridge } from '../handlers/PermissionBridge';
 import { log, logError } from '../utils/Logger';
 import { AgentConnector } from './AgentConnector';
 import type { AgentManager } from './AgentManager';
-import { isAuthRequiredError, runAuthFlow } from './auth';
+import { forgetApiKey, isAuthRequiredError, runAuthFlow } from './auth';
 import type { ConnectionInfo, ConnectionManager } from './ConnectionManager';
 import { pickDefaultCwd } from './cwd';
 import type { SessionHistoryStore } from './SessionHistoryStore';
@@ -301,6 +301,20 @@ export class SessionManager extends EventEmitter {
     return this.connector.ensure(agentName, preferredCwd);
   }
 
+  /**
+   * ACP `logout` (only when advertised as `auth.logout`) plus the API key this client
+   * stored for the agent. Live sessions are left alone; the agent decides what they can still do.
+   */
+  async logout(agentName: string): Promise<void> {
+    const conn = await this.ensureConnected(agentName);
+    if (!this.getCachedCapabilities(agentName)?.logout) {
+      throw new Error(`Agent "${agentName}" does not support logout.`);
+    }
+    await conn.connection.logout({});
+    await forgetApiKey(agentName);
+    log(`Logged out of agent ${agentName}`);
+  }
+
   // --- Prompting -------------------------------------------------------------
 
   async sendPrompt(sessionId: string, prompt: string | ContentBlock[]): Promise<PromptResponse> {
@@ -315,7 +329,11 @@ export class SessionManager extends EventEmitter {
     this.inFlightTurns.add(sessionId);
     this.emit('turn-state-changed', sessionId, true);
     try {
-      const response = await conn.connection.prompt({ sessionId, prompt: blocks });
+      const response = await this.withAuthRetry(
+        session.agentName,
+        conn,
+        () => conn.connection.prompt({ sessionId, prompt: blocks }),
+      );
       log(`Prompt response: stopReason=${response.stopReason}`);
       return response;
     } finally {
@@ -432,12 +450,17 @@ export class SessionManager extends EventEmitter {
    * 而这条链上有四个写入方（会话响应 / 设置响应 / agent 通知 / 早到的 pending）。
    * 每次 model 值真的变了就打一行，下一次就能直接看出是谁改的。
    */
-  async setConfigOption(sessionId: string, configId: string, value: string): Promise<SessionConfigOption[] | null> {
+  async setConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<SessionConfigOption[] | null> {
     const session = this.store.get(sessionId);
     const conn = session && this.connectionManager.getConnection(session.agentId);
     if (!session || !conn) { return null; }
 
-    const response = await conn.connection.setSessionConfigOption({ sessionId, configId, value });
+    // The UI speaks strings; boolean options go on the wire typed (`{ type: 'boolean', value }`).
+    const option = session.configOptions?.find(o => o.id === configId);
+    const request = option?.type === 'boolean'
+      ? { sessionId, configId, type: 'boolean' as const, value: value === true || value === 'true' }
+      : { sessionId, configId, value: String(value) };
+    const response = await conn.connection.setSessionConfigOption(request);
     const options = (response as { configOptions?: SessionConfigOption[] } | null)?.configOptions ?? null;
     this.applyConfigOptions(sessionId, options, 'set-response');
     return options;
@@ -558,14 +581,8 @@ export class SessionManager extends EventEmitter {
     if (opts.cwd) { params.cwd = opts.cwd; }
     if (opts.cursor) { params.cursor = opts.cursor; }
 
-    let response: { sessions?: ProtocolSessionInfo[]; nextCursor?: string | null } | undefined;
-    try {
-      response = await conn.connection.listSessions(params);
-    } catch (e) {
-      if (!isAuthRequiredError(e)) { throw e; }
-      await runAuthFlow(agentName, conn);
-      response = await conn.connection.listSessions(params);
-    }
+    const response: { sessions?: ProtocolSessionInfo[]; nextCursor?: string | null } | undefined =
+      await this.withAuthRetry(agentName, conn, () => conn.connection.listSessions(params));
 
     const sessions = response?.sessions ?? [];
     if (this.historyStore && !opts.cursor) {
@@ -630,12 +647,12 @@ export class SessionManager extends EventEmitter {
     this.emit('session-load-start', sessionId, agentName);
 
     try {
-      const response = await this.connector.enqueue(agentId, () => conn.connection.loadSession({
+      const response = await this.connector.enqueue(agentId, () => this.withAuthRetry(agentName, conn, () => conn.connection.loadSession({
         sessionId,
         cwd,
         mcpServers: [],
         ...this.metaFor(agentName),
-      }));
+      })));
       this.applyStateFrom(placeholder, response);
     } catch (e) {
       this.loadingSessionIds.delete(sessionId);
@@ -669,12 +686,12 @@ export class SessionManager extends EventEmitter {
 
     let response: unknown;
     try {
-      response = await this.connector.enqueue(agentId, () => conn.connection.resumeSession({
+      response = await this.connector.enqueue(agentId, () => this.withAuthRetry(agentName, conn, () => conn.connection.resumeSession({
         sessionId,
         cwd,
         mcpServers: [],
         ...this.metaFor(agentName),
-      }));
+      })));
     } catch (e) {
       if (NOT_FOUND.test(String((e as Error | undefined)?.message || ''))) {
         this.historyStore?.forget(agentName, sessionId);
@@ -787,6 +804,17 @@ export class SessionManager extends EventEmitter {
     return agentId;
   }
 
+  /** Runs `call`; on ACP "auth required" (-32000) authenticates once and retries. */
+  private async withAuthRetry<T>(agentName: string, conn: ConnectionInfo, call: () => Promise<T>): Promise<T> {
+    try {
+      return await call();
+    } catch (e) {
+      if (!isAuthRequiredError(e)) { throw e; }
+      await runAuthFlow(agentName, conn);
+      return call();
+    }
+  }
+
   /** A session's own directory: the caller's, else the history cache's, else the default. */
   private sessionCwd(agentName: string, sessionId: string, requested?: string): string {
     return requested || this.historyStore?.get(agentName, sessionId)?.cwd || this.resolveDefaultCwd();
@@ -854,23 +882,13 @@ export class SessionManager extends EventEmitter {
       ...this.metaFor(agentName),
     };
 
+    // A failed session/new must not reap the process: sibling sessions live on it.
     let response: NewSessionResponse;
     try {
-      response = await conn.connection.newSession(request);
+      response = await this.withAuthRetry(agentName, conn, () => conn.connection.newSession(request));
     } catch (e) {
-      if (!isAuthRequiredError(e)) {
-        logError('Failed to create session', e);
-        this.agentManager.killAgent(agentId);
-        throw e;
-      }
-      try {
-        await runAuthFlow(agentName, conn);
-        response = await conn.connection.newSession(request);
-      } catch (retryError) {
-        logError('Failed to create session after authentication', retryError);
-        this.agentManager.killAgent(agentId);
-        throw retryError;
-      }
+      logError('Failed to create session', e);
+      throw e;
     }
 
     const session = this.buildSession(conn, agentName, agentId, response.sessionId, cwd, response, {

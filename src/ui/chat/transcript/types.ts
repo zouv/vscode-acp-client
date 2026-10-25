@@ -292,12 +292,26 @@ export interface ToolInvocation {
    * update only, and `_meta` is replaced wholesale afterwards.
    */
   toolElapsedSeconds?: number;
+  /**
+   * Terminals the AGENT runs and streams through `_meta` (`terminal_info` /
+   * `terminal_output_delta` / `terminal_exit`, the Zed convention codex-acp uses),
+   * keyed by `terminal_id`. Accumulated from each update's own `_meta`, see `agentTerminals.ts`.
+   */
+  agentTerminals?: Record<string, AgentTerminal>;
   startedAt: number;
   endedAt?: number;
   /** Nesting parent, set by a NestingStrategy (Phase 4). */
   parentId?: string;
   /** True when the parent/child link was inferred rather than reported. */
   inferredParent?: boolean;
+}
+
+/** Output of one agent-owned terminal (see `ToolInvocation.agentTerminals`). */
+export interface AgentTerminal {
+  output: string;
+  truncated: boolean;
+  exited: boolean;
+  exitCode: number | null;
 }
 
 /** ACP `ToolCallStatus` values that mean the call is over. */

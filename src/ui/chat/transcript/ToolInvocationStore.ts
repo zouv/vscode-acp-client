@@ -5,6 +5,7 @@
 // 平坦映射（toolCallId → 调用）永远是地面真相；嵌套关系由 Phase 4 的 NestingStrategy 事后推断。
 import type { ToolCall, ToolCallStatus, ToolCallUpdate, ToolKind } from '@agentclientprotocol/sdk';
 
+import { applyTerminalMeta } from './agentTerminals';
 import { isTerminalStatus, type SubagentInfo, type ToolInvocation } from './types';
 
 /**
@@ -49,7 +50,10 @@ export class ToolInvocationStore {
     if (call.locations !== undefined) { inv.locations = normalizeLocations(call.locations); }
     if ('rawInput' in call) { inv.rawInput = call.rawInput; }
     if ('rawOutput' in call) { inv.rawOutput = call.rawOutput; }
-    if (call._meta !== undefined) { inv.meta = call._meta; }
+    if (call._meta !== undefined) {
+      inv.meta = call._meta;
+      applyTerminalMeta(inv, call._meta);
+    }
     latchDescription(inv);
     latchSubagent(inv);
     latchToolElapsed(inv);
@@ -76,7 +80,10 @@ export class ToolInvocationStore {
     }
     if ('rawInput' in update) { inv.rawInput = update.rawInput; }
     if ('rawOutput' in update) { inv.rawOutput = update.rawOutput; }
-    if (update._meta !== undefined) { inv.meta = update._meta; }
+    if (update._meta !== undefined) {
+      inv.meta = update._meta;
+      applyTerminalMeta(inv, update._meta);
+    }
     latchDescription(inv);
     latchSubagent(inv);
     latchToolElapsed(inv);

@@ -3,8 +3,9 @@ import * as path from 'path';
 import { JsonlSourceOptions, JsonlUsageSource, LineParser } from './JsonlUsageSource';
 import { UsageEvent } from './types';
 
-export function defaultCodexSessionsDir(): string {
-  return path.join(os.homedir(), '.codex', 'sessions');
+/** `$CODEX_HOME/sessions`, else `~/.codex/sessions` (Codex's own lookup order). */
+export function defaultCodexSessionsDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
 }
 
 // Turn ids are UUIDv7, so the first 48 bits are the turn's own creation time.

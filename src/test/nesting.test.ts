@@ -73,6 +73,9 @@ suite('Sub-agent nesting inference', () => {
     assert.strictEqual(resolveNestingStrategy('Gemini CLI').id, 'flat');
     assert.strictEqual(resolveNestingStrategy(null).id, 'flat');
     assert.strictEqual(resolveNestingStrategy('Claude Code').id, 'claude-code');
+    // Resolved by kind, so a renamed Claude agent keeps its nesting and Codex stays flat.
+    assert.strictEqual(resolveNestingStrategy('My Claude').id, 'claude-code');
+    assert.strictEqual(resolveNestingStrategy('Codex CLI').id, 'flat');
   });
 
   test('a call inside a Task window is grouped under it (inferred)', () => {

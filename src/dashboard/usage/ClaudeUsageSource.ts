@@ -3,8 +3,9 @@ import * as path from 'path';
 import { JsonlSourceOptions, JsonlUsageSource, LineParser } from './JsonlUsageSource';
 import { UsageEvent } from './types';
 
-export function defaultClaudeProjectsDir(): string {
-  return path.join(os.homedir(), '.claude', 'projects');
+/** `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects` (Claude Code's own lookup order). */
+export function defaultClaudeProjectsDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
 }
 
 function num(v: unknown): number {

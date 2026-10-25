@@ -11,6 +11,31 @@
 
 ---
 
+## [未发布]
+
+### 新增
+- **Codex 命令输出可见**：codex-acp 把命令输出放在工具更新的 `_meta.terminal_output_delta` 里（不走客户端终端），
+  现在会累加并以 console 文本显示在工具卡里，失败时注明退出码；此前只剩一个点不开的 terminal 按钮。
+- **API Key 认证**：agent 提供 API Key 认证方式时（如 Codex），直接在 VS Code 里输入 key，存进 Secret Storage，
+  下次启动自动复用；协议流量日志里的 key 一律脱敏。
+- 命令 `VAC: Log Out of Agent`（Agents 树右键也有）：调用 agent 的 `logout` 并清掉存的 key。
+- 激活时检测 `vac.agents` 里已废弃的 Codex 适配器包，提示一键替换（可「不再询问」）。
+- 工具卡：对象形状的工具结果（如 MCP 返回值）在没有其它可显示内容时以 JSON 显示。
+- `scripts/probe-agent-init.mjs`：只握手（可选建空会话）的 agent 能力探针，接新 agent 前先看它声明了什么。
+
+### 变更
+- 默认 Codex 适配器换成 `@agentclientprotocol/codex-acp`（旧包 `@zed-industries/codex-acp` 已归档、npm 标记废弃）。
+- 布尔型会话配置项（如开关类选项）：声明 `session.configOptions.boolean` 能力，并按协议以布尔值设置（此前发的是字符串）。
+- Claude 转录补全历史 / 回放时间与子 agent 嵌套改为按 agent **类型**判断，不再要求 agent 名必须叫 `Claude Code`；
+  转录目录跟随该 agent 配置里的 `CLAUDE_CONFIG_DIR`。
+- Dashboard 的转录目录分别认 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` 环境变量。
+
+### 修复
+- 新建会话失败（如目录被 agent 拒绝）不再杀掉整个 agent 进程——同一 agent 下其它正在进行的会话会保留。
+- 认证过期时，打开历史会话（load / resume）和发送消息也会先走认证再重试，不再直接报错；并发请求只弹一次认证。
+
+---
+
 ## [1.4.1] - 2026-10-22
 
 ### 变更

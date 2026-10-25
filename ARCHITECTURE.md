@@ -57,7 +57,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 权限弹窗 / 表单（AskUserQuestion） | `handlers/PermissionBridge.ts`、`ElicitationBridge.ts` + 客户端 `html/client/{permissionView,permissionDrawer,elicitationView}.ts` | core 编排 | §2.6 |
 | 文件读写 / 终端 / 工具卡片数据 | `handlers/FileSystemHandler.ts`、`TerminalHandler.ts`、`utils/TailBuffer.ts` | 会话编排 | §2.6 |
 | 侧边栏 Agents 树 / 会话分页 | `ui/SessionTreeProvider.ts` + `core/SessionHistoryStore.ts` | webview | §2.7 |
-| agent 默认列表 / 设置项 schema / 新 agent 接入 | `package.json(contributes.configuration)` + `config/AgentConfig.ts` + `agents/AgentProfile.ts` | 全部业务代码 | §2.8 |
+| agent 默认列表 / 设置项 schema / 新 agent 接入 / 适配器换包 | `package.json(contributes.configuration)` + `config/AgentConfig.ts` + `agents/AgentProfile.ts` + `agents/AgentMigration.ts`（接新 agent 先跑 `scripts/probe-agent-init.mjs`） | 全部业务代码 | §2.8 |
 | Dashboard 用量统计 / 指标 | `src/dashboard/**`（数据层在 `usage/`） | 聊天面板 | §2.9 |
 | 打包 / 发布 | `scripts/build.mjs`、`.vscodeignore`、`package.json(scripts)` | 全部业务代码 | §6 |
 | 图标 / 品牌资源（侧边栏、插件徽标、编辑区标签页） | `scripts/make-icon.mjs`（唯一几何源）+ `resources/` + `package.json(icon, viewsContainers)` + `ui/chat/ChatEditorPanel.ts(iconPath)` | 全部业务代码 | §6 |
@@ -73,8 +73,9 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 |---|---|---|
 | `src/extension.ts` | 激活入口：装配全部服务与视图、把 SessionManager 事件接到 UI、dispose 编排；驱动 `vac.turnInProgress` 上下文键 | 新增服务 / 新增事件转发 / 改装配顺序 |
 | `src/commands.ts` | `vac.*` 命令注册表（一个 `handlers` 对象，命令 id → 处理函数，末尾统一 register） | 新增/改命令行为（同时改 `package.json`） |
-| `src/agents/AgentProfile.ts` | 按 `kind`（claude / codex / generic）分化的 agent 专有行为：会话请求的 `_meta`（自定义模型） | 新增 agent 专有差异 |
-| `src/config/AgentConfig.ts` | 读 `vac.agents`；`getAgentNames` 把第一个 Claude 排最前；`getAgentKind` | agent 列表读取/排序 |
+| `src/agents/AgentProfile.ts` | 按 `kind`（claude / codex / generic）分化的 agent 专有行为：会话请求的 `_meta`（自定义模型）、`transcriptStore`（能否读它的磁盘转录补全历史/回放）、`nesting`（工具调用嵌套策略 id）。**UI 侧的 agent 差异一律从这里按 kind 取，不按配置名** | 新增 agent 专有差异 |
+| `src/agents/AgentMigration.ts` | 已废弃适配器包的替换表 + `migrateAgents`（纯逻辑）；`AgentConfig.offerAgentMigration` 在激活时提示改写用户自己的 `vac.agents` | 上游适配器换包名 |
+| `src/config/AgentConfig.ts` | 读 `vac.agents`；`getAgentNames` 把第一个 Claude 排最前；`getAgentKind`；`offerAgentMigration`（旧包迁移提示，可“不再询问”） | agent 列表读取/排序 / 配置迁移 |
 | `src/config/CustomModels.ts` | `vac.customModels` 的读取与规整（纯函数 + 读配置） | 自定义模型配置 |
 | `src/core/AgentManager.ts` | agent 子进程生命周期：`spawnAgent`/`killAgent`/`killAll`；Windows 走 `cmd.exe`，类 Unix 走 login shell（修 npx ENOENT）；进程组 + `taskkill /T /F` 一并收子孙；**npx 启动的 agent 命中本地缓存时直接 `node <entry>`**（`scheduleInstall` 在首次连接 15s 后后台缓存） | agent 起不来 / 平台差异 / 进程泄漏 |
 | `src/core/AgentInstall.ts` | **agent 运行时本地缓存**（纯逻辑 + node fs）：`npxSpecOf` 拆 spec、`installDirFor`/`readInstalled`（7 天 TTL）、`entryFromInstall` 从 `package.json`+`bin` 找回入口。绕过 `npm exec` 每次 11–17s 的 reify；缓存目录 `globalStorage/agents/<agent>`（约 320MB/个） | 首次连接慢 / npx 启动开销 |
@@ -83,7 +84,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/core/SessionManager.ts` | 编排器：`connectToAgent`/`createSession`/`newConversation`/`closeSession`/`disconnectAgent`/`ensureConnected`/`sendPrompt`/`steerPrompt`/`cancelTurn`/`setMode`/`setModel`/`setConfigOption`/`listSessions`/`openExistingSession`/`loadSession`/`resumeSession`；**订阅 `SessionUpdateHandler`**，把 `available_commands_update` / `config_option_update` / `current_mode_update` 落成状态（`applyAvailableCommands`/`applyConfigOptions`/`applyCurrentMode`，会话未注册时进 `PendingSessionState`） | 会话状态机 / 新事件 / 能力协商 |
 | `src/core/SessionStore.ts` | 会话索引与焦点（`focusOrder`/`mostRecentLiveId`）+ `PendingSessionState`（早到通知缓冲）。**纯逻辑，禁 import vscode** | 索引语义 / 焦点后继规则 |
 | `src/core/cwd.ts` | `pickDefaultCwd`：每会话工作目录三级链（配置→工作区→进程），配置非法则拒绝并回退。**纯函数** | 默认目录策略 |
-| `src/core/auth.ts` | `-32000` 判定 + 交互式认证流程 | 认证行为 |
+| `src/core/auth.ts` | `-32000` 判定 + 交互式认证流程（每连接单飞；过滤 `type:'terminal'`；`_meta['api-key']` 标记的方法由客户端提供 key，存 **SecretStorage**、下次静默重试）；`forgetApiKey` | 认证行为 |
 | `src/core/SessionHistoryStore.ts` | `workspaceState` 会话缓存：按 agent 分桶、容量上限（活跃会话豁免）、`reconcileFromAgent`、目录候选、touch 限频落盘 | 会话列表丢失 / 缓存策略 |
 | `src/core/AcpClientImpl.ts` | ACP `Client` 接口门面，把方法转发给各 handler | 新增 ACP 客户端能力 |
 | `src/handlers/FileSystemHandler.ts` | `fs/read_text_file`（优先未保存缓冲区，支持 `line`/`limit`）、`write_text_file` | 文件读写异常 |
@@ -135,7 +136,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
-| 声明/收回客户端能力 | `connect()` 里的 `clientCapabilities` | 含 `fs`、`terminal`、`elicitation.form` |
+| 声明/收回客户端能力 | `connect()` 里的 `clientCapabilities` | 含 `fs`、`terminal`、`elicitation.form`、`subagents`、`session.configOptions.boolean`。**别声明 `_meta.terminal_output(_delta)`**：Claude 适配器会因此改走 `_meta` 终端输出 |
 | 声明 `clientInfo` | 同上，`clientInfo` | 版本取自 `BuildInfo.readPackageVersion()` |
 | 读 agent 扩展能力（steering 等） | `connect()` 里的 `_meta` 解析 | `InitializeResponse._meta.steering.supported` |
 | 抓协议流水 | `tapStream()` | 双向 TransformStream，落 `VAC Traffic` 通道 + 日志文件 |
@@ -144,16 +145,18 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
-| 新建会话 / 复用已有会话 | `createSession()` / `connectToAgent()` | `connectToAgent` 有活会话就复用 |
+| 新建会话 / 复用已有会话 | `createSession()` / `connectToAgent()` | `connectToAgent` 有活会话就复用；`session/new` 失败**只抛错、不杀进程**（同进程的其它会话要活着） |
 | 打开历史会话 | `openExistingSession()` | **唯一决策点**：live → focus，否则 load，再否则 resume |
 | 重放历史 / 轻量恢复 | `loadSession()` / `resumeSession()` | load 走 `session-load-start/end`，面板显示覆盖层 |
 | 关闭单个会话 / 断开整个 agent | `closeSession()` / `disconnectAgent()` | 关会话前会先 `cancelTurn` |
 | 删除会话（真删） | `deleteSession()` | 先 cancel/close 活会话 → `session/delete`（能力 `delete`）→ 清本地缓存 |
 | 分叉会话 | `forkSession()` | `session/fork`（能力 `fork`）；带 `messageId` 时在 `_meta.jetbrains.air.fork` 指定分叉点；建好后走 `openExistingSession` 重放 |
-| 认证失败（-32000） | `auth.ts`：`isAuthRequiredError` / `runAuthFlow` | 新建会话与 listSessions 都会重试一次 |
+| 认证失败（-32000） | `auth.ts`：`isAuthRequiredError` / `runAuthFlow`；`SessionManager.withAuthRetry` | new / list / load / resume / prompt 都经 `withAuthRetry` 认证后重试一次 |
+| API key 认证 / 登出 | `auth.ts`：`takesApiKey` / `setAuthSecrets` / `forgetApiKey`；`SessionManager.logout` + 命令 `vac.logoutAgent` | key 走 `authenticate._meta['api-key'].apiKey`（codex-acp 约定），**流量日志里按键名脱敏**（`Logger.clip`）；`logout` 需能力 `auth.logout` |
 | 焦点切换 | `focusSession()` | `active-session-changed` 的唯一出口 |
 | 每会话工作目录 | `resolveDefaultCwd()` / `sessionCwd()` / `cwd.ts:pickDefaultCwd` | 会话级属性，与进程 cwd 无关 |
 | 自定义模型注入 | `metaFor()` | 经 `AgentProfile` 按 kind 分化 |
+| 设配置项（含布尔） | `setConfigOption()` | UI 一律传字符串；选项 `type==='boolean'` 时按 `{type:'boolean', value}` 上线（SDK 契约） |
 
 ### 2.4 发消息与轮次（`src/core/SessionManager.ts`）
 
@@ -212,8 +215,9 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
-| 加一个 agent | `inferAgentKind()` + `AgentProfile.ts` + `package.json(contributes.configuration.vac.agents)` | 先判断有没有 **专有 `_meta` 需求** |
+| 加一个 agent | `inferAgentKind()` + `AgentProfile.ts` + `package.json(contributes.configuration.vac.agents)` | 先跑 `scripts/probe-agent-init.mjs --agent "<命令>" --session` 看它声明的能力/认证方式/配置项，再判断有没有 **专有 `_meta` 需求** |
 | 改 agent 排序 | `AgentConfig.getAgentNames` | 只把第一个 Claude 提前，不全排序 |
+| 适配器换包 / 旧配置迁移 | `AgentMigration.ts` 的 `REPLACEMENTS` + `AgentConfig.offerAgentMigration` | 只改写用户显式配置的 scope（全局 / 工作区）；默认值直接改 `package.json` |
 | 改设置项 | `package.json(contributes.configuration)` | 前缀必须 `vac.` |
 
 ### 2.9 Dashboard（`src/dashboard/`）
@@ -221,6 +225,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
 | 统计口径 / 窗口 / 聚合 | `usage/UsageIndex.ts` | 纯逻辑，配 `.spec.ts` |
+| 转录根目录 | `defaultClaudeProjectsDir` / `defaultCodexSessionsDir` | 分别认 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`，否则 `~/.claude` / `~/.codex` |
 | Claude 转录解析 | `usage/ClaudeUsageSource.ts`、`usage/JsonlUsageSource.ts` | 增量只读新增字节 |
 | Codex 转录解析 | `usage/CodexUsageSource.ts` | 按回合 `token_count` 差值 |
 | 价格与成本估算 | `usage/pricing.ts`（`PRICING_AS_OF`） | 是**估值**，UI 标 "est." |
@@ -272,6 +277,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 会话恢复快照 | `globalState`（`ChatPanelHost.saveOpenSessions`） | —— | key `vac.openSessions.v1`；每条 `RecoverableSession` 可带 `app`（写入时的 IDE 标签），与当前环境相同的会在下发前剥掉，只用于标注 |
 | 模型切换诊断 | `SessionManager.noteModelChange` | —— | `model <旧> -> <新> (<source>)`，source = `session-response` / `set-response` / `notification`；只在值真的变化时写 |
 | 用量索引 | `globalStorageUri` 下 `usage-index.json` | —— | 原子写（临时文件 + rename），损坏则重建 |
+| agent API key | `SecretStorage`（`auth.ts`） | —— | key `vac.apiKey.<agent 名>`；登出（`vac.logoutAgent`）或被拒时删除；**绝不进 settings.json / 日志** |
+| 迁移提示“不再询问” | `globalState` | —— | key `vac.agentMigrationDismissed.v1` |
 
 **数据/单位铁律**：
 
@@ -328,6 +335,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
   产物 `dist/extension.js`，**唯一入口** `src/extension.ts`（`package.json` 的 `main`）。
 - 统一管理脚本：`sh manager.sh help`。
 - 文档体检：`sh check-docs.sh`。
+- agent 握手探针：`node scripts/probe-agent-init.mjs --agent "<命令>" [--session] [--out f.json]`（只握手 / 建空会话，不发 prompt、不花额度；输出可能含本机模型配置，**别提交**）。
 - 开发宿主：`npm run dev:host`（`scripts/dev-host.mjs`，不挂调试器）；断点调试走 `.vscode/launch.json`。
 - 无头截图验收：`npm run compile-tests` 后 `node scripts/preview-records.mjs`。
 - **图标**：`npm run icon`（`scripts/make-icon.mjs`）。`resources/icon.svg` 与 `resources/icon.png`

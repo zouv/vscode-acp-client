@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
 
 import { AgentManager } from './core/AgentManager';
+import { setAuthSecrets } from './core/auth';
 import { ConnectionManager } from './core/ConnectionManager';
 import { SessionHistoryStore } from './core/SessionHistoryStore';
 import { SessionManager } from './core/SessionManager';
 import { createUsageService, DashboardViewProvider, type DashboardHost } from './dashboard';
 import type { DashboardValues } from './dashboard/DashboardModel';
 import { registerCommands } from './commands';
+import { offerAgentMigration } from './config/AgentConfig';
 import { ElicitationBridge } from './handlers/ElicitationBridge';
 import { PermissionBridge } from './handlers/PermissionBridge';
 import { SessionUpdateHandler } from './handlers/SessionUpdateHandler';
@@ -52,6 +54,7 @@ function createDashboardHost(sessions: SessionManager, history: SessionHistorySt
 
 export function activate(context: vscode.ExtensionContext): void {
   log(`VAC extension activating... [build ${buildStamp()}]`);
+  setAuthSecrets(context.secrets);
 
   const updates = new SessionUpdateHandler();
   const agentManager = new AgentManager(context.globalStorageUri.fsPath);
@@ -133,6 +136,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // The first scan is expensive, so it starts after activation and never blocks it.
   void usage.load().then(() => usage.refresh()).catch(e => logError('dashboard: initial scan failed', e));
+  void offerAgentMigration(context.globalState).catch(e => logError('agent config migration failed', e));
 
   log('VAC extension activated.');
 }

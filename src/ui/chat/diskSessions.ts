@@ -12,7 +12,8 @@
 // · 只读、只读**每个文件的前若干行**（转录文件能长到几十 MB，且**第一行本身就可能很大**，
 // 所以按行流式读、超长行跳过，而不是按字符切一刀）。
 // · 只扫**当前工作目录**对应的那一个 slug（与本地缓存的作用域一致）。
-// · 只对 `Claude Code` 这个 agent 生效——别的 agent 没有这个目录。
+// · 只对 profile 声明了 `transcriptStore: 'claude'` 的 agent 生效（按 kind，不按配置里的名字）——
+// 别的 agent 没有这个目录。
 import { existsSync } from 'node:fs';
 import { createReadStream, readdirSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -22,14 +23,6 @@ import { toContentView, isBlankText } from './content/contentBlocks';
 import type { ContentBlockView } from './content/contentBlocks';
 // [CUSTOM- 同一段文本形状的判定（回放里引用是一段文本而不是块）。
 import { fileMentionViews } from './markdown';
-
-/**
- * The agent whose transcripts these are. A SEPARATE constant from the agent
- * profile on purpose: that one decides agent-specific behaviour, this one decides
- * whose private storage we are willing to read — they happen to hold the same name
- * today, and neither should inherit the other's changes.
- */
-export const CLAUDE_CODE_AGENT = 'Claude Code';
 
 /** One row recovered from the transcript files. */
 export interface DiskSessionRow {

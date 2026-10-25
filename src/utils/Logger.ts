@@ -104,7 +104,11 @@ function isTrafficEnabled(): boolean {
   return trafficEnabled;
 }
 
-function clip(_key: string, value: unknown): unknown {
+const SECRET_KEY = /^(api_?key|token|access_?token|password|secret|authorization)$/i;
+
+function clip(key: string, value: unknown): unknown {
+  // Credentials ride in requests too (e.g. `authenticate._meta['api-key'].apiKey`): never log them.
+  if (SECRET_KEY.test(key) && typeof value === 'string') { return '«redacted»'; }
   if (typeof value === 'string' && value.length > TRAFFIC_STRING_LIMIT) {
     return `${value.slice(0, TRAFFIC_STRING_LIMIT)}…(+${value.length - TRAFFIC_STRING_LIMIT} chars)`;
   }

@@ -22,6 +22,7 @@ const COMMANDS = [
   'vac.copySessionId',
   'vac.forgetSession',
   'vac.restartAgent',
+  'vac.logoutAgent',
   'vac.refreshDashboard',
 ];
 

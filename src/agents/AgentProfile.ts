@@ -3,6 +3,13 @@ export type AgentKind = 'claude' | 'codex' | 'generic';
 export interface AgentProfile {
   readonly kind: AgentKind;
   readonly label: string;
+  /**
+   * Whose private on-disk transcripts may supplement the history list and replay
+   * (times, attachments). A vendor storage format, so opt-in per kind.
+   */
+  readonly transcriptStore: 'claude' | null;
+  /** How tool calls are grouped under the call that delegated them (see `ui/chat/nesting`). */
+  readonly nesting: 'claude-code' | 'flat';
   /** Extra `_meta` merged into session/new | load | resume requests. */
   sessionMeta(opts: { customModelIds: readonly string[] }): Record<string, unknown> | undefined;
 }
@@ -10,6 +17,8 @@ export interface AgentProfile {
 const claudeProfile: AgentProfile = {
   kind: 'claude',
   label: 'Claude Code',
+  transcriptStore: 'claude',
+  nesting: 'claude-code',
   sessionMeta({ customModelIds }) {
     return customModelIds.length > 0 ? { extraModels: [...customModelIds] } : undefined;
   },
@@ -18,12 +27,16 @@ const claudeProfile: AgentProfile = {
 const codexProfile: AgentProfile = {
   kind: 'codex',
   label: 'Codex',
+  transcriptStore: null,
+  nesting: 'flat',
   sessionMeta: () => undefined,
 };
 
 const genericProfile: AgentProfile = {
   kind: 'generic',
   label: 'Agent',
+  transcriptStore: null,
+  nesting: 'flat',
   sessionMeta: () => undefined,
 };
 

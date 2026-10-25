@@ -38,7 +38,7 @@
 |---|---|---|---|
 | `initialize` | 握手 / 版本与能力协商 | 必须 | **✅** `ConnectionManager.connect()` |
 | `authenticate` | 交互式认证（`-32000` 后重试） | `auth` | **✅** [`core/auth.ts`](../src/core/auth.ts) `runAuthFlow` |
-| `logout` | 登出当前认证方式 / 清理凭证 | `auth.logout` | **🟡** 切换账号/清 OAuth 是硬需求；适配器已声明 `auth.logout` |
+| `logout` | 登出当前认证方式 / 清理凭证 | `auth.logout` | **✅** `SessionManager.logout` + 命令 `vac.logoutAgent`（2026-10-25 接入；同时清掉本客户端存的 API key） |
 | `session/new` | 新建会话 | 必须 | **✅** `SessionManager.newAcpSession` |
 | `session/load` | 载入历史（**重放全部消息**） | `loadSession` | **✅** `SessionManager.loadSession` |
 | `session/resume` | 恢复会话（**不重放**） | `session.resume` | **✅** `SessionManager.resumeSession` |
@@ -73,7 +73,7 @@
 | `elicitation/create` | 发起表单 | `elicitation.form` / `.url` | **✅ 仅 form 模式**；`url` 模式刻意未声明（见 [`ConnectionManager.ts`](../src/core/ConnectionManager.ts) 注释） |
 
 **插件在 `initialize` 里声明的 `clientCapabilities`**（[`ConnectionManager.ts`](../src/core/ConnectionManager.ts)）：
-`fs.{readTextFile,writeTextFile}` · `terminal:true` · `elicitation:{form:{}}`。
+`fs.{readTextFile,writeTextFile}` · `terminal:true` · `elicitation:{form:{}}` · `subagents:{}` · `session.configOptions.boolean:{}`（2026-10-25 起，布尔配置项按 `{type:'boolean', value}` 设置）。
 
 ## 1.4 Client 侧通知（agent → 插件）
 
@@ -139,7 +139,7 @@
 | `promptCapabilities.image` | 支持图片输入 | **✅** 输入框粘贴/拖图 → ACP `image` 块 |
 | `promptCapabilities.embeddedContext` | 支持内嵌上下文（文件/选区引用） | **✅（部分映射）** 见 §2.4 |
 | `mcpCapabilities.http/sse` | 会话可注入 MCP server | **🟡** 未接，见 §2.6 |
-| `auth.logout` | 可登出 | **🟡** 未接 |
+| `auth.logout` | 可登出 | **✅** 已接（`vac.logoutAgent`） |
 | `providers` | 多 provider（UNSTABLE，当前空） | **⚪** |
 | `_meta.claudeCode.promptQueueing` | Claude Code 侧提示词排队 | **⚪** 与 steering 语义重叠，暂不用 |
 
@@ -160,7 +160,7 @@
 | 功能 | 价值 | 备注 |
 |---|---|---|
 | `session/delete` | **高** — 真删 agent 侧会话，成本最低 | ✅ 已完成（2026-10-16） |
-| `logout` | **高** — 账号切换 / 清 OAuth 凭证 | 需接 UI 入口 |
+| `logout` | **高** — 账号切换 / 清 OAuth 凭证 | ✅ 已完成（2026-10-25） |
 | `session/fork` | **中高** — 从某条消息分叉出新会话 | ✅ 已完成（2026-10-16）；UNSTABLE |
 | 图片输入 | — | **已实现**（§2.4 逐条核实） |
 | `additionalDirectories` | — | **已实现** |
@@ -208,3 +208,21 @@
   现在插件没暴露入口（agent 侧用 Claude Code 自己的 MCP 配置）。要「客户端管 MCP」才有价值。
 - **`document/did*`（UNSTABLE）**：把编辑器打开的文档/改动/保存/焦点推给 agent。现在靠 attachFile 手动附加，
   自动同步能让「当前文件」上下文更准，但接口未稳定。
+
+---
+
+# 第三部分 · codex-acp 对照（2026-10-25，`@agentclientprotocol/codex-acp` 2.2.2）
+
+> 旧包 `@zed-industries/codex-acp` 已于 2026-07 归档，npm 标 deprecated、冻结在 0.16.0；新包基于 Codex App Server。
+> 证据：`node scripts/probe-agent-init.mjs --session` 实测握手 + 适配器 `dist/index.js` 源码。
+
+| 项 | 实测 / 源码 | 插件处理 |
+|---|---|---|
+| 能力 | `loadSession`；`sessionCapabilities` 含 list / resume / close / delete / fork / additionalDirectories / subagents；`promptCapabilities` image + embeddedContext；`mcpCapabilities.http`；`auth.logout`；`_meta.steering.supported` | 全部走通用路径，无需 Codex 分支 |
+| 认证方式 | `api-key`（`_meta['api-key'].provider`）、`chat-gpt`；`NO_BROWSER` 时为 `chat-gpt-device-code`；客户端声明 `auth._meta.gateway` 才有 `gateway` | **✅** api-key：客户端输入 key → `authenticate._meta['api-key'].apiKey`，存 SecretStorage；留空则用 agent 环境里的 `CODEX_API_KEY` / `OPENAI_API_KEY`。gateway 未接 |
+| 会话配置项 | `mode`（read-only / workspace-write / agent / agent-full-access）、`collaboration_mode`、`model`、`reasoning_effort`（category `thought_level`）；同时给旧式 `modes` / `models` | 输入卡按 configOptions 通用渲染 |
+| 命令输出 | 不走客户端 `terminal/create`：工具卡 content 放 `{type:'terminal', terminalId:<toolCallId>}`，输出分片在 `_meta.terminal_output_delta`，结束在 `_meta.terminal_exit`；无终端的命令 `rawOutput` 只有 `{exit_code}`、输出进 content 文本 | **✅** `transcript/agentTerminals.ts` 累加并渲染成 console 文本。**不要**为此声明 `_meta.terminal_output_delta`：Claude 适配器也认这个键，会改变它的 Bash 输出形态 |
+| plan | 客户端没声明 `plan` 能力时，计划以**助手消息文本**下发 | 🟡 声明 `plan` + 渲染 `plan_update` 后可得结构化计划 |
+| AIR 扩展 | 声明 `_meta.jetbrains.air` 才启用 diff patch / goal / 后台终端任务 / session failure | ⚪ 暂不接 |
+| 自定义模型 | 不认 `_meta.extraModels`（本仓 Claude fork 的扩展）；Codex 走自己的 `config.toml` / `CODEX_CONFIG` / `MODEL_PROVIDER` | profile 对 codex 不注入 |
+

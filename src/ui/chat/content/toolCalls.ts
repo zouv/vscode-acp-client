@@ -6,7 +6,8 @@
 import type { ToolCallStatus, ToolKind } from '@agentclientprotocol/sdk';
 
 import { toContentView, type ContentBlockView } from './contentBlocks';
-import type { ToolInvocation, SubagentInfo } from '../transcript/types';
+import { agentTerminalMarkdown } from '../transcript/agentTerminals';
+import type { AgentTerminal, ToolInvocation, SubagentInfo } from '../transcript/types';
 
 /** One entry of a tool call's `content` collection. */
 export type ToolContentItem =
@@ -97,7 +98,7 @@ export function toToolCallView(inv: ToolInvocation): ToolCallView {
       name: basename(l.path),
       line: typeof l.line === 'number' ? l.line : undefined,
     })),
-    items: toToolContentItems(inv.content),
+    items: toToolContentItems(inv.content, inv.agentTerminals),
   };
   if (inv.endedAt !== undefined) { view.elapsedMs = Math.max(0, inv.endedAt - inv.startedAt); }
   // [CUSTOM- 工具自己报的耗时（`toolResponse.elapsedTimeSeconds`）优先于
@@ -105,6 +106,10 @@ export function toToolCallView(inv: ToolInvocation): ToolCallView {
   if (inv.toolElapsedSeconds !== undefined) { view.toolElapsedSeconds = inv.toolElapsedSeconds; }
   if (inv.description) { view.description = inv.description; }
   if (typeof inv.rawOutput === 'string' && inv.rawOutput.trim().length > 0) { view.output = inv.rawOutput; }
+  else {
+    const structured = structuredOutput(inv.rawOutput);
+    if (structured) { view.output = structured; }
+  }
   const toolName = extractToolName(inv.meta);
   if (toolName) { view.toolName = toolName; }
   // [CUSTOM- 委派给子 agent 的调用：身份由 store 锁存（见 latchSubagent）。
@@ -134,7 +139,7 @@ function extractToolName(meta: unknown): string | undefined {
   return typeof name === 'string' && name.length > 0 ? name : undefined;
 }
 
-function toToolContentItems(content: unknown[]): ToolContentItem[] {
+function toToolContentItems(content: unknown[], agentTerminals?: Record<string, AgentTerminal>): ToolContentItem[] {
   const items: ToolContentItem[] = [];
   for (const raw of content) {
     if (!raw || typeof raw !== 'object') { continue; }
@@ -154,14 +159,40 @@ function toToolContentItems(content: unknown[]): ToolContentItem[] {
         });
         break;
       }
-      case 'terminal':
-        items.push({ type: 'terminal', terminalId: String(item.terminalId ?? '') });
+      case 'terminal': {
+        const terminalId = String(item.terminalId ?? '');
+        // An agent-owned terminal streamed its output through `_meta`: show the text, not a chip
+        // that points at a terminal this client never created.
+        const agentTerminal = agentTerminals?.[terminalId];
+        if (agentTerminal) {
+          const text = agentTerminalMarkdown(agentTerminal);
+          const block = text ? toContentView({ type: 'text', text }) : null;
+          if (block) { items.push({ type: 'content', block }); }
+          break;
+        }
+        items.push({ type: 'terminal', terminalId });
         break;
+      }
       default:
         break;
     }
   }
   return items;
+}
+
+const STRUCTURED_OUTPUT_LIMIT = 20_000;
+
+/**
+ * An object `rawOutput` (an MCP result, a search hit list…) as pretty JSON for the OUT
+ * fallback. A bare `{ exit_code }` says nothing the status glyph does not, so it is skipped.
+ */
+function structuredOutput(rawOutput: unknown): string | undefined {
+  if (!rawOutput || typeof rawOutput !== 'object') { return undefined; }
+  const keys = Object.keys(rawOutput);
+  if (keys.length === 0 || keys.every(k => k === 'exit_code' || k === 'exitCode')) { return undefined; }
+  let text: string;
+  try { text = JSON.stringify(rawOutput, null, 2); } catch { return undefined; }
+  return text.length > STRUCTURED_OUTPUT_LIMIT ? `${text.slice(0, STRUCTURED_OUTPUT_LIMIT)}\n…` : text;
 }
 
 /**

@@ -20,6 +20,7 @@ export function summarizeCapabilities(caps: AgentCapabilities | undefined | null
     delete: !!sc?.delete,
     fork: !!sc?.fork,
     additionalDirectories: !!sc?.additionalDirectories,
+    logout: !!(caps as { auth?: { logout?: unknown } } | undefined | null)?.auth?.logout,
   };
 }
 

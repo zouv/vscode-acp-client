@@ -41,7 +41,7 @@
 | `ChatEditorPanel.ts` | **019 新增**。编辑区面板生命周期：`open()` / `close(reason)`。视图类型 `vac-chat-editor`。**监听器必须先于 `attachSurface` 注册**（见 §5.7） | 编辑区面板行为 |
 | `panelContract.ts` | `IChatPanel` / `PanelContext` / `PanelId` 三个纯接口：宿主与 surface 之间的契约（宿主独占全部 transcript，所以 detach 一个 surface 不会丢内容；detach 后**允许**继续收到零星事件，宿主丢弃而不是抛错） | 面板接口变更 |
 | `SessionNotifier.ts` | **会话状态通知**（等待权限 / 等待表单 / 轮次完成）→ 右下角通知（带「打开会话」按钮）。去重键 `sessionId::kind::token` 由本模块拼，调用方只给 token。**不 import vscode**（UI 通道靠注入缝），可被 vitest 直接驱动（见 §5.34） | 改「哪个会话在等用户」的通知口径 |
-| `diskSessions.ts` | 从 Claude Code 自己的会话目录（`<config>/projects/<slug>/<sessionId>.jsonl`）**补全**历史列表：`session/list` 不是全集。厂商私有格式、只读每个文件的前若干行、只扫当前工作目录的 slug、**只对 `Claude Code` 生效**；任何一步失败都只当作「没有补充」（见 §5.45） | 历史列表比官方少几条 / Claude 转录目录格式变更 |
+| `diskSessions.ts` | 从 Claude Code 自己的会话目录（`<config>/projects/<slug>/<sessionId>.jsonl`）**补全**历史列表：`session/list` 不是全集。厂商私有格式、只读每个文件的前若干行、只扫当前工作目录的 slug、**只对 profile 声明 `transcriptStore: 'claude'` 的 agent 生效**（按 kind，入口 `ChatPanelHost` 的 `transcriptDirFor`，目录取 agent 自己 env 里的 `CLAUDE_CONFIG_DIR`）；任何一步失败都只当作「没有补充」（见 §5.45） | 历史列表比官方少几条 / Claude 转录目录格式变更 |
 | `protocol.ts` | postMessage 判别联合（`ExtToChat` / `ChatToExt`）+ `verifySession` 纪律 | 增删消息类型 |
 | `markdown.ts` | `SafeMarkdown`：覆盖 `marked` 的 `html`/`link`/`image` 三个渲染钩子。**必须用 `new Marked()`**（不能用全局单例，渲染钩子会被别处改掉） | markdown 安全策略变更 |
 | `sessionChoices.ts` | **073 新增**。切换状态（mode + config options）的**快照 / 按通知载荷打补丁 / 算差异 → 人类可读的一句话**。纯函数，宿主只做缓存与发帖（去重靠"缓存由宿主独占"，见 §5.22）。**128 起模式以 config option 为权威**：快照的 modeId 由它派生、mode payload 写回该副本——两通道各存一份副本且只写一份时，去重会静默失效（见 §5.22 末与 pitfalls #34） | 改切换提示的表述、或改"两条上报路径怎么去重" |
@@ -49,9 +49,10 @@
 | `transcript/types.ts` | transcript 记录模型（`user`/`assistant`/`thought`/`tool`/`plan`/**`content`**/`notice` 七类，`content` 承载非文本消息块）+ `ToolInvocation`。`EntryBase.atIsElapsed`：true 表示 `at` 是「回放起点 0 起的相对毫秒」而非墙钟（见 §5.17） | 记录结构变更 |
 | `transcript/TranscriptStore.ts` | 按会话存记录；三重上限（500 条 / 24 会话 LRU / 64KB 每条）；活跃会话豁免 LRU。`finalizeStreaming` 带 `only` 过滤（**不要**在正文 chunk 上调用无参形式，那会把一次回复碎成 N 个气泡）。**`beginReplay`/`endReplay`**：回放计时态——期间 append 的记录 `at` 写成 0 起相对毫秒并打 `atIsElapsed`（拿不到转录真实时刻时不再用 `Date.now()` 冒充墙钟） | 容量策略 / 新记录类型 |
 | `transcript/ToolInvocationStore.ts` | 工具调用索引，严格实现 ACP 的 **replace-collection** 语义 | 工具调用字段变更 |
+| `transcript/agentTerminals.ts` | **agent 自己跑的终端**（Zed 约定：`_meta.terminal_info` / `terminal_output(_delta)` / `terminal_exit`，codex-acp 用它）：`applyTerminalMeta` 按**每条更新自己的** `_meta` 累加进 `ToolInvocation.agentTerminals`（`_meta` 整体替换，不能读 `inv.meta`；尾部保留 256KB）；`agentTerminalMarkdown` 出 console 围栏。`toToolCallView` 据此把该 terminal 项换成文本，客户端自建的终端仍是 chip。纯逻辑，配 `.spec.ts` | Codex 命令输出不显示 / 新的终端 `_meta` 形状 |
 | `content/contentBlocks.ts` | `ContentBlock`（5 种）→ 可序列化视图模型 | 新增内容类型 |
-| `content/toolCalls.ts` | `ToolInvocation` → `ToolCallView`（命令、locations、diff/terminal/content 项） | 工具调用渲染数据 |
-| `nesting/NestingStrategy.ts` | `NestingStrategy` 接口 + `resolveNestingStrategy(agentName)` 分派 + `flatNesting`（**空实现，且是默认路径**） | 新增 agent 的嵌套策略 |
+| `content/toolCalls.ts` | `ToolInvocation` → `ToolCallView`（命令、locations、diff/terminal/content 项；对象形状的 `rawOutput` 以 JSON 进 OUT 兜底，裸 `{exit_code}` 跳过） | 工具调用渲染数据 |
+| `nesting/NestingStrategy.ts` | `NestingStrategy` 接口 + `resolveNestingStrategy(agentName)` 分派（按 `AgentProfile.nesting`，即 kind，不按名字）+ `flatNesting`（**空实现，且是默认路径**） | 新增 agent 的嵌套策略 |
 | `nesting/ClaudeCodeNesting.ts` | Claude Code 的嵌套推断：显式链接（父的 `rawOutput`/`_meta` 里出现子 id）优先，时序包含回退。**全部是启发式猜测** | 探针 (b) 有新发现时改这里 |
 | `html/index.ts` | `renderChatHtml(webview, nonce, surface = 'view')`：外壳 + 样式 + 标记 + 脚本。**`surface` 会变成 `<body class="surface-view\|surface-editor">`**（050），供 CSS 区分侧边栏与编辑区底色 | 装配顺序变更 |
 | `html/shell.ts` / `styles.ts` / `body.ts` | CSP 与文档外壳 / 全部 CSS / 静态标记 | UI 外观 |
@@ -61,6 +62,8 @@
 **终端输出通路**（CUSTOM-20260923-012）：ACP 的 `Terminal` 工具内容只是引用（`{terminalId}`），终端归客户端所有。
 链路为：`ConnectionInfo.terminals`（`ConnectionManager` 暴露）→ `TerminalHandler.readOutput(terminalId)`
 （只读、未知 id 返回 `null`）→ `ChatPanelHost.handleOpenTerminal` → 作为 `content` 条目追加。
+**例外：agent 自己的终端**（codex-acp）——`terminalId` 不是客户端建的，输出走工具更新的 `_meta`，
+由 `transcript/agentTerminals.ts` 累加后直接渲染成文本，不出 chip（点了也打不开）。
 
 ### 5.2 webview 客户端代码的三条纪律（写之前必读）
 
@@ -408,15 +411,15 @@ pending ──用户点按钮──► selected        （回答 optionId）
 - `sanitize()` 放行整个 `data-*` 家族，而点击委托信任其中几个属性 —— 当前不可利用
   （`SafeMarkdown.html()` 把原始 HTML 转义成文本，无注入路径），但作为"将来 marked 新增钩子"的
   兜底时形同虚设。见 `pitfalls.md` #21。
-- `'Claude Code'` 字面量分散在 4 处（语义各不相同）——见 `pitfalls.md` #19 的处置原则：
+- `'Claude Code'` 字面量剩 2 处（语义各不相同）——见 `pitfalls.md` #19 的处置原则：
   跨宿主/客户端或跨语义的重复，要么注释互指，要么让一侧成为唯一真源（走协议下发）。
 
 **其他值得知道的风险**
 
-- `'Claude Code'` 这个字面量出现在 **4 个语义不同的地方**：`agents/AgentProfile.ts` 的 `label`（配置默认名）、
-  `diskSessions.ts` 的 `CLAUDE_CODE_AGENT`（读 Claude 的转录目录）、`stateCard.ts` 的空态文案（客户端硬编码，123 从 `sessionMenu.ts`/`boot.ts` 收拢到这里）、
-  `NestingStrategy.resolveNestingStrategy`（嵌套策略）。改其中任何一处的名字都要四处同看。
-  （`AgentConfig.getAgentNames` 排序用的是 `inferAgentKind(...) === 'claude'` 这个 **kind**，不是这个字面量。）
+- `'Claude Code'` 这个字面量还剩 **2 个语义不同的地方**：`agents/AgentProfile.ts` 的 `label`（配置默认名）、
+  `stateCard.ts` 的空态文案（客户端硬编码，123 从 `sessionMenu.ts`/`boot.ts` 收拢到这里）。
+  转录目录（`diskSessions`）与嵌套策略（`NestingStrategy`）2026-10-25 起都改为按 **kind**（`AgentProfile.transcriptStore` / `nesting`）——
+  此前它们按名字判断，用户在 `vac.agents` 里改个名就悄悄失效。排序（`AgentConfig.getAgentNames`）一直按 kind。
 - `sanitize()` 的 `ATTR_ALLOWLIST` **放行全部 `data-*`**，而点击委托偏偏信任 `data-href` / `data-path` /
   `data-terminal`——这层兜底实际没约束住它最该约束的几个属性。当前不可利用（`SafeMarkdown.html()`
   把原始 HTML 转义成文本，没有注入路径），但将来若 marked 新增没人覆盖的钩子，这层就形同虚设。

@@ -44,7 +44,8 @@ import type {
 // [CUSTOM- 自定义模型读取迁到 config 层（SessionManager 也要读同一份）。
 import { readCustomModels, normalizeCustomModels, type CustomModel } from '../../config/CustomModels';
 import type { IChatPanel, PanelContext } from './panelContract';
-import { primaryAgentName, getAgentNames } from '../../config/AgentConfig';
+import { primaryAgentName, getAgentNames, getAgentConfig, getAgentKind } from '../../config/AgentConfig';
+import { profileFor } from '../../agents/AgentProfile';
 import { viewSurface, type ChatSurface, type SurfaceKey } from './ChatSurface';
 // [CUSTOM- 会话状态通知（等待权限 / 等待表单 / 轮次完成）。宿主只认这个类型，
 // 测试塞假 channel；真实的 vscode 通知调用在下面（vscodeNoticeChannel —— 本文件不 import 它
@@ -80,7 +81,7 @@ import {
 // `basename` (same "last path segment" idea the client's folderName implements, and
 // two copies of it here is exactly how they drift — pitfalls #19).
 import { directoryKey, directoryOptions, folderName as basename } from './historyDirs';
-import { CLAUDE_CODE_AGENT, claudeTranscriptDir, readDiskSessions, readTranscriptTimes, readTranscriptUserAttachments } from './diskSessions';
+import { claudeTranscriptDir, readDiskSessions, readTranscriptTimes, readTranscriptUserAttachments } from './diskSessions';
 import type { TranscriptUserParts } from './diskSessions';
 import type { HistorySessionSummary } from './protocol';
 
@@ -1720,10 +1721,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * scrolls to the top of the outline to find.
    */
   private async preloadTranscriptTimes(agent: string, sessionId: string, cwd?: string): Promise<void> {
-    if (agent !== CLAUDE_CODE_AGENT || this.replayTimes.has(sessionId)) { return; }
+    if (this.replayTimes.has(sessionId)) { return; }
     const dirCwd = cwd || this.workspaceCwd();
     if (!dirCwd) { return; }
-    const dir = claudeTranscriptDir(dirCwd);
+    const dir = transcriptDirFor(agent, dirCwd);
+    if (!dir) { return; }
     try {
       const times = await readTranscriptTimes(dir, sessionId);
       if (times.size > 0) {
@@ -2543,11 +2545,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * agent lists (not just `workspaceFolders[0]`).
    */
   private async readDiskHistory(agent: string, cwd?: string): Promise<Array<Omit<HistorySessionSummary, 'dirKey'>>> {
-    if (agent !== CLAUDE_CODE_AGENT) { return []; }
     const dirCwd = cwd ?? this.workspaceCwd();
     if (!dirCwd) { return []; }
+    const dir = transcriptDirFor(agent, dirCwd);
+    if (!dir) { return []; }
     try {
-      const dir = claudeTranscriptDir(dirCwd);
       const rows = await readDiskSessions(dir, dirCwd);
       log(`${LOG_PREFIX}: transcript supplement ${rows.length} rows from ${dir}`);
       return rows
@@ -4065,6 +4067,15 @@ interface TurnOutcome {
   silent?: boolean;
   failed?: boolean;
   detail?: string;
+}
+
+/**
+ * The agent's own transcript directory for `cwd`, or null when its profile does not
+ * opt into reading one. The agent's configured env wins (e.g. its `CLAUDE_CONFIG_DIR`).
+ */
+function transcriptDirFor(agent: string, cwd: string): string | null {
+  if (profileFor(getAgentKind(agent)).transcriptStore !== 'claude') { return null; }
+  return claudeTranscriptDir(cwd, { ...process.env, ...(getAgentConfig(agent)?.env ?? {}) });
 }
 
 /**

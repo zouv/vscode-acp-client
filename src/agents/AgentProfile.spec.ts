@@ -14,6 +14,7 @@ describe('inferAgentKind', () => {
   it('infers from the name, command or args', () => {
     expect(inferAgentKind('Claude Code', { command: 'npx' })).toBe('claude');
     expect(inferAgentKind('My Agent', { command: 'npx', args: ['@zed-industries/codex-acp@latest'] })).toBe('codex');
+    expect(inferAgentKind('My Agent', { command: 'npx', args: ['-y', '@agentclientprotocol/codex-acp'] })).toBe('codex');
     expect(inferAgentKind('My Agent', { command: 'claude-code-acp' })).toBe('claude');
   });
 
@@ -35,5 +36,11 @@ describe('agent profiles', () => {
       .toEqual({ extraModels: ['opus-5', 'sonnet-5'] });
     expect(profileFor('claude').sessionMeta({ customModelIds: [] })).toBeUndefined();
     expect(profileFor('codex').sessionMeta({ customModelIds: ['x'] })).toBeUndefined();
+  });
+
+  it('only Claude reads its transcripts and nests tool calls', () => {
+    expect(profileFor('claude')).toMatchObject({ transcriptStore: 'claude', nesting: 'claude-code' });
+    expect(profileFor('codex')).toMatchObject({ transcriptStore: null, nesting: 'flat' });
+    expect(profileFor('generic')).toMatchObject({ transcriptStore: null, nesting: 'flat' });
   });
 });

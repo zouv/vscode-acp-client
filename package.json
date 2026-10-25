@@ -96,6 +96,10 @@
         "icon": "$(debug-disconnect)"
       },
       {
+        "command": "vac.logoutAgent",
+        "title": "VAC: Log Out of Agent"
+      },
+      {
         "command": "vac.openChat",
         "title": "VAC: Open Chat Panel"
       },
@@ -282,6 +286,10 @@
           "when": "view == vac-sessions && viewItem == agent-connected"
         },
         {
+          "command": "vac.logoutAgent",
+          "when": "view == vac-sessions && viewItem =~ /^agent/"
+        },
+        {
           "command": "vac.refreshSessions",
           "when": "view == vac-sessions && viewItem =~ /^agent/",
           "group": "session@1"
@@ -342,7 +350,8 @@
               "kind": "codex",
               "command": "npx",
               "args": [
-                "@zed-industries/codex-acp@latest"
+                "-y",
+                "@agentclientprotocol/codex-acp"
               ],
               "env": {}
             }
