@@ -130,7 +130,18 @@ export function styles(): string {
     overflow: hidden;
     scrollbar-width: thin;
   }
-  .tabs { display: flex; gap: 2px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+  /* [CUSTOM- overflow-y: hidden 是**承重的**，别删。只写 overflow-x 时，另一轴的
+     visible 会被规范算成 auto（实测 computed 就是 auto）⇒ 这条横向滚动条带同时也是纵向
+     滚动容器。而「运行中」tab 的涟漪（.tab-dot.busy::after，放大到 1.9 倍、比 16px 的
+     dot 多伸出约 7px）属于 transformed overflow，Chromium 会把它算进 scrollable overflow：
+     涟漪一长过 tab 高度就**冒出一根纵向滚动条**，占掉 10px 宽度 ⇒ 整条 tab 带每 1.4s
+     抖一次（用户 2026-10-26 报"每闪一次排版也闪一下"，圈出来的那根带箭头的细条就是它）。
+     隐藏纵向后涟漪被裁掉最多 1px，肉眼无感；真 Chromium 读数由 preview-records.mjs 的
+     #tabbusyprobe 钉住（tabsVScroll 必须为 0）。 */
+  .tabs {
+    display: flex; gap: 2px; flex: 0 1 auto; min-width: 0;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+  }
   .tab {
     display: inline-flex;
     align-items: center;

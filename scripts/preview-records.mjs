@@ -400,6 +400,59 @@ function driver() {
       });
     }
   }
+  // #tabbusyprobe：运行中 tab 的涟漪会不会把**标签条带**撑出一根纵向滚动条。
+  //
+  // 症状（用户 2026-10-26 报）：tab 栏最右、最后一个 tab 与 + 之间那根"带上下箭头的细条"
+  // 每 1.4s 闪一次，**每次闪整条 tab 带都跟着抖一下**。那不是我们画的控件 —— 是
+  // 是 .tabs 的纵向滚动条：只写 overflow-x 时另一轴按规范算成 auto，而涟漪
+  // （.tab-dot.busy::after，scale 到 1.9）属于 transformed overflow，被算进 scrollable
+  // overflow ⇒ 涟漪一长过 tab 高度就冒出滚动条、占掉 10px 宽度，动画回落时又消失。
+  //
+  // 读数：tabsVScroll = 带子的 offsetWidth − clientWidth（纵向滚动条宽度，必须为 0）。
+  // 涟漪**冻结在峰值**（scale 1.9）来量 —— 动画中的瞬时帧不可靠，而峰值才是它越界的那一刻。
+  // ⚠️ 本档**不能**加 --hide-scrollbars：那条参数把滚动条从布局里也拿掉了，改不改都是 0，
+  // 探针会静默失去判别力（实测：漏掉它时两种状态都读出 0）。
+  if (location.hash.indexOf('tabbusyprobe') >= 0) {
+    try {
+      NS.tabs.init();
+      var prow = function (id, title, over) {
+        var base = { sessionId: id, agentName: 'Claude Code', title: title, cwd: 'd:/work/ai-vibe-creator',
+          createdAt: '', loading: false, running: false, unread: false, waiting: false };
+        for (var k in over) { if (Object.prototype.hasOwnProperty.call(over, k)) { base[k] = over[k]; } }
+        return base;
+      };
+      // 三个短 tab：横向不溢出，于是**唯一可能出现的滚动条就是纵向那根**。
+      NS.tabs.setSessions([
+        prow('b1', 'running one', { running: true }),
+        prow('b2', 'idle two', {}),
+        prow('b3', 'idle three', {})
+      ]);
+      NS.tabs.setFocus(prow('b1', 'running one', { running: true }));
+      var ringStyle = document.createElement('style');
+      ringStyle.textContent = '.tab-dot.busy::after { animation: none !important;'
+        + ' transform: scale(1.9) !important; opacity: .5 !important; }';
+      document.head.appendChild(ringStyle);
+      var tabsBox = document.getElementById('tabs');
+      void tabsBox.offsetHeight;   // 强制一次布局，让冻结的涟漪先落地
+      var firstTab = tabsBox.querySelector('.tab');
+      var probeOut = document.createElement('pre');
+      probeOut.id = 'probe';
+      probeOut.textContent = JSON.stringify({
+        kind: 'tabs-busy',
+        busyDots: document.querySelectorAll('.tab-dot.busy').length,
+        tabsVScroll: tabsBox.offsetWidth - tabsBox.clientWidth,
+        tabsClient: tabsBox.clientWidth + 'x' + tabsBox.clientHeight,
+        tabsScroll: tabsBox.scrollWidth + 'x' + tabsBox.scrollHeight,
+        firstTabLeft: firstTab ? Math.round(firstTab.getBoundingClientRect().left) : null
+      });
+      document.body.appendChild(probeOut);
+    } catch (e) {
+      var errOut = document.createElement('pre');
+      errOut.id = 'probe';
+      errOut.textContent = JSON.stringify({ kind: 'tabs-busy-error', message: String((e && e.message) || e) });
+      document.body.appendChild(errOut);
+    }
+  }
   // #times：打开每条记录的时刻（真面板里由 header 的 Times 开关切，
   // 这里只是给 #messages 加那个类）。
   if (location.hash.indexOf('times') >= 0) {
@@ -2535,6 +2588,9 @@ const SHOTS = [
   // 标签栏目录标识：完成态下背景与文字必须是对比色（probe 读计算样式）。
   ['#tabsprobe', 'tabs-probe', '1440,900'],
   ['#tabsbig', 'tabs-big'],
+  // 运行中 tab 的涟漪不许把带子撑出纵向滚动条（读数 tabsVScroll 必须为 0；
+  // 2026-10-26 用户报的那根"会闪的细条"就是它）。⚠️ 读数时别加 --hide-scrollbars。
+  ['#tabbusyprobe', 'tabs-busy', '1440,900'],
   // 底部栏（输入卡 + 预留功能区）。窄档走默认的 500（退化档：卡片随
   // 主列收缩、圆角与内边距不变，证明没有 media query 也能正常退化）；其余宽档必须显式给
   // 1440，否则输入卡的限宽与预留区根本不显形（见 shoot 的注释）。tall 档同一个 hash 截两个

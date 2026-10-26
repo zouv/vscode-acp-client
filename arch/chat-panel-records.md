@@ -335,6 +335,16 @@ Webview 默认弹 **Chromium 的原生菜单**，它在这个面板上有两个�
 > 的动效被屏蔽了"。现在忙碌态 `.tab-dot.busy { overflow: visible }`，空闲态仍裁剪字母。
 > **验收判据在 `#tabsprobe`**：忙碌点的 `overflow` 必须是 `visible`、`::after` 的 `animationName`
 > 必须是 `tab-ring`；空闲/unread 则是 `hidden` / `none`。改 `.tab-dot` 的布局时先看这两项。
+>
+> **放开 `overflow` 的代价：涟漪会把标签条带撑出纵向滚动条（2026-10-26，用户报"三个点一直在闪、
+> 每闪一次排版也闪一下"）**。`.tabs` 只写了 `overflow-x: auto`，按规范另一轴的 `visible` 会被算成
+> `auto` ⇒ 这条横向滚动带同时也是**纵向滚动容器**；而 `scale(1.9)` 的涟漪属于 transformed overflow，
+> Chromium 把它算进 scrollable overflow。于是涟漪每长到峰值就冒出一根**纵向滚动条**（带上下箭头，
+> 用户圈出来的就是它）、占掉 10px 宽度，动画回落它又消失 —— 整条 tab 带每 1.4s 抖一次。
+> **修法**：`.tabs { overflow-y: hidden }`（涟漪最多被裁 1px，肉眼无感）。**别删那一行**。
+> 读数在 `preview-records.mjs` 的 `#tabbusyprobe`：`tabsVScroll`（= `offsetWidth − clientWidth`）
+> 必须为 **0**；量的时候涟漪冻结在 `scale(1.9)` 峰值，且命令行**不能**加 `--hide-scrollbars`
+> （那条参数把滚动条从布局里也拿掉，两种状态都读 0，探针会静默失去判别力）。
 
 > **选中 / 未选中 tab 的区分（2026-10-19）**：用户报"区分度不明显"。现在四条同向叠加 ——
 > 未选中用 `tab-inactiveForeground` + `opacity: .7`；选中用**与面板同色的底** + 1px 边框 +
