@@ -15,29 +15,34 @@
 
 ## 状态快照
 
-- **最近更新**：2026-10-25
-- **整体状态**：🚧 **v1.5.0 已发布**（Codex 支持：新适配器 / API Key 认证 / 登出 / 命令输出，另含底层 P0 修复）。
-  P1-1 只剩真机验证。发布内容见 `CHANGELOG [1.5.0]`。
+- **最近更新**：2026-10-26
+- **整体状态**：✅ **v1.5.1 已发布**（标签栏运行中涟漪撑出纵向滚动条导致的抖动修复）；
+  v1.5.0 的 Codex 支持仍在等真机验证（P1-1）。发布内容见 `CHANGELOG [1.5.1]` / `[1.5.0]`。
+  「滚动条到底、消息仍被截断」**未复现**，见「当前任务」第 2 条。
 - **当前分支（必填）**：`main`（已提交并推送，与 `origin/main` 同步）。
-- **最后验证状态**（2026-10-25）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（114 项）·
-  `npm test`（真实宿主）✅ **507 项**。codex-acp 2.2.2 的握手与建空会话已用
-  `scripts/probe-agent-init.mjs --session` 实测（未发 prompt）。⚠️ 未做 `npm run dev:host` 真机验收。
+- **最后验证状态**（2026-10-26）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（114 项）·
+  `npm test`（真实宿主）✅ **507 项** · `check-webview-client` ✅ ·
+  真 Chromium 探针 `#tabbusyprobe` 读数 `tabsVScroll=0`（改前 10）。
+  ⚠️ 未做 `npm run dev:host` 真机验收。
 
 ---
 
 ## 当前任务（In Progress）
 
 - **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」第 1 条。
+- **「滚动条到底、消息仍被截断」待复现**（用户 2026-10-26 报，现场已消失）：日志里 2300+ 条
+  `scroll#` 全部自洽（`cov=0`、末条底边在输入卡上方 27px），现有判据打不到这种形态。
+  **下次出现时先别关面板**，直接读 `~/.vac/vac.log` 抓现场。
 
 ---
 
 ## 待归档暂存区（仅本轮未归档的完成项）
 
-- （无。本轮成果已写入 `CHANGELOG [1.5.0]`。）
+- （无。本轮成果已写入 `CHANGELOG [1.5.1]`。）
 
 ## 进行中（半成品 / 未提交）
 
-- （无。本轮改动已随 v1.5.0 发布。）
+- （无。本轮改动已随 v1.5.1 发布。）
 
 ## 阻塞 / 待决策（Blockers）
 
@@ -68,6 +73,9 @@
    `Agent runtime cached for "Claude Code" in ...ms`，**下一次启动**应变成
    `Spawning agent ... (cached runtime v0.91.0)`，连接降到 ~1s；
    ⑤ 滚动问题复现时抓 `~/.vac/vac.log` 的 `scroll#` 行：`cov=1` 即定案，`heal-skip:` 说明自愈为何没出手。
+      **2026-10-26 补充**：这条会话的采样全是 `cov=0`，说明还有第三种形态没被现有判据覆盖
+      （`cov` 只比「末条底边 vs 输入卡顶边」，没管表单/权限抽屉）。复现时优先看：末条 `last`/`comp`、
+      `#messages` 自己的 rect 与 `window.innerHeight` 的关系、以及抽屉变量（`ev=` / `pv=`）。
 4. **v1.3.1 真机验收（遗留）**：见 `CHANGELOG [1.3.1]` 的 9 条（markdown / Copy / 图标 / 置顶卡 / 历史弹窗 /
    Times / tab 高亮与涟漪）。
 5. **P1-2 宿主实测验收（v1.3.0 遗留）**：Dashboard、聊天面板、树/历史弹窗 Delete、Fork、sub-agent 卡等。
