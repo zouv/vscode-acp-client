@@ -1303,7 +1303,12 @@ export const transcriptViewClient = `
     // （流式期间显示原文，收尾时 trackMarkdown 会把完整文本要来重渲染）。
     // ① 回填只认领"针对当前文本"的那一份。只在**确知**它过时（问过、且问的不是这段文本）
     // 时丢弃 —— asked 没记录的情况（例如 html 来自快照）一律照收，别把正常的回填误伤。
+    // [CUSTOM- 同一条 patch 里**带着文本**的 html 是宿主自己渲染的（回放预渲染 /
+    // 快照补齐）：它渲染的就是那次给到的 text，没有"客户端问过哪一段"这回事，一律照收。
+    // 这条通道存在的理由见宿主 prefillReplayMarkdown：请求→回填那条往返会静默断掉，
+    // 而宿主手上有权威文本与渲染器，回放结束可以直接把记录补齐。
     if (changes.html !== undefined && changes.html !== null
+      && changes.text === undefined
       && asked[entryId] !== undefined && asked[entryId] !== entry.text) {
       entry.html = undefined;
     }

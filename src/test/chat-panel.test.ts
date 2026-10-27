@@ -60,6 +60,9 @@ import {
 } from '../ui/chat/ChatPanelHost';
 // [CUSTOM- 归一化迁到 config 层。
 import { normalizeCustomModels } from '../config/CustomModels';
+// [CUSTOM- 设置面板的配置读写缝（测试桩走这里，不碰开发者的 settings.json / ~/.vac）。
+import type { SettingIO } from '../config/SettingScope';
+import type { SettingLayer, SettingSource, SettingWriteTarget } from '../config/GlobalSettings';
 import type { RestoreChoice } from '../ui/chat/protocol';
 import type { ActiveEditorLike } from '../ui/chat/ChatPanelHost';
 import type { ExtToChatMessage, TranscriptSnapshotWire } from '../ui/chat/protocol';
@@ -179,6 +182,8 @@ interface Harness {
   prefs: StubPrefs;
   /** [CUSTOM- The notification seam the host was given. */
   notices: RecordingChannel;
+  /** [CUSTOM- The settings read/write seam the host was given. */
+  settingsIO: StubSettingIO;
 }
 
 /**
@@ -232,6 +237,45 @@ class StubPrefs implements PanelPrefsIO {
   }
 }
 
+/**
+ * [CUSTOM- Stands in for the settings read/write seam (VS Code config + ~/.vac/config.json).
+ * `globalValue` lets a test drive the cross-IDE layer; writes are recorded instead of applied.
+ */
+class StubSettingIO implements SettingIO {
+  readonly writes: Array<{ key: string; value: unknown; target: SettingWriteTarget }> = [];
+  readonly cleared: Array<{ key: string; layer: 'workspace' | 'user' | 'global' }> = [];
+  readonly opened: string[] = [];
+  private globalValue: unknown;
+
+  constructor(initial?: unknown) { this.globalValue = initial; }
+
+  resolve(key: string, defaultScope: 'global' | 'ide'): SettingSource {
+    const layers: Array<{ layer: Exclude<SettingLayer, 'panel'>; value?: unknown }> = [
+      { layer: 'workspace' },
+      { layer: 'user' },
+      { layer: 'global', value: this.globalValue },
+      { layer: 'default', value: [] },
+    ];
+    const effective = this.globalValue === undefined ? 'default' : 'global';
+    const writeTarget: SettingWriteTarget = effective === 'default'
+      ? (defaultScope === 'global' ? 'global' : 'user')
+      : 'global';
+    return { effective, writeTarget, layers };
+  }
+
+  async write(key: string, value: unknown, target: SettingWriteTarget): Promise<void> {
+    this.writes.push({ key, value, target });
+    if (target === 'global') { this.globalValue = value; }
+  }
+
+  async clear(key: string, layer: 'workspace' | 'user' | 'global'): Promise<void> {
+    this.cleared.push({ key, layer });
+    if (layer === 'global') { this.globalValue = undefined; }
+  }
+
+  async open(layer: 'workspace' | 'user' | 'global'): Promise<void> { this.opened.push(layer); }
+}
+
 function makeHarness(
   sessionId: string,
   agentName = 'Claude Code',
@@ -246,6 +290,8 @@ function makeHarness(
   // [CUSTOM- How long a background task may stay quiet before the panel
   // stops waiting. Millisecond-scale in tests; the host's default is two minutes.
   backgroundQuietMs?: number,
+  // [CUSTOM- 设置面板的配置读写缝；不传则用默认桩（不碰真实配置）。
+  settingsIO = new StubSettingIO(),
 ): Harness {
   const handler = new SessionUpdateHandler();
   const sessionManager = managerFactory
@@ -257,11 +303,11 @@ function makeHarness(
   const notices = new RecordingChannel();
   const host = new ChatPanelHost(
     vscode.Uri.file('/tmp/chat-panel-test'), sessionManager, handler,
-    bridges.permission, globalState, bridges.elicitation, prefs, notices, backgroundQuietMs,
+    bridges.permission, globalState, bridges.elicitation, prefs, notices, backgroundQuietMs, settingsIO,
   );
   const surface = new RecordingSurface();
   host.attachSurface(surface, { agentName, sessionId });
-  return { host, surface, handler, sessionManager, sessionId, agentName, prefs, notices };
+  return { host, surface, handler, sessionManager, sessionId, agentName, prefs, notices, settingsIO };
 }
 
 function feed(harness: Harness, notifications: readonly FixtureNotification[]): void {
@@ -1287,6 +1333,62 @@ suite('chat panel: real session/load replay', () => {
       'records stayed streaming after the replay — the client keeps them in the '
       + 'streaming state (and aria-busy stays true, muting the screen reader)',
     );
+  });
+
+  // [CUSTOM- 回放结束由宿主自己补渲染（2026-10-27「进场时消息不渲染 markdown」）。
+  //
+  // 正常的往返是客户端来要、宿主回填；真机日志里出现过一次 37 条记录的回放只有最后一条
+  // 被要过（其余停在原文，两端都没有报错）。所以这条链路现在**不依赖客户端的请求**：
+  // `session-load-end` 之后每条已收尾的 assistant / thought 都要么在 store 里已经有 html，
+  // 要么已经被作为 revise 下发（携带 text + streaming:false，客户端据此认领）。
+  test('replay: the host itself renders markdown for every settled prose record', function () {
+    if (!fixture?.sessionId) { this.skip(); }
+    const harness = makeHarness(fixture.sessionId);
+    feedReplay(harness, phaseOf(fixture, 'replay'));
+
+    const state = settle(harness, 'Claude Code', fixture.sessionId);
+    const missing = state.entries
+      .filter(e => e.kind === 'assistant' || e.kind === 'thought')
+      .filter(e => {
+        const prose = e as { text?: string; html?: string; streaming?: boolean };
+        if (!prose.text || prose.streaming) { return false; }
+        const patch = state.patched.get(e.id) as { html?: string } | undefined;
+        return !prose.html && !patch?.html;
+      })
+      .map(e => e.id);
+    assert.deepStrictEqual(missing, [],
+      'these settled prose records would render as literal markdown: ' + missing.join(','));
+
+    const prefill = harness.surface.sent.filter(m => m.type === 'revise'
+      && (m as { patch?: { html?: string; text?: string } }).patch?.html
+      && (m as { patch?: { text?: string } }).patch?.text !== undefined);
+    assert.ok(prefill.length > 0,
+      'the host posted no self-rendered markdown — the replay still depends on a client round-trip');
+  });
+
+  // [CUSTOM- 轮次结束之后还有输出（后台子任务 / 收尾晚到的分片）：这条记录再也等不到
+  // `streaming:false`，客户端的"定稿重试点"因此永远不触发 —— 真机表现就是"对话中的会话，
+  // 最后一条消息卡片没有渲染，关掉重开就正常"。安静窗口到了由宿主补渲染。
+  test('a trailing message that never finalizes still gets rendered (settle prefill)', async function () {
+    const harness = makeHarness('settle-1');
+    harness.handler.handleUpdate({
+      sessionId: 'settle-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'm-tail',
+        content: { type: 'text', text: '结尾**重点**' },
+      },
+    } as unknown as Parameters<SessionUpdateHandler['handleUpdate']>[0]);
+    // 不会再有 finalize（轮次之外的消息就是这样）。
+
+    const selfRendered = () => harness.surface.sent.filter(m => m.type === 'revise'
+      && (m as { patch?: { text?: string; html?: string } }).patch?.text === '结尾**重点**'
+      && !!(m as { patch?: { html?: string } }).patch?.html);
+    assert.strictEqual(selfRendered().length, 0, 'nothing to render before the quiet window');
+    await new Promise(resolve => setTimeout(resolve, 800));
+    assert.ok(selfRendered().length > 0,
+      'the settled quiet window must render the trailing record — otherwise it stays literal markdown '
+      + 'until the session is re-opened');
   });
 
   test('live: no prose is dropped either (control)', function () {
@@ -3606,6 +3708,26 @@ suite('chat panel: custom model aliases ()', () => {
     assert.strictEqual(m.name, '我的模型');
     assert.strictEqual(m.description, 'hover');
     assert.strictEqual(normalizeCustomModels([{ modelId: 'x', description: 42 }])[0].description, undefined);
+  });
+
+  test('saving them writes the resolved layer and pushes the new list to the panel', async () => {
+    const settingsIO = new StubSettingIO();
+    const harness = makeHarness(
+      's-custom', 'Claude Code', undefined, new StubPrefs(), {}, undefined, undefined, settingsIO,
+    );
+    harness.surface.sent.length = 0;
+    const value = [{ modelId: 'm1', name: 'M', description: 'first' }];
+    harness.host.onMessage({ type: 'setSetting', key: 'vac.customModels', value });
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+    assert.deepStrictEqual(settingsIO.writes, [
+      { key: 'vac.customModels', value, target: 'global' },
+    ], 'no user/workspace override, so the cross-IDE layer is the write target');
+    const pushed = harness.surface.sent.filter(message => message.type === 'customModels') as Array<{
+      customModels: unknown;
+    }>;
+    assert.strictEqual(pushed.length, 1, 'the composer gets the new aliases/descriptions immediately');
+    assert.deepStrictEqual(pushed[0].customModels, value);
   });
 });
 

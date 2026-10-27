@@ -42,7 +42,14 @@ import type {
   UiPrefs,
 } from './protocol';
 // [CUSTOM- 自定义模型读取迁到 config 层（SessionManager 也要读同一份）。
-import { readCustomModels, normalizeCustomModels, type CustomModel } from '../../config/CustomModels';
+import { normalizeCustomModels, type CustomModel } from '../../config/CustomModels';
+// [CUSTOM- 设置项的作用域：工作区 > 用户 > 跨 IDE 全局文件 > 内置默认。
+import { GLOBAL_SETTING_KEYS } from '../../config/GlobalSettings';
+import {
+  CONFIG_SETTING_KEYS, vscodeSettingIO, type SettingIO,
+} from '../../config/SettingScope';
+// [CUSTOM- 回放结束时的 markdown 预渲染（见 prefillReplayMarkdown）。
+import type { TranscriptEntry } from './transcript/types';
 import type { IChatPanel, PanelContext } from './panelContract';
 import { primaryAgentName, getAgentNames, getAgentConfig, getAgentKind } from '../../config/AgentConfig';
 import { profileFor } from '../../agents/AgentProfile';
@@ -102,6 +109,9 @@ const STRUCTURAL_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   // [CUSTOM- 连接相位必须立即发：它会被 `focus`（连接成功且有会话时紧随其后）
   // 语义性覆盖，排进合帧队列就可能反过来、让客户端多开一张草稿。
   'connection',
+  // [CUSTOM- 自定义模型是整表状态（不是流式增量），且输入卡菜单要立刻换描述；
+  // 排进合帧队列只会让"保存后看起来没生效"多一个 16ms 的窗口。
+  'customModels',
 ]);
 
 /** [CUSTOM- globalState key for the outline pin/width prefs. */
@@ -287,6 +297,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // 用户看到的就是"活还在跑，按钮却复原了"。
   private readonly backgroundTasks: Map<string, NodeJS.Timeout> = new Map();
 
+  // [CUSTOM- 会话"安静下来"之后补渲染 markdown 的计时器（见 armSettlePrefill）。
+  // 每个会话一个：客户端那条"请求 → 回填"往返会静默断掉，这条是宿主侧的兜底。
+  private readonly settleTimers: Map<string, NodeJS.Timeout> = new Map();
+
   // [CUSTOM- 会话标题在"第二次发言"时冻结（见 trackTitle）。
   // 为什么不是"最新那个"：adapter 每轮结束去拉 SDK 标题（`maybeUpdateSessionTitle`），而 SDK
   // 的后台生成可能几轮之后才落盘 ⇒ 那些标题描述的是"聊了几轮之后的主题"，不是这次会话的名字。
@@ -324,6 +338,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // [CUSTOM- 后台子任务"多久没动静就不再等"（见 noteBackgroundTask）。
     // 测试会把它调到毫秒级；默认两分钟——比实测看到的最长静默间隔（57s）宽裕一倍。
     private readonly backgroundQuietMs: number = 120_000,
+    // [CUSTOM- 设置面板的配置读写缝（与 prefs 同理：测试不能碰开发者的 settings.json /
+    // ~/.vac/config.json）。默认走真实 VS Code 配置与跨 IDE 全局文件。
+    private readonly settingsIO: SettingIO = vscodeSettingIO(),
   ) {
     this.notifier = new SessionNotifier(this.noticeChannel,
       // 显式用户动作（点了通知）：可以抢焦点、把面板抬到前台。
@@ -399,6 +416,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // closed tab disappears immediately rather than waiting for the focus
       // change that follows.
       this.saveOpenSessions();
+      const settle = this.settleTimers.get(sessionId);
+      if (settle) { clearTimeout(settle); this.settleTimers.delete(sessionId); }
       this.transcripts.drop(sessionId);
       this.tools.drop(sessionId);
       this.attachments.delete(sessionId);
@@ -452,6 +471,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // which silently mutes the screen reader. (Found by
       // src/test/chat-panel.test.ts against a real captured replay.)
       this.finalizeEntries(sessionId);
+      // [CUSTOM- 回放结束 ⇒ 宿主自己把 markdown 补齐（见 prefillReplayMarkdown）。
+      // 放在 finalizeEntries 之后：只有**已收尾**的记录才该被渲染。
+      this.prefillReplayMarkdown(sessionId);
       // [CUSTOM- `loadSession` 把 configOptions 写进 placeholder 是在
       // `session-created` **之后**（而且不走 applyConfigOptions）—— 不在这儿再记一次的话，
       // 打开一个历史会话会把草稿页快照的配置项清成空，用户点「+」就又看不到模式/模型了。
@@ -491,6 +513,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // [CUSTOM- 设置面板里的配置项（自动批准 / 协议日志 / 默认目录）也可能在
         // VS Code 的 Settings UI 里被改：面板上的控件不能显示过期值。
         if (e.affectsConfiguration('vac')) { this.postSettings(); }
+        if (e.affectsConfiguration('vac.customModels')) { this.postCustomModels(); }
         if (e.affectsConfiguration('vac.agents')) {
           this.agentKindCache.clear();
           this.refreshSessions();
@@ -965,7 +988,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       }
       case 'settingAction': {
         const action = String((msg as { action?: unknown }).action ?? '');
-        void this.handleSettingAction(action).catch(e => this.reportError(null, e));
+        const key = (msg as { key?: unknown }).key;
+        const layer = (msg as { layer?: unknown }).layer;
+        void this.handleSettingAction(
+          action,
+          typeof key === 'string' ? key : undefined,
+          layer === 'workspace' || layer === 'user' || layer === 'global' ? layer : undefined,
+        ).catch(e => this.reportError(null, e));
         return;
       }
       // [CUSTOM- The start card's auto-connect switch. NOT session-scoped
@@ -1198,6 +1227,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // torn-down panel and keep the extension host awake for nothing).
     for (const timer of this.backgroundTasks.values()) { clearTimeout(timer); }
     this.backgroundTasks.clear();
+    for (const timer of this.settleTimers.values()) { clearTimeout(timer); }
+    this.settleTimers.clear();
     // setPresenter(null) also cancels every prompt still awaiting an answer:
     // nothing can render or answer them once the host is gone.
     this.permissionBridge?.setPresenter(null);
@@ -1474,6 +1505,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     if (!data || !session) { return; }
 
     this.transcripts.ensureSession(sessionId, session.agentName);
+    // [CUSTOM- 每次更新都重新计一次"安静"窗口：窗口到了就把还没渲染的记录补齐
+    // （见 settlePrefillMarkdown）。它覆盖的是"客户端那条往返没送到"的所有形态。
+    this.armSettlePrefill(sessionId);
 
     // [CUSTOM- Take the switch baseline here, at the top, because this
     // runs for every update of every session regardless of whether a surface is
@@ -1964,6 +1998,120 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     }
     if (skipped > 0) {
       log(`${LOG_PREFIX}: skipped ${skipped} malformed markdown item(s) (rendered ${rendered.length})`);
+    }
+  }
+
+  /**
+   * [CUSTOM- 回放结束时由**宿主自己**把 markdown 补齐（2026-10-27 用户报
+   * 「进场时消息没有渲染成 markdown」）。
+   *
+   * 正常路径是客户端来要：记录落地 / 定稿时发 `renderMarkdown`，宿主渲染后回填。
+   * 真机日志里出现过一次 37 条记录的回放 —— 客户端**只**为最后一条发过请求，其余全部
+   * 停在原文，而且两端都没有一条报错（客户端的请求计数、宿主的丢弃计数都是干净的）。
+   * 也就是说这条往返会静默断在客户端那侧，而从那侧的日志看不出断在哪一步。
+   *
+   * 宿主手上有渲染器与权威文本，所以回放这种**有限且已经收尾**的流不该依赖那条往返：
+   * 这里直接渲染一遍并推给客户端（补丁带 text 与 streaming:false，见客户端 patch 的
+   * 「与文本一起到的 html 才作数」规则）。它同时修好另一种形态：客户端若丢了收尾的
+   * revise，记录会永远停在 streaming，看起来像永远"正在输入"。
+   *
+   * 只处理已收尾的 assistant / thought（流式中的正文不能冻结在某一段上，见 pitfalls #49）。
+   */
+  private prefillReplayMarkdown(sessionId: string): void {
+    const entries = this.collectMissingMarkdown(sessionId);
+    if (entries.length === 0) { return; }
+    log(`${LOG_PREFIX}: pre-rendering markdown for ${entries.length} replayed record(s) in ${sessionId}`);
+    for (let at = 0; at < entries.length; at += ChatPanelHost.PREFILL_BATCH) {
+      const batch = entries.slice(at, at + ChatPanelHost.PREFILL_BATCH);
+      if (at === 0) {
+        this.renderMarkdownBatch(sessionId, batch, true);
+      } else {
+        // [CUSTOM- 大回放分片跑：一次渲染几百条会在宿主线程上造成一段可见的长任务。
+        setTimeout(() => this.renderMarkdownBatch(sessionId, batch, true), 0);
+      }
+    }
+  }
+
+  /** 快照路径同样补齐：切回一个会话时不该再出现"先原文、后 markdown"。 */
+  private prefillSnapshotMarkdown(sessionId: string): void {
+    const entries = this.collectMissingMarkdown(sessionId);
+    if (entries.length > 0) { this.renderMarkdownBatch(sessionId, entries, false); }
+  }
+
+  /**
+   * [CUSTOM- 会话安静下来之后把还缺 html 的记录补齐（2026-10-27 用户报
+   * 「对话中的会话，最后一条消息卡片经常没有渲染，关掉重开就正常」）。
+   *
+   * 需要这一条的理由是"请求 → 回填"那条往返并不总是成立：
+   * · 一轮结束后**轮次之外**还有输出（后台子任务、收尾晚到的分片）⇒ 这条记录再也收不到
+   *   `streaming:false`，客户端的"定稿重试点"因此永远不触发（思考块连落地时都不入队）；
+   * · 请求本身也会在客户端侧静默丢掉（回放取证：37 条记录只有最后一条被要过）。
+   * 两种形态的后果一样：卡片停在原文，关掉重开会话（走快照）才恢复。
+   *
+   * 做法保守：会话**安静**了 SETTLE_PREFILL_MS 才动手；轮次仍在跑时**跳过还在 stream 的
+   * 记录**（半截正文渲染出来，下一片又会变回原文）。轮次已结束则连 stream 的一起渲染 ——
+   * 那正是"最后一条"的形状。
+   */
+  private armSettlePrefill(sessionId: string): void {
+    const previous = this.settleTimers.get(sessionId);
+    if (previous) { clearTimeout(previous); }
+    const timer = setTimeout(() => {
+      this.settleTimers.delete(sessionId);
+      this.settlePrefillMarkdown(sessionId);
+    }, ChatPanelHost.SETTLE_PREFILL_MS);
+    this.settleTimers.set(sessionId, timer);
+  }
+
+  private settlePrefillMarkdown(sessionId: string): void {
+    if (!this.sessionManager.getSession(sessionId)) { return; }
+    const running = this.sessionManager.hasRunningTurn(sessionId);
+    const entries = this.collectMissingMarkdown(sessionId, { includeStreaming: !running });
+    if (entries.length === 0) { return; }
+    log(`${LOG_PREFIX}: settled markdown for ${entries.length} record(s) in ${sessionId}`);
+    this.renderMarkdownBatch(sessionId, entries, true);
+  }
+
+  /** 已收尾、有正文、还没有 html 的 assistant / thought 记录。 */
+  private collectMissingMarkdown(
+    sessionId: string,
+    opts: { includeStreaming?: boolean } = {},
+  ): TranscriptEntry[] {
+    const entries = this.transcripts.snapshot(sessionId)?.entries ?? [];
+    const out: TranscriptEntry[] = [];
+    for (const entry of entries) {
+      if (entry.kind !== 'assistant' && entry.kind !== 'thought') { continue; }
+      const prose = entry as { text?: string; html?: string; streaming?: boolean };
+      if (prose.streaming && !opts.includeStreaming) { continue; }
+      // 空白正文渲染出来是空串（客户端也当"没有 html"），会让安静窗口每 600ms 重试一次。
+      if (!prose.text || prose.text.trim().length === 0 || prose.html) { continue; }
+      out.push(entry);
+    }
+    return out;
+  }
+
+  /** 渲染一批并落盘；`notify` 时逐条推给客户端（携带 text，客户端据此认领这份 html）。 */
+  private renderMarkdownBatch(sessionId: string, entries: readonly TranscriptEntry[], notify: boolean): void {
+    for (const entry of entries) {
+      const prose = entry as { text?: string; html?: string };
+      if (!prose.text || prose.html) { continue; }
+      let html: string;
+      try {
+        html = this.markdown.render(prose.text);
+      } catch (e) {
+        log(`${LOG_PREFIX}: markdown pre-render failed for ${entry.id}: ${String(e)}`);
+        continue;
+      }
+      if (!html) { continue; }
+      // [CUSTOM- 只对**还在 store 里**的记录下发：分片跑的时候会话可能已经被关掉了。
+      const updated = this.transcripts.patch(sessionId, entry.id, { html });
+      if (notify && updated) {
+        this.post({
+          type: 'revise',
+          sessionId,
+          entryId: entry.id,
+          patch: { text: prose.text, html, streaming: false },
+        });
+      }
     }
   }
 
@@ -2825,6 +2973,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   /** How many recent directories the picker offers (user-configurable; keeps the drawer scannable). */
   private static readonly DEFAULT_RECENT_DIRECTORIES = 8;
 
+  /** 回放预渲染 markdown 的每片条数（一次几百条会变成宿主线程上的长任务）。 */
+  private static readonly PREFILL_BATCH = 40;
+
+  /** 会话安静多久之后补渲染 markdown（见 armSettlePrefill）。 */
+  private static readonly SETTLE_PREFILL_MS = 600;
+
   private recentLimit(): number {
     return clampNumber(this.uiPrefs?.recentDirectoryLimit, 3, 16,
       ChatPanelHost.DEFAULT_RECENT_DIRECTORIES);
@@ -3432,7 +3586,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   /**
    * [CUSTOM- 设置面板的数据源（2026-10-21）。宿主是唯一写者：
-   * · `vac.*` 键 → VS Code 配置（全局）；
+   * · `vac.*` 键 → VS Code 配置 / 跨 IDE 全局文件（写当前生效层，见 writeSetting）；
    * · `panel.*` 键 → 面板 UiPrefs（globalState，跨窗口/两个面共享）；
    * · `action.*` / `about.*` → 按钮与只读信息。
    * 新增一项设置 = 这里加一行 + `handleSetSetting` 加一个 case。
@@ -3440,6 +3594,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   private settingsItems(): SettingItem[] {
     const config = vscode.workspace.getConfiguration('vac');
     const prefs = this.uiPrefs ?? { outlineMode: 'popup' as const, outlineWidth: 240 };
+    const customSource = this.settingsIO.resolve('vac.customModels', 'global');
+    const customModels = normalizeCustomModels(
+      customSource.layers.find(entry => entry.layer === customSource.effective)?.value,
+    );
     // [CUSTOM- 从未写过时与客户端同一份默认（推理块 + 工具卡）；写过空数组就是"全不展开"。
     const kinds = prefs.autoExpandKinds === undefined
       ? ['thought', 'tool']
@@ -3451,6 +3609,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         label: 'Connect automatically',
         description: 'Start the agent as soon as the chat panel opens.',
         value: this.prefs.getAutoConnect(),
+        ...this.configScope('vac.autoConnectOnOpen', 'ide'),
       },
       {
         key: 'vac.restoreSessionsOnOpen', group: 'general', type: 'select',
@@ -3462,39 +3621,41 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           { value: 'always', label: 'Always restore' },
           { value: 'never', label: 'Never restore' },
         ],
+        ...this.configScope('vac.restoreSessionsOnOpen', 'ide'),
       },
       {
         key: 'vac.defaultWorkingDirectory', group: 'general', type: 'text',
         label: 'Default working directory',
         description: 'Leave empty to use the current workspace folder.',
         value: config.get<string>('defaultWorkingDirectory') ?? '',
+        ...this.configScope('vac.defaultWorkingDirectory', 'ide'),
       },
       {
-        key: 'panel.autoExpandDefault', group: 'chat', type: 'boolean',
+        key: 'panel.autoExpandDefault', group: 'chat', type: 'boolean', scope: 'panel',
         label: 'Auto-expand new output',
         description: 'Expand cards as new output arrives (sessions without their own setting).',
         value: prefs.autoExpandDefault === true,
       },
       {
-        key: 'panel.autoExpandKinds.tool', group: 'chat', type: 'boolean', indent: true,
+        key: 'panel.autoExpandKinds.tool', group: 'chat', type: 'boolean', indent: true, scope: 'panel',
         label: 'Tool calls', value: kinds.includes('tool'),
       },
       {
-        key: 'panel.autoExpandKinds.thought', group: 'chat', type: 'boolean', indent: true,
+        key: 'panel.autoExpandKinds.thought', group: 'chat', type: 'boolean', indent: true, scope: 'panel',
         label: 'Reasoning blocks', value: kinds.includes('thought'),
       },
       {
-        key: 'panel.autoExpandKinds.diff', group: 'chat', type: 'boolean', indent: true,
+        key: 'panel.autoExpandKinds.diff', group: 'chat', type: 'boolean', indent: true, scope: 'panel',
         label: 'Diffs inside tool calls', value: kinds.includes('diff'),
       },
       {
-        key: 'panel.flatTools', group: 'chat', type: 'boolean',
+        key: 'panel.flatTools', group: 'chat', type: 'boolean', scope: 'panel',
         label: 'Group sub-agent tool calls',
         description: 'Show a sub-agent’s tool calls under the call that started it.',
         value: prefs.flatTools !== true,
       },
       {
-        key: 'panel.sendKey', group: 'chat', type: 'select',
+        key: 'panel.sendKey', group: 'chat', type: 'select', scope: 'panel',
         label: 'Send with',
         description: 'Shift+Enter always inserts a newline.',
         value: prefs.sendKey === 'ctrlEnter' ? 'ctrlEnter' : 'enter',
@@ -3504,7 +3665,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         ],
       },
       {
-        key: 'panel.recentDirectoryLimit', group: 'chat', type: 'number',
+        key: 'panel.recentDirectoryLimit', group: 'chat', type: 'number', scope: 'panel',
         label: 'Recently used directories',
         description: 'How many recent directories the picker offers (3–16).',
         value: prefs.recentDirectoryLimit ?? ChatPanelHost.DEFAULT_RECENT_DIRECTORIES,
@@ -3521,15 +3682,16 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           { value: 'allowAll', label: 'Approve everything' },
         ],
         warning: 'Approving everything lets the agent edit files and run tools without asking.',
+        ...this.configScope('vac.autoApprovePermissions', 'ide'),
       },
       {
-        key: 'panel.timesDefault', group: 'appearance', type: 'boolean',
+        key: 'panel.timesDefault', group: 'appearance', type: 'boolean', scope: 'panel',
         label: 'Show record times',
         description: 'Default for sessions that have no per-session value.',
         value: prefs.timesDefault === true,
       },
       {
-        key: 'panel.markdownStyle', group: 'appearance', type: 'select',
+        key: 'panel.markdownStyle', group: 'appearance', type: 'select', scope: 'panel',
         label: 'Markdown style',
         description: 'How rendered messages are typeset. “Follow editor” uses the current theme as-is.',
         value: resolveMarkdownStyle(prefs.markdownStyle),
@@ -3541,7 +3703,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         ],
       },
       {
-        key: 'panel.outlineMode', group: 'appearance', type: 'select',
+        key: 'panel.outlineMode', group: 'appearance', type: 'select', scope: 'panel',
         label: 'Outline layout',
         description: 'Where the conversation outline lives.',
         value: prefs.outlineMode === 'sidebar' ? 'sidebar' : 'popup',
@@ -3551,31 +3713,31 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         ],
       },
       {
-        key: 'panel.outlineWidth', group: 'appearance', type: 'number',
+        key: 'panel.outlineWidth', group: 'appearance', type: 'number', scope: 'panel',
         label: 'Outline width (px)',
         description: 'Pinned sidebar width, between 160 and 480.',
         value: prefs.outlineWidth,
       },
       {
-        key: 'panel.composerMaxWidth', group: 'appearance', type: 'number',
+        key: 'panel.composerMaxWidth', group: 'appearance', type: 'number', scope: 'panel',
         label: 'Composer width (px)',
         description: 'Maximum width of the input card, between 360 and 1200.',
         value: prefs.composerMaxWidth ?? 720,
       },
       {
-        key: 'panel.inputMaxHeight', group: 'appearance', type: 'number',
+        key: 'panel.inputMaxHeight', group: 'appearance', type: 'number', scope: 'panel',
         label: 'Input box max height (px)',
         description: 'Between 80 and 800; also capped at 38% of the panel height.',
         value: prefs.inputMaxHeight ?? 320,
       },
       {
-        key: 'panel.autoExpand.toolHeight', group: 'appearance', type: 'number',
+        key: 'panel.autoExpand.toolHeight', group: 'appearance', type: 'number', scope: 'panel',
         label: 'Expanded tool card height (px)',
         description: 'For auto-expanded cards; 0 = no limit, taller output scrolls inside the card.',
         value: prefs.autoExpandToolHeight ?? 360,
       },
       {
-        key: 'panel.autoExpand.thoughtHeight', group: 'appearance', type: 'number',
+        key: 'panel.autoExpand.thoughtHeight', group: 'appearance', type: 'number', scope: 'panel',
         label: 'Expanded reasoning height (px)',
         description: 'For auto-expanded cards; 0 = no limit, taller reasoning scrolls inside the block.',
         value: prefs.autoExpandThoughtHeight ?? 240,
@@ -3585,18 +3747,21 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         label: 'Log ACP traffic',
         description: 'Write the JSON-RPC stream to the VAC Traffic channel and the log file.',
         value: config.get<boolean>('logTraffic') !== false,
+        ...this.configScope('vac.logTraffic', 'ide'),
       },
       {
         key: 'vac.customModels', group: 'advanced', type: 'models',
         label: 'Custom models',
-        description: 'Injected into the agent as extra model choices (per agent support).',
-        value: this.customModels(),
+        description: 'Injected into the agent as extra model choices (per agent support). Stored in the cross-IDE global config unless overridden here.',
+        value: customModels,
+        ...this.configScope('vac.customModels', 'global', customSource),
       },
       {
         key: 'vac.agents', group: 'advanced', type: 'json',
         label: 'Agent configuration',
-        description: 'JSON object: name → { command, args, env, kind }. Saved globally.',
+        description: 'JSON object: name → { command, args, env, kind }. Saved per IDE.',
         value: config.get('agents') ?? {},
+        ...this.configScope('vac.agents', 'ide'),
       },
       {
         key: 'action.openAgentCache', group: 'advanced', type: 'action', actionLabel: 'Open',
@@ -3626,6 +3791,15 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       { key: 'about.version', group: 'advanced', type: 'info', label: 'Version', value: readPackageVersion() || '—' },
       { key: 'about.agent', group: 'advanced', type: 'info', label: 'Agent', value: this.panelAgent() ?? '—' },
     ];
+  }
+
+  /** [CUSTOM- 设置面板每行的作用域：默认层 + 当前生效层/各层取值。 */
+  private configScope(
+    key: string,
+    scope: 'global' | 'ide',
+    source = this.settingsIO.resolve(key, scope),
+  ): Pick<SettingItem, 'scope' | 'source'> {
+    return { scope, source };
   }
 
   // [CUSTOM- 扩展的 globalStorage 根目录：设置面板里的「打开/清除 agent 运行时缓存」
@@ -3681,6 +3855,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           value: effortValue,
         });
     }
+    // 这一族都是面板 UiPrefs（globalState），不是 VS Code 配置。
+    for (const row of rows) { row.scope = 'panel'; }
     return rows;
   }
 
@@ -3720,26 +3896,37 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.post({ type: 'settings', items: this.settingsItems() });
   }
 
+  private postCustomModels(): void {
+    if (this.attachedCount === 0) { return; }
+    this.post({ type: 'customModels', customModels: this.customModels() });
+  }
+
+  /** 写进当前生效层：工作区覆盖存在时改工作区，否则改用户层/全局层。 */
+  private async writeConfigSetting(key: string, value: unknown, scope: 'global' | 'ide'): Promise<void> {
+    const source = this.settingsIO.resolve(key, scope);
+    await this.settingsIO.write(key, value, source.writeTarget);
+  }
+
   private async handleSetSetting(key: string, value: unknown): Promise<void> {
-    const config = vscode.workspace.getConfiguration('vac');
-    const global = vscode.ConfigurationTarget.Global;
     switch (key) {
       case 'vac.autoConnectOnOpen':
-        await this.prefs.setAutoConnect(value === true);
+        await this.writeConfigSetting('vac.autoConnectOnOpen', value === true, 'ide');
         this.postAutoConnectPref();
         break;
       case 'vac.restoreSessionsOnOpen':
-        await this.prefs.setRestore(resolveRestoreChoice(value));
+        await this.writeConfigSetting('vac.restoreSessionsOnOpen', resolveRestoreChoice(value), 'ide');
         this.postRestorePref();
         break;
       case 'vac.defaultWorkingDirectory':
-        await config.update('defaultWorkingDirectory', String(value ?? '').trim(), global);
+        await this.writeConfigSetting('vac.defaultWorkingDirectory', String(value ?? '').trim(), 'ide');
         break;
       case 'vac.autoApprovePermissions':
-        await config.update('autoApprovePermissions', value === 'allowAll' ? 'allowAll' : 'ask', global);
+        await this.writeConfigSetting(
+          'vac.autoApprovePermissions', value === 'allowAll' ? 'allowAll' : 'ask', 'ide',
+        );
         break;
       case 'vac.logTraffic':
-        await config.update('logTraffic', value === true, global);
+        await this.writeConfigSetting('vac.logTraffic', value === true, 'ide');
         break;
       case 'panel.autoExpandDefault':
         this.patchUiPrefs({ autoExpandDefault: value === true });
@@ -3781,10 +3968,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         this.patchUiPrefs({ markdownStyle: resolveMarkdownStyle(value) });
         break;
       case 'vac.customModels':
-        await config.update('customModels', normalizeCustomModels(value), global);
+        await this.writeConfigSetting('vac.customModels', normalizeCustomModels(value), 'global');
+        this.postCustomModels();
         break;
       case 'vac.agents':
-        await config.update('agents', sanitizeAgentsConfig(value), global);
+        await this.writeConfigSetting('vac.agents', sanitizeAgentsConfig(value), 'ide');
         break;
       case 'panel.timesDefault':
         this.patchUiPrefs({ timesDefault: value === true });
@@ -3840,7 +4028,33 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       : current.filter(entry => entry !== kind);
   }
 
-  private async handleSettingAction(action: string): Promise<void> {
+  private async handleSettingAction(
+    action: string,
+    key?: string,
+    layer?: 'workspace' | 'user' | 'global',
+  ): Promise<void> {
+    if (action === 'openSettingFile') {
+      if (layer) { await this.settingsIO.open(layer); }
+      return;
+    }
+    if (action === 'removeSettingLayer' || action === 'makeSettingGlobal') {
+      const allowed = !!key && (GLOBAL_SETTING_KEYS.has(key) || CONFIG_SETTING_KEYS.has(key));
+      if (!key || !allowed) { return; }
+      if (action === 'removeSettingLayer') {
+        if (!layer) { return; }
+        await this.settingsIO.clear(key, layer);
+      } else {
+        if (!GLOBAL_SETTING_KEYS.has(key)) { return; }
+        const source = this.settingsIO.resolve(key, 'global');
+        const value = source.layers.find(entry => entry.layer === source.effective)?.value;
+        await this.settingsIO.write(key, value, 'global');
+        if (source.effective === 'workspace') { await this.settingsIO.clear(key, 'workspace'); }
+        if (source.effective === 'user') { await this.settingsIO.clear(key, 'user'); }
+      }
+      if (key === 'vac.customModels') { this.postCustomModels(); }
+      this.postSettings();
+      return;
+    }
     if (action === 'openAgentCache') {
       const dir = this.agentCacheDir();
       if (!dir || !existsSync(dir)) {
@@ -4081,6 +4295,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * later `tool_call_update` cannot repair.
    */
   private snapshotOf(sessionId: string): TranscriptSnapshotWire | null {
+    // [CUSTOM- 快照自带 html：客户端 hydrate 之后不必再为"缺 html"跑一轮往返，
+    // 那条往返正是会静默断掉的地方（见 prefillReplayMarkdown）。
+    this.prefillSnapshotMarkdown(sessionId);
     const snapshot = this.transcripts.snapshot(sessionId);
     if (!snapshot) { return null; }
     return {
@@ -4109,7 +4326,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * 全局共享，读自 config 层（`readCustomModels`）。
    */
   private customModels(): CustomModel[] {
-    return readCustomModels();
+    const source = this.settingsIO.resolve('vac.customModels', 'global');
+    const value = source.layers.find(entry => entry.layer === source.effective)?.value;
+    return normalizeCustomModels(value);
   }
 
   private metaOf(sessionId: string): SessionMeta {

@@ -2193,6 +2193,46 @@ export function styles(): string {
   .settings-text { min-width: 0; }
   .settings-label { font-size: 0.95em; }
   .settings-desc { margin-top: 2px; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+  /* [CUSTOM- 设置项的存储作用域（All IDEs / This IDE / Workspace / Default）。 */
+  .settings-label-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .settings-scope {
+    padding: 0 7px; border-radius: 999px; cursor: pointer; font-family: inherit;
+    font-size: 0.72em; line-height: 1.7; white-space: nowrap;
+    border: 1px solid var(--vscode-panel-border);
+    background: transparent; color: var(--vscode-descriptionForeground);
+  }
+  .settings-scope:hover { background: var(--vscode-list-hoverBackground); }
+  .settings-scope-global { border-color: var(--vscode-focusBorder); color: var(--vscode-focusBorder); }
+  .settings-scope-workspace {
+    border-color: var(--vscode-editorWarning-foreground, var(--vscode-errorForeground));
+    color: var(--vscode-editorWarning-foreground, var(--vscode-errorForeground));
+  }
+  .settings-scope-default { opacity: 0.75; }
+  .settings-override {
+    display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 0.82em;
+    color: var(--vscode-editorWarning-foreground, var(--vscode-errorForeground));
+  }
+  .settings-link {
+    padding: 0; border: none; background: transparent; cursor: pointer; font: inherit;
+    color: var(--vscode-textLink-foreground); text-decoration: underline;
+  }
+  .settings-link:hover { color: var(--vscode-textLink-activeForeground); }
+  .settings-inspect { display: flex; flex-direction: column; gap: 6px; flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+  .settings-inspect-row {
+    display: grid; grid-template-columns: 1.1fr 1.2fr 0.8fr auto; gap: 8px; align-items: center;
+    padding: 6px 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px;
+  }
+  .settings-inspect-row.active {
+    border-color: var(--vscode-focusBorder);
+    background: var(--vscode-list-activeSelectionBackground, transparent);
+  }
+  .settings-inspect-layer { font-size: 0.9em; }
+  .settings-inspect-file, .settings-inspect-value {
+    font-size: 0.8em; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere;
+  }
+  .settings-inspect-actions { display: flex; gap: 10px; }
+  .settings-inspect-promote { align-self: flex-start; }
+  .settings-inspect-note { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
   .settings-warning {
     margin-top: 4px; font-size: 0.82em;
     color: var(--vscode-editorWarning-foreground, var(--vscode-errorForeground));

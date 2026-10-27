@@ -3,7 +3,8 @@
 // 也要读同一份配置，在会话创建时经 ACP `_meta.extraModels` 注入 agent，让 agent 把自定义模型
 // 列入其 `model` 配置项（配套桥接层的做法）。
 // name/description 供客户端显示名映射用（composer.optionLabel），不在 _meta.extraModels 里。
-import * as vscode from 'vscode';
+import { resolveSetting } from './SettingScope';
+import type { SettingSource } from './GlobalSettings';
 
 /** A user-defined model alias from `vac.customModels` (settings.json). */
 export interface CustomModel {
@@ -13,6 +14,11 @@ export interface CustomModel {
   name?: string;
   /** Optional hover text (currently unused). */
   description?: string;
+}
+
+export interface CustomModelsResolution {
+  models: CustomModel[];
+  source: SettingSource;
 }
 
 /**
@@ -35,7 +41,14 @@ export function normalizeCustomModels(raw: unknown): CustomModel[] {
   return out;
 }
 
-/** Read the configured custom models (normalised). */
+/** Read the effective custom models (workspace > user > global > built-in default). */
 export function readCustomModels(): CustomModel[] {
-  return normalizeCustomModels(vscode.workspace.getConfiguration('vac').get('customModels'));
+  return resolveCustomModels().models;
+}
+
+/** Same read, plus the layer information the settings panel renders. */
+export function resolveCustomModels(): CustomModelsResolution {
+  const source = resolveSetting('vac.customModels', 'global');
+  const entry = source.layers.find(layer => layer.layer === source.effective);
+  return { models: normalizeCustomModels(entry?.value), source };
 }

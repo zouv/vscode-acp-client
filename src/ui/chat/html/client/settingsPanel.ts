@@ -28,6 +28,9 @@ export const settingsPanelClient = `
   var subClose = null;
   var items = [];
   var active = 'general';
+  // 模型编辑器还没提交的最终状态：Esc/点遮罩关闭时 change 事件不一定触发，
+  // 关面板前按 DOM 里的真实值补一次提交（与上次提交相同的快照则跳过）。
+  var modelCommit = null;
 
   function isOpen() { return !!overlay && overlay.hidden === false; }
 
@@ -110,8 +113,22 @@ export const settingsPanelClient = `
   function renderRow(item) {
     var row = NS.dom.el('div', 'settings-row' + (item.indent ? ' indent' : ''));
     var text = NS.dom.el('div', 'settings-text');
-    text.appendChild(NS.dom.el('div', 'settings-label', item.label || item.key));
+    var title = NS.dom.el('div', 'settings-label-row');
+    title.appendChild(NS.dom.el('div', 'settings-label', item.label || item.key));
+    var scope = renderScope(item);
+    if (scope) { title.appendChild(scope); }
+    text.appendChild(title);
     if (item.description) { text.appendChild(NS.dom.el('div', 'settings-desc', item.description)); }
+    var override = overrideText(item);
+    if (override) {
+      var line = NS.dom.el('div', 'settings-override');
+      line.appendChild(NS.dom.el('span', '', override));
+      var inspect = NS.dom.el('button', 'settings-link', 'Inspect');
+      inspect.type = 'button';
+      inspect.addEventListener('click', function () { openInspect(item); });
+      line.appendChild(inspect);
+      text.appendChild(line);
+    }
     // [CUSTOM- 摘要放在文字列（不是控件列）：这样 Edit… 与其它设置的控件右缘对齐。
     if (item.type === 'models' || item.type === 'json') {
       var summary = item.type === 'models'
@@ -123,6 +140,154 @@ export const settingsPanelClient = `
     row.appendChild(text);
     row.appendChild(renderControl(item));
     return row;
+  }
+
+  /** [CUSTOM- 存储作用域胶囊：All IDEs / This IDE / Workspace / Default。点开看每一层。 */
+  function renderScope(item) {
+    var label = '';
+    var cls = '';
+    if (item.source) {
+      var effective = item.source.effective;
+      if (effective === 'workspace') { label = 'Workspace'; cls = 'workspace'; }
+      else if (effective === 'global') { label = 'All IDEs'; cls = 'global'; }
+      else if (effective === 'default') { label = 'Default'; cls = 'default'; }
+      else { label = 'This IDE'; cls = 'ide'; }
+    } else if (item.scope === 'global') {
+      label = 'All IDEs';
+      cls = 'global';
+    } else if (item.scope === 'ide' || item.scope === 'panel') {
+      label = 'This IDE';
+      cls = 'ide';
+    }
+    if (!label) { return null; }
+    var chip = NS.dom.el('button', 'settings-scope settings-scope-' + cls, label);
+    chip.type = 'button';
+    chip.title = 'Where this value comes from';
+    chip.setAttribute('aria-label', 'Where this value comes from');
+    chip.addEventListener('click', function () { openInspect(item); });
+    return chip;
+  }
+
+  /** 只在"生效层高于该项默认层"时提示，普通的本层取值不打扰。 */
+  function overrideText(item) {
+    if (!item.source) { return ''; }
+    var effective = item.source.effective;
+    if (effective === 'workspace' && item.scope !== 'workspace') {
+      return 'Overridden by workspace settings';
+    }
+    if (effective === 'user' && item.scope === 'global') {
+      return 'Overridden by this IDE user settings';
+    }
+    if (effective === 'global' && item.scope === 'ide') {
+      return 'Overridden by the cross-IDE global settings';
+    }
+    return '';
+  }
+
+  function inspectValue(value) {
+    if (value === undefined) { return 'not set'; }
+    if (Object.prototype.toString.call(value) === '[object Array]') { return value.length + ' item(s)'; }
+    if (value && typeof value === 'object') { return 'JSON object'; }
+    if (typeof value === 'boolean') { return value ? 'true' : 'false'; }
+    return String(value);
+  }
+
+  function layerTitle(layer) {
+    if (layer === 'workspace') { return 'Workspace'; }
+    if (layer === 'user') { return 'This IDE (user)'; }
+    if (layer === 'global') { return 'All IDEs (global)'; }
+    return 'Built-in default';
+  }
+
+  function layerFile(entry) {
+    if (entry && entry.file) { return entry.file; }
+    var layer = entry && entry.layer;
+    if (layer === 'workspace') { return '.vscode/settings.json'; }
+    if (layer === 'user') { return 'settings.json'; }
+    if (layer === 'global') { return '~/.vac/config.json'; }
+    return 'package.json';
+  }
+
+  function writeTargetText(target) {
+    if (target === 'workspace') { return 'workspace settings'; }
+    if (target === 'global') { return 'the cross-IDE global config'; }
+    if (target === 'panel') { return 'this IDE panel preferences'; }
+    return 'this IDE user settings';
+  }
+
+  function inspectRow(item, layer, source) {
+    var row = NS.dom.el('div',
+      'settings-inspect-row' + (layer.layer === source.effective ? ' active' : ''));
+    row.appendChild(NS.dom.el('div', 'settings-inspect-layer', layerTitle(layer.layer)));
+    row.appendChild(NS.dom.el('div', 'settings-inspect-file', layerFile(layer)));
+    row.appendChild(NS.dom.el('div', 'settings-inspect-value', inspectValue(layer.value)));
+    var actions = NS.dom.el('div', 'settings-inspect-actions');
+    if (layer.layer !== 'default') {
+      var open = NS.dom.el('button', 'settings-link', 'Open');
+      open.type = 'button';
+      (function (target) {
+        open.addEventListener('click', function () {
+          NS.bridge.post({ type: 'settingAction', action: 'openSettingFile', layer: target });
+        });
+      })(layer.layer);
+      actions.appendChild(open);
+    }
+    if (layer.layer !== 'default' && layer.value !== undefined) {
+      var remove = NS.dom.el('button', 'settings-link', 'Remove');
+      remove.type = 'button';
+      (function (target) {
+        remove.addEventListener('click', function () {
+          NS.bridge.post({
+            type: 'settingAction', action: 'removeSettingLayer', key: item.key, layer: target,
+          });
+          closeEditor();
+        });
+      })(layer.layer);
+      actions.appendChild(remove);
+    }
+    row.appendChild(actions);
+    return row;
+  }
+
+  /** 每一层的来源、当前生效层、写回目标。 */
+  function openInspect(item) {
+    if (!subOverlay || !subBody) { return; }
+    modelCommit = null;
+    if (subTitle) { subTitle.textContent = 'Where this value comes from'; }
+    NS.dom.clear(subBody);
+    var editor = NS.dom.el('div', 'settings-editor');
+    editor.appendChild(NS.dom.el('div', 'settings-editor-intro', item.label || item.key));
+    var source = item.source;
+    if (!source) {
+      editor.appendChild(NS.dom.el('div', 'settings-inspect-note',
+        'This is a panel preference for this IDE. It lives in the extension global state, so another IDE (Insiders / VSCodium) has its own copy.'));
+    } else {
+      var table = NS.dom.el('div', 'settings-inspect');
+      for (var i = 0; i < source.layers.length; i++) {
+        table.appendChild(inspectRow(item, source.layers[i], source));
+      }
+      editor.appendChild(table);
+      editor.appendChild(NS.dom.el('div', 'settings-inspect-note',
+        'Edits are written to: ' + writeTargetText(source.writeTarget) + '.'));
+      if (item.scope === 'global' && source.effective !== 'global') {
+        var make = NS.dom.el('button', 'settings-action settings-inspect-promote',
+          'Make this the default for all IDEs');
+        make.type = 'button';
+        make.addEventListener('click', function () {
+          NS.bridge.post({ type: 'settingAction', action: 'makeSettingGlobal', key: item.key });
+          closeEditor();
+        });
+        editor.appendChild(make);
+      }
+    }
+    var footer = NS.dom.el('div', 'settings-editor-footer');
+    var done = NS.dom.el('button', 'settings-action', 'Done');
+    done.type = 'button';
+    done.addEventListener('click', closeEditor);
+    footer.appendChild(done);
+    editor.appendChild(footer);
+    subBody.appendChild(editor);
+    subOverlay.hidden = false;
   }
 
   function send(key, value) {
@@ -226,7 +391,11 @@ export const settingsPanelClient = `
     var remove = NS.dom.el('button', 'settings-model-remove', '\\u00d7');
     remove.type = 'button';
     remove.title = 'Remove';
-    var changed = function () { send(key, collectModels(list)); };
+    var changed = function () {
+      var models = collectModels(list);
+      if (modelCommit) { modelCommit.snapshot = JSON.stringify(models); }
+      send(key, models);
+    };
     id.addEventListener('change', changed);
     name.addEventListener('change', changed);
     desc.addEventListener('change', changed);
@@ -263,6 +432,7 @@ export const settingsPanelClient = `
   /** 打开子面板：模型列表 / JSON 编辑器。主面板保持打开，子面板盖在它上面。 */
   function openEditor(item) {
     if (!subOverlay || !subBody) { return; }
+    modelCommit = null;
     if (subTitle) { subTitle.textContent = item.label || item.key; }
     NS.dom.clear(subBody);
     var editor = NS.dom.el('div', 'settings-editor');
@@ -286,6 +456,7 @@ export const settingsPanelClient = `
         list.appendChild(modelRow(item.key, list, rows[m]));
       }
       editor.appendChild(list);
+      modelCommit = { key: item.key, list: list, snapshot: JSON.stringify(collectModels(list)) };
 
       var add = NS.dom.el('button', 'settings-action settings-model-add', 'Add model');
       add.type = 'button';
@@ -339,6 +510,14 @@ export const settingsPanelClient = `
 
   function closeEditor() {
     if (!subOverlay) { return; }
+    // [CUSTOM- Esc / 点遮罩关闭时输入框不一定触发 change：关面板前按 DOM 真值补交一次。
+    if (modelCommit) {
+      var models = collectModels(modelCommit.list);
+      if (JSON.stringify(models) !== modelCommit.snapshot) {
+        send(modelCommit.key, models);
+      }
+      modelCommit = null;
+    }
     subOverlay.hidden = true;
     if (subBody) { NS.dom.clear(subBody); }
   }

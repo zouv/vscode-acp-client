@@ -745,6 +745,29 @@ suite('chat client logic: assistant message fold (stub DOM)', () => {
       'a late reply for an older text must not overwrite the body');
   });
 
+  // [CUSTOM- 宿主自己补齐 markdown 的那条通道（2026-10-27「进场时消息不渲染 markdown」）。
+  //
+  // 正常的"请求 → 回填"往返会拿 `asked`（这次问的是哪段文本）判新旧；但宿主在回放结束 /
+  // 快照时**自己**渲染并下发的补丁里带着它渲染的那段 text，客户端没有"问过哪一段"这回事，
+  // 一律照收。回放实测过"37 条记录只有最后一条被要过"——请求那条路会静默断掉，这条不会。
+  test('a patch that carries its own text takes its html along (host prefill)', () => {
+    const { NS } = loadClient();
+    NS.dom.setSanitizedHtml = (node: any, html: string) => { node.textContent = html; };
+    const first = assistantFoldOf(NS, { id: 'a6', kind: 'assistant', at: 1, text: '开', streaming: true });
+    // 客户端问过的是最初那一小段；宿主补齐时给的是完整文本 + 它的渲染结果。
+    const full = '开头**重点**结尾';
+    NS.transcriptView.patch('a6', { text: full, html: '<p>rendered</p>', streaming: false });
+    assert.ok(first.body!.className.includes('md'), `host-rendered html must land, got: ${first.body!.className}`);
+    assert.strictEqual(first.body!.textContent, '<p>rendered</p>');
+
+    // 反过来仍然成立：一份**只带 html**、而正文已经往前走了的回填，仍旧按 asked 丢弃。
+    const second = assistantFoldOf(NS, { id: 'a7', kind: 'assistant', at: 1, text: '旧', streaming: true });
+    NS.transcriptView.append({ id: 'a7', kind: 'assistant', at: 1, text: '旧加长', streaming: true });
+    NS.transcriptView.patch('a7', { html: '<p>stale</p>' });
+    assert.strictEqual(second.body!.textContent, '旧加长',
+      'an html-only reply rendered from an older text must still be dropped');
+  });
+
   test('the markdown rewrite lands in the body and leaves the header row intact', () => {
     const { NS } = loadClient();
     const calls: Array<{ node: any; html: string }> = [];
@@ -6128,6 +6151,102 @@ suite('chat client logic: settings panel (stub DOM)', () => {
       type: 'setSetting',
       key: 'vac.customModels',
       value: [{ modelId: 'gpt-6-luna[1m]', name: 'Luna 2' }],
+    });
+  });
+
+  test('closing the model editor with Escape still commits the last edit', () => {
+    const { NS, els, posted, docListeners } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems([
+      {
+        key: 'vac.customModels', group: 'advanced', label: 'Custom models', type: 'models',
+        value: [{ modelId: 'gpt-6-luna[1m]', name: 'Luna' }],
+      },
+    ]);
+    (els.settingsBody.querySelector('.settings-action') as StubNode).dispatch('click', {});
+    posted.length = 0;
+
+    const rows = els.settingsSubBody.querySelectorAll('.settings-model-row');
+    const inputs = rows[0].querySelectorAll('input');
+    // 不派发 change：模拟用户输入后直接 Esc（真实浏览器里遮罩关闭不一定补 change）。
+    inputs[2].value = 'new description';
+    const esc = { key: 'Escape', preventDefault() {}, stopPropagation() {} };
+    for (const fn of docListeners.keydown ?? []) { fn(esc); }
+
+    assert.deepStrictEqual(posted[posted.length - 1], {
+      type: 'setSetting',
+      key: 'vac.customModels',
+      value: [{ modelId: 'gpt-6-luna[1m]', name: 'Luna', description: 'new description' }],
+    });
+  });
+
+  test('rows show their scope, and Inspect lists every config layer', () => {
+    const { NS, els } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems([
+      {
+        key: 'vac.customModels', group: 'advanced', label: 'Custom models', type: 'models', value: [],
+        scope: 'global',
+        source: {
+          effective: 'workspace', writeTarget: 'workspace',
+          layers: [
+            { layer: 'workspace', value: [{ modelId: 'm1' }] },
+            { layer: 'user', value: undefined },
+            { layer: 'global', value: [] },
+            { layer: 'default', value: [] },
+          ],
+        },
+      },
+      { key: 'panel.sendKey', group: 'chat', label: 'Send with', type: 'select', value: 'enter', scope: 'panel' },
+    ]);
+    // Chat 是第一个有项的分组，Advanced 第二。
+    const tabs = els.settingsNav.querySelectorAll('.settings-tab');
+    tabs[1].dispatch('click', {});
+    assert.ok(els.settingsBody.textContent.includes('Overridden by workspace settings'));
+    const chip = els.settingsBody.querySelector('.settings-scope') as StubNode;
+    assert.strictEqual(chip.textContent, 'Workspace');
+    chip.dispatch('click', {});
+    assert.strictEqual((els.settingsSubOverlay as any).hidden, false);
+    assert.ok(els.settingsSubBody.textContent.includes('All IDEs (global)'));
+    assert.ok(els.settingsSubBody.textContent.includes('Built-in default'));
+    assert.ok(els.settingsSubBody.textContent.includes('Edits are written to: workspace settings'));
+  });
+
+  test('Inspect can promote a value to the global default or remove a layer', () => {
+    const { NS, els, posted } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems([
+      {
+        key: 'vac.customModels', group: 'advanced', label: 'Custom models', type: 'models', value: [],
+        scope: 'global',
+        source: {
+          effective: 'workspace', writeTarget: 'workspace',
+          layers: [
+            { layer: 'workspace', value: [{ modelId: 'm1' }] },
+            { layer: 'user', value: undefined },
+            { layer: 'global', value: [] },
+            { layer: 'default', value: [] },
+          ],
+        },
+      },
+    ]);
+    els.settingsBody.querySelector('.settings-scope')!.dispatch('click', {});
+    posted.length = 0;
+
+    const make = els.settingsSubBody.querySelectorAll('.settings-action')
+      .find(button => button.textContent === 'Make this the default for all IDEs')!;
+    make.dispatch('click', {});
+    assert.deepStrictEqual(posted[posted.length - 1], {
+      type: 'settingAction', action: 'makeSettingGlobal', key: 'vac.customModels',
+    });
+    assert.strictEqual((els.settingsSubOverlay as any).hidden, true, 'the action closes the popover');
+
+    els.settingsBody.querySelector('.settings-scope')!.dispatch('click', {});
+    const remove = els.settingsSubBody.querySelectorAll('.settings-link')
+      .find(link => link.textContent === 'Remove')!;
+    remove.dispatch('click', {});
+    assert.deepStrictEqual(posted[posted.length - 1], {
+      type: 'settingAction', action: 'removeSettingLayer', key: 'vac.customModels', layer: 'workspace',
     });
   });
 

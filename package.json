@@ -2,7 +2,7 @@
   "name": "vscode-acp-client",
   "displayName": "VAC - Agent Client for VS Code",
   "description": "Chat with Claude Code and Codex inside VS Code through the Agent Client Protocol (ACP): multi-session chat, permissions, forms, usage dashboard.",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "publisher": "zouv",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -414,7 +414,7 @@
             ]
           },
           "default": [],
-          "description": "User-defined models injected into the agent's model list via the ACP '_meta.extraModels' field at session creation, so they appear in the model dropdown. Picking one still sends its modelId to the agent; whether it takes effect is up to the agent."
+          "description": "User-defined models injected into the agent's model list via the ACP '_meta.extraModels' field at session creation, so they appear in the model dropdown. Picking one still sends its modelId to the agent; whether it takes effect is up to the agent. The chat Settings panel stores them in the cross-IDE global config (~/.vac/config.json); a value here overrides it for this IDE."
         },
         "vac.dashboard.enabled": {
           "type": "boolean",

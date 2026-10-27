@@ -1422,6 +1422,12 @@ export const composerClient = `
     renderAttachments();
   }
 
+  /** [CUSTOM- 设置面板保存后宿主主动推来：别名/描述立即生效。 */
+  function setCustomModels(list) {
+    state.customModels = list || [];
+    renderPickers();
+  }
+
   // [CUSTOM- 客户端记录图片缩略图（boot.ts 读取剪贴板位图后调用）。
   function rememberImage(id, dataUrl) {
     imageThumbs[id] = dataUrl;
@@ -1465,6 +1471,7 @@ export const composerClient = `
     setFocus: setFocus,
     setRunning: setRunning,
     setMeta: setMeta,
+    setCustomModels: setCustomModels,
     setAttachments: setAttachments,
     rememberImage: rememberImage,
     setLoading: setLoading,

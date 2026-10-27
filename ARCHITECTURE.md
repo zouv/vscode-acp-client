@@ -57,7 +57,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 权限弹窗 / 表单（AskUserQuestion） | `handlers/PermissionBridge.ts`、`ElicitationBridge.ts` + 客户端 `html/client/{permissionView,permissionDrawer,elicitationView}.ts` | core 编排 | §2.6 |
 | 文件读写 / 终端 / 工具卡片数据 | `handlers/FileSystemHandler.ts`、`TerminalHandler.ts`、`utils/TailBuffer.ts` | 会话编排 | §2.6 |
 | 侧边栏 Agents 树 / 会话分页 | `ui/SessionTreeProvider.ts` + `core/SessionHistoryStore.ts` | webview | §2.7 |
-| agent 默认列表 / 设置项 schema / 新 agent 接入 / 适配器换包 | `package.json(contributes.configuration)` + `config/AgentConfig.ts` + `agents/AgentProfile.ts` + `agents/AgentMigration.ts`（接新 agent 先跑 `scripts/probe-agent-init.mjs`） | 全部业务代码 | §2.8 |
+| agent 默认列表 / 设置项 schema / 新 agent 接入 / 适配器换包 | `package.json(contributes.configuration)` + `config/AgentConfig.ts` + `config/GlobalSettings.ts` + `config/SettingScope.ts` + `agents/AgentProfile.ts` + `agents/AgentMigration.ts`（接新 agent 先跑 `scripts/probe-agent-init.mjs`） | 全部业务代码 | §2.8 |
 | Dashboard 用量统计 / 指标 | `src/dashboard/**`（数据层在 `usage/`） | 聊天面板 | §2.9 |
 | 打包 / 发布 | `scripts/build.mjs`、`.vscodeignore`、`package.json(scripts)` | 全部业务代码 | §6 |
 | 图标 / 品牌资源（侧边栏、插件徽标、编辑区标签页） | `scripts/make-icon.mjs`（唯一几何源）+ `resources/` + `package.json(icon, viewsContainers)` + `ui/chat/ChatEditorPanel.ts(iconPath)` | 全部业务代码 | §6 |
@@ -76,7 +76,9 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/agents/AgentProfile.ts` | 按 `kind`（claude / codex / generic）分化的 agent 专有行为：会话请求的 `_meta`（自定义模型）、`transcriptStore`（能否读它的磁盘转录补全历史/回放）、`nesting`（工具调用嵌套策略 id）。**UI 侧的 agent 差异一律从这里按 kind 取，不按配置名** | 新增 agent 专有差异 |
 | `src/agents/AgentMigration.ts` | 已废弃适配器包的替换表 + `migrateAgents`（纯逻辑）；`AgentConfig.offerAgentMigration` 在激活时提示改写用户自己的 `vac.agents` | 上游适配器换包名 |
 | `src/config/AgentConfig.ts` | 读 `vac.agents`；`getAgentNames` 把第一个 Claude 排最前；`getAgentKind`；`offerAgentMigration`（旧包迁移提示，可“不再询问”） | agent 列表读取/排序 / 配置迁移 |
-| `src/config/CustomModels.ts` | `vac.customModels` 的读取与规整（纯函数 + 读配置） | 自定义模型配置 |
+| `src/config/CustomModels.ts` | `vac.customModels` 的读取（工作区 > 用户 > 跨 IDE 全局 > 默认）与规整；`resolveCustomModels()` 同时给出作用域信息 | 自定义模型配置 |
+| `src/config/GlobalSettings.ts` | **跨 IDE 全局配置** `VAC_HOME/config.json`（默认 `~/.vac`）：原子写、白名单（首期仅 `vac.customModels`）、`firstSetLayer` 解析；纯逻辑，禁 import vscode | 新增/改动全局层配置键 |
+| `src/config/SettingScope.ts` | VS Code 三层 + 全局层的解析（`resolveSetting`）与写入（`writeSetting` 写当前生效层）、移除覆盖、打开对应配置文件；`SettingIO` 是可注入的测试缝 | 设置作用域 / 覆盖提示 / 写入层 |
 | `src/core/AgentManager.ts` | agent 子进程生命周期：`spawnAgent`/`killAgent`/`killAll`；Windows 走 `cmd.exe`，类 Unix 走 login shell（修 npx ENOENT）；进程组 + `taskkill /T /F` 一并收子孙；**npx 启动的 agent 命中本地缓存时直接 `node <entry>`**（`scheduleInstall` 在首次连接 15s 后后台缓存） | agent 起不来 / 平台差异 / 进程泄漏 |
 | `src/core/AgentInstall.ts` | **agent 运行时本地缓存**（纯逻辑 + node fs）：`npxSpecOf` 拆 spec、`installDirFor`/`readInstalled`（7 天 TTL）、`entryFromInstall` 从 `package.json`+`bin` 找回入口。绕过 `npm exec` 每次 11–17s 的 reify；缓存目录 `globalStorage/agents/<agent>`（约 320MB/个） | 首次连接慢 / npx 启动开销 |
 | `src/core/ConnectionManager.ts` | stdio → Web Streams → `ndJsonStream`；建 `ClientSideConnection`；`initialize`（含 `clientCapabilities`）；解析 `_meta.steering`；traffic tap | 协议握手 / 抓包 / SDK 升级 |
@@ -176,6 +178,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 侧边栏视图注册 / 双面焦点 | `ChatViewProvider.ts:resolveWebviewView` / `syncFocus` | 视图上**只能有一个** `onDidReceiveMessage` |
 | 编辑区面板 | `ChatEditorPanel.ts:open` / `focusMostRecentSession` | 与侧边栏共享同一个 host |
 | 记录区渲染 | `transcript/TranscriptStore.ts`、`content/*`、`html/client/transcriptView.ts` | 布局类问题见 §5 |
+| 进场 / 收尾时 markdown 没渲染 | `ChatPanelHost.prefillReplayMarkdown`（`session-load-end`）/ `prefillSnapshotMarkdown`（`snapshotOf`）/ `armSettlePrefill` → `settlePrefillMarkdown`（会话安静 600ms）+ 客户端 `transcriptView.patch` 的「带 text 的 html 照收」规则 | 宿主自己补渲染，不再依赖客户端那条往返（见 `arch/chat-panel.md` §5.7） |
 | 权限卡片 / 抽屉 | `html/client/permissionView.ts`、`permissionDrawer.ts` | 与 `PermissionBridge` 配对 |
 | 表单卡片 | `html/client/elicitationView.ts` | 与 `ElicitationBridge` 配对 |
 | 从记录 fork 会话 | `ChatPanelHost` 的 `forkFromMessage` 分支 + `html/client/contextMenu.ts` | 面板只报 entryId，宿主查该条 ACP `messageId` → `SessionManager.forkSession` |
@@ -184,7 +187,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 历史列表行的悬停动作 | `html/client/sessionMenu.ts` 的 `buildRowActions` + `applyAction` | Archive 只写本地标签；**Delete 走 `deleteSession`（真删除，宿主先弹确认）**，两条同走 `sessionAction` 回执对账 |
 | 会话 tab 右键菜单 | `html/client/contextMenu.ts` 的 `itemsFor`（`.tab` 分支） | **New Session in This Folder**（沿用该会话 cwd + 额外根目录，`newSessionInDirectory`）/ **Duplicate Session**（`session/fork` 不带 messageId，保留上下文与消息记录）/ Close / Rename / **Copy Session ID**；草稿与待恢复 tab 没有 `data-session-id`，只有 Close |
 | 会话 tab 中键关闭 | `html/client/tabs.ts` `renderTabs`（`mousedown` button==1 + `auxclick`） | 与 × / Delete / 右键 Close 汇入 `closeModel`；运行中会话的确认在宿主 `closeSessionWithConfirm`（原生模态） |
-| 设置面板 | `html/client/settingsPanel.ts`（渲染）+ `ChatPanelHost.settingsItems` / `handleSetSetting` / `handleSettingAction` | 左侧分组导航、右侧行；宿主是唯一写者（`vac.*` 写配置，`panel.*` 写 UiPrefs）。**每个 agent 的默认模型 / 默认推理强度**（`panel.defaultModel.<agent>` / `panel.defaultEffort.<agent>`）在 `session-created('new')` 由 `applyRememberedModel` → `applyRememberedEffort` 依次落地（草稿页的显式选择排在其后）。自定义模型是结构化列表编辑器，Agent 配置是 JSON 编辑器，二者都在**子面板**里打开（主面板只显示摘要 + Edit…）；操作项含打开/清除运行时缓存与重置面板偏好 |
+| 设置面板 | `html/client/settingsPanel.ts`（渲染）+ `ChatPanelHost.settingsItems` / `handleSetSetting` / `handleSettingAction` | 左侧分组导航、右侧行；宿主是唯一写者（`vac.*` 按 `resolveSetting` 写当前生效层，`panel.*` 写 UiPrefs）。每行带 `scope`/`source`：客户端画 `All IDEs / This IDE / Workspace / Default` 胶囊，点开 Inspect 可看各层值、打开文件、移除覆盖、提升为跨 IDE 全局。**每个 agent 的默认模型 / 默认推理强度**（`panel.defaultModel.<agent>` / `panel.defaultEffort.<agent>`）在 `session-created('new')` 由 `applyRememberedModel` → `applyRememberedEffort` 依次落地（草稿页的显式选择排在其后）。自定义模型是结构化列表编辑器，Agent 配置是 JSON 编辑器，二者都在**子面板**里打开（主面板只显示摘要 + Edit…）；操作项含打开/清除运行时缓存与重置面板偏好 |
 | 输入卡选择器（模式 / 模型 / Effort） | `html/client/composer.ts` 的 `buildPicker` / `renderMenu` / `menuItem` | 按钮图标来自 `icons.ts`（`mode` / `model` / `effort`），菜单项是**名称 + 说明两行**、选中项打勾；说明优先取 agent/自定义模型的 `description`。Effort 按 `category === 'thought_level'` 识别 |
 | Agent 选择器 | `html/client/tabs.ts` 的 `renderAgentBar` / `renderAgentMenu` | 从原生 `<select>` 改为与输入卡同一套 `.picker` 控件（图标 + 名称 + 说明 + 勾选）；说明来自 `SessionSummary.agentKind`（`ChatPanelHost.toSummary` 填），只在**多个 agent 都有会话**时显示 |
 | 会话 tab / 目录图标悬停提示 | `html/client/tabs.ts` 的 `showTip` / `hideTip` | 自绘 `.tab-tip` 浮层（原生 `title` 不能分段着色）：tab = 标题 + 灰色 SessionId；目录图标 = 路径（无 `Dir:` 前缀）+ 灰色 State |
@@ -223,6 +226,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 改 agent 排序 | `AgentConfig.getAgentNames` | 只把第一个 Claude 提前，不全排序 |
 | 适配器换包 / 旧配置迁移 | `AgentMigration.ts` 的 `REPLACEMENTS` + `AgentConfig.offerAgentMigration` | 只改写用户显式配置的 scope（全局 / 工作区）；默认值直接改 `package.json` |
 | 改设置项 | `package.json(contributes.configuration)` | 前缀必须 `vac.` |
+| 改设置项的作用域 / 覆盖提示 | `SettingScope.ts` 的 `resolveSetting` / `writeSetting`；面板侧 `ChatPanelHost.settingsItems` 的 `scope`/`source` + `html/client/settingsPanel.ts` | 顺序：工作区 > 用户 > `~/.vac/config.json` > `package.json` 默认；面板写**当前生效层** |
+| 新增跨 IDE 全局配置键 | `GlobalSettings.ts` 的 `GLOBAL_SETTING_KEYS` + `setGlobalValue`；再在 `SettingScope.CONFIG_SETTING_KEYS` 登记 | 白名单之外的键不落 `~/.vac`；密钥永不进这里 |
 
 ### 2.9 Dashboard（`src/dashboard/`）
 
@@ -278,6 +283,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 宿主 ↔ Chat webview | `postMessage`（协议见 `ui/chat/protocol.ts`） | CSP + nonce，`localResourceRoots` 限定 | 一个视图只有一个 `onDidReceiveMessage` 监听器 |
 | 宿主 ↔ Dashboard webview | `postMessage`（见 `dashboard/DashboardModel.ts`） | CSP + nonce；命令走白名单 | 只投递 `snapshot`；不可见时不投 |
 | 会话缓存 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.sessionHistory.v1`，**改名即丢历史** |
+| 跨 IDE 全局配置 | `VAC_HOME/config.json`（默认 `~/.vac`，`GlobalSettings.ts`） | —— | 白名单键（首期 `vac.customModels`）；原子写（临时文件 + rename）；读取顺序：工作区 > 用户 > 全局 > `package.json` 默认 |
 | 会话恢复快照 | `globalState`（`ChatPanelHost.saveOpenSessions`） | —— | key `vac.openSessions.v1`；每条 `RecoverableSession` 可带 `app`（写入时的 IDE 标签），与当前环境相同的会在下发前剥掉，只用于标注 |
 | 模型切换诊断 | `SessionManager.noteModelChange` | —— | `model <旧> -> <新> (<source>)`，source = `session-response` / `set-response` / `notification`；只在值真的变化时写 |
 | 用量索引 | `globalStorageUri` 下 `usage-index.json` | —— | 原子写（临时文件 + rename），损坏则重建 |

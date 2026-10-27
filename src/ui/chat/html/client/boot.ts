@@ -526,7 +526,13 @@ export const bootClient = `
     // 而只有快照（hydrate）会设回来，于是"重开面板 / 切会话之后新到的记录"整段时间里它是 null，
     // markdown 请求带着 null 发出去、被宿主静默丢弃（Output: dropped markdown item … unknown
     // session null），界面上就是"最后一条停在原文"。
-    if (message.sessionId && (message.entries || message.entryId)
+    //
+    // [CUSTOM- 只认**当前聚焦会话**的消息：队列里可能还压着别的会话的 append/revise
+    // （刚被切走的那个），拿它盖章会让本会话的 markdown 请求带上别人的 sessionId ——
+    // 宿主会把 html 落到那个会话的 store 里（条目找不到 ⇒ 静默不落盘），
+    // 于是下次 hydrate 又得重问一遍（真机日志里 cdcb9416 的同两条被反复重问就是这么来的）。
+    if (message.sessionId && message.sessionId === currentSessionId
+      && (message.entries || message.entryId)
       && NS.transcriptView.setSessionId) {
       NS.transcriptView.setSessionId(message.sessionId);
     }
@@ -579,6 +585,13 @@ export const bootClient = `
       // [CUSTOM- 设置面板的数据（回复 getSettings，以及每次 setSetting 之后的重发）。
       case 'settings':
         if (NS.settingsPanel) { NS.settingsPanel.setItems(message.items || []); }
+        break;
+
+      // [CUSTOM- 自定义模型变了：输入卡菜单的别名/描述要立刻换，不能等下一次 meta。
+      case 'customModels':
+        if (NS.composer && NS.composer.setCustomModels) {
+          NS.composer.setCustomModels(message.customModels || []);
+        }
         break;
 
       // [CUSTOM- The auto-connect setting's live value: changed on the other

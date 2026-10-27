@@ -15,21 +15,35 @@
 
 ## 状态快照
 
-- **最近更新**：2026-10-27
-- **整体状态**：✅ **v1.6.0 已发布**（会话操作 / 选择器 / Markdown 预设等两批用户反馈）；
-  v1.5.0 的 Codex 支持仍在等真机验证（P1-1）。发布内容见 `CHANGELOG [1.6.0]`。
-- **当前分支（必填）**：`main`（已提交并推送，与 `origin/main` 同步）。
-- **最后验证状态**（2026-10-27）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（114 项）·
-  `npm test`（真实宿主）✅ **508 项** · `check-webview-client` ✅ · `check-docs` ✅。
-  ⚠️ 发布前**未做** `npm run dev:host` 真机验收（验收项见「下一步」1）。
+- **最近更新**：2026-10-28
+- **整体状态**：✅ v1.7.0 已发布（配置作用域 + 跨 IDE 全局配置 + custom models 修复 +
+  进场 markdown 修复）。v1.5.0 的 Codex 支持仍在等真机验证（P1-1）。
+- **当前分支（必填）**：`main`（v1.7.0 发布提交；远端 `origin/main` 应与之同步）。
+- **最后验证状态**（2026-10-28）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（120 项）·
+  `npm test`（真实宿主）✅ **515 项** · `check-webview-client` ✅ · `check-docs` ✅。
+  ⚠️ v1.7.0 的改动**未做** `npm run dev:host` 真机验收（验收项见「当前任务」与「下一步」1）。
 
 ---
 
 ## 当前任务（In Progress）
 
-- **v1.6.0 真机验收（待做）**：`npm run dev:host` 后按「下一步」1 的清单逐条确认；
+- **配置作用域改造（2026-10-28，已随 v1.7.0 发布 / 待真机验收）**：
+  - 已实现：`vac.customModels` 默认读写 `VAC_HOME/config.json`（跨 VS Code / Insiders / VSCodium），
+    读取顺序 工作区 > 用户 > 全局 > `package.json` 默认；设置面板每行下发 `scope/source`，
+    客户端显示作用域胶囊 + Inspect（打开/移除/提升为全局）；保存后广播 `customModels`，输入卡菜单立即刷新。
+  - 已验证：`typecheck` ✅ · `lint` ✅ · `test:unit` ✅（120 项）· `npm test` ✅（515 项）· `check-webview-client` ✅。
+  - 待真机：Advanced → Custom models 改描述后，输入卡模型菜单应立即变；有工作区覆盖时胶囊显示
+    `Workspace` 与 `Overridden by workspace settings`；`~/.vac/config.json` 内容与 `All IDEs` 一致。
+  - 关键文件：`config/GlobalSettings.ts`、`config/SettingScope.ts`、`ChatPanelHost.settingsItems` /
+    `handleSetSetting` / `handleSettingAction`、`html/client/settingsPanel.ts`。
+- **markdown 不渲染修复（2026-10-27，待真机验收）**：用户报 ① 打开历史会话 `94e2fb8a` 多数记录停在原文；
+  ② **对话中的会话最后一条卡片经常不渲染**（关掉重开才正常）。取证：回放那次 37 条记录，客户端
+  **只为最后一条**发过请求，两端无报错；`cdcb9416` 两条被反复重问（html 没落进 store）。已随 v1.7.0 发布：
+  宿主三处补渲染（`session-load-end` / `snapshotOf` / **安静 600ms 的 `armSettlePrefill`**，后者覆盖轮次外尾随输出）；
+  客户端「同一条 patch 里带 text 的 html 照收」；boot 只对聚焦会话盖章。`npm test` 515 绿，**未真机验收**（下一步 1）。
+- **v1.7.0 真机验收（待做）**：`npm run dev:host` 后按「下一步」2 的清单逐条确认；
   发布前只跑了自动检查。
-- **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」2。
+- **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」3。
 - **「滚动条到底、消息仍被截断」待复现**（用户 2026-10-26 报，现场已消失）：日志里 2300+ 条
   `scroll#` 全部自洽（`cov=0`、末条底边在输入卡上方 27px），现有判据打不到这种形态。
   **下次出现时先别关面板**，直接读 `~/.vac/vac.log` 抓现场。
@@ -52,7 +66,12 @@
 
 ## 下一步（Next Steps）
 
-1. **v1.6.0 真机验收（最高优先）**：`npm run dev:host` 后确认：
+1. **markdown 补渲染真机验收（最高优先）**：`npm run dev:host` →
+   ① 历史会话（如 `94e2fb8a`）打开 ≥3 次，全部记录都是渲染后的样子（含思考块）；
+   ② **普通对话里不再出现"最后一条卡片停在原文"**：轮次结束约 0.6s 内自动渲染，
+   日志见 `settled markdown for N record(s)`；回放路径见 `pre-rendering markdown for N …`；
+   ③ 回归：正在流的回复收尾后仍完整渲染（186 的"只认自己那段文本"不能被放宽）。
+2. **v1.7.0 真机验收**：`npm run dev:host` 后确认：
    ① tab 右键两条新项；同目录新建落在源会话 cwd；Duplicate 派生成功且历史可见（失败有提示）。
    ② 设置 → Chat 的默认 Effort / Recently used（3–16）落盘且生效。
    ③ 单行内选中几个字 → 引用 tag 显示 `文件名:N`，发送后 agent 收到 `#LN`。
@@ -60,34 +79,20 @@
    ⑤ 模式/模型/Effort/Agent 四个选择器的图标清晰；菜单项两行、选中项打勾；Agent 选择器可切换。
    ⑥ hover 会话 tab / 目录图标：SessionId 与 State 为灰色，目录提示无 `Dir:` 前缀。
    ⑦ 设置 → Appearance 的 Markdown style 四档即时生效（editor 档与改动前一致）。
-2. **P1-1 Codex 真机验证**：`npm run dev:host` → 连 Codex CLI → 发一条会跑命令的消息
+   ⑧ 设置作用域：Custom models 胶囊 = `All IDEs`，改描述后输入卡菜单立即变；
+      有工作区覆盖时显示 `Workspace` + `Overridden by workspace settings`；Inspect 的
+      Open / Remove / Make this the default for all IDEs 可用。
+3. **P1-1 Codex 真机验证**：`npm run dev:host` → 连 Codex CLI → 发一条会跑命令的消息
    （如「列出当前目录文件」），确认：① 工具卡里直接显示命令输出（console 文本），失败时有「Exited with code N」；
    ② 模式 / 模型 / 推理强度选择器可切换；③ 未登录机器上选 API Key → 输入 key → 重启后不再询问；
    ④ `VAC: Log Out of Agent` 后再发消息会重新要求认证；⑤ Dashboard 的 Codex 用量与 `~/.codex/sessions` 对得上；
    ⑥ `vac.agents` 里仍是旧包 `@zed-industries/codex-acp` 时，激活弹迁移提示。
    顺带回归 Claude：Bash 输出、子 agent 嵌套、历史补全（按 kind 改造后）不变。
-3. **v1.4.0 真机验收（M4+M5）**：`npm run dev:host` 后确认：
-   ① 齿轮面板：四组、固定尺寸、`+` 紧跟最后一个 tab、齿轮固定右侧；Browse… 弹系统目录选择器；
-   ② 设置改动落盘并与 VS Code Settings 同步；子面板里的自定义模型 / Agent JSON 编辑器；
-   ③ 地址栏自动展开：新输出展开、历史回放不展开；卡片类型与高度在 **Appearance** 里调（0 = 不限）；
-   ④ 中键关闭（运行中弹确认；草稿/待恢复各自语义）；打开面板即连接；首帧 `Starting VAC…`；
-   ⑤ v1.4.1 排版：Agent JSON 铺满 + Cancel/Save 右下；Custom models 说明行/表头/Add 右对齐/Done 右下；
-      Custom models 与 Agent configuration 的 Edit… 与其它控件右缘对齐。
-4. **其中 M4 遗留项**：
-   ① 新建草稿页选 `<custom-model>` → 发送 → 模型不再弹回 opus（看日志 `SessionManager: model ... (source)`）；
-   ② 会话 tab 右键出现 **Copy Session ID** 且内容正确；
-   ③ 关闭窗口再打开 → 恢复卡片能显示 `(VS Code Insiders)` 之类的跨环境标注（用共享 user-data 复现）；
-   ④ 首次连接：日志出现 `prewarm connected in ...ms`；首次连接后约 15s 起看
-   `Agent runtime cached for "Claude Code" in ...ms`，**下一次启动**应变成
-   `Spawning agent ... (cached runtime v0.91.0)`，连接降到 ~1s；
-   ⑤ 滚动问题复现时抓 `~/.vac/vac.log` 的 `scroll#` 行：`cov=1` 即定案，`heal-skip:` 说明自愈为何没出手。
-      **2026-10-26 补充**：这条会话的采样全是 `cov=0`，说明还有第三种形态没被现有判据覆盖
-      （`cov` 只比「末条底边 vs 输入卡顶边」，没管表单/权限抽屉）。复现时优先看：末条 `last`/`comp`、
-      `#messages` 自己的 rect 与 `window.innerHeight` 的关系、以及抽屉变量（`ev=` / `pv=`）。
-5. **v1.3.1 真机验收（遗留）**：见 `CHANGELOG [1.3.1]` 的 9 条（markdown / Copy / 图标 / 置顶卡 / 历史弹窗 /
-   Times / tab 高亮与涟漪）。
-6. **P1-2 宿主实测验收（v1.3.0 遗留）**：Dashboard、聊天面板、树/历史弹窗 Delete、Fork、sub-agent 卡等。
-7. **之后按 ROADMAP**：P1-7 终端与写文件健壮性 → P1-8 连接健壮性 → P1-9 SDK 新更新类型 → P1-3 打包瘦身 → P2-*。
+4. **滚动问题复现时抓现场**：`~/.vac/vac.log` 的 `scroll#` 行——`cov=1` 即定案；全是 `cov=0` 时优先看
+   末条 `last`/`comp`、`#messages` 的 rect 与 `window.innerHeight`、以及抽屉变量（`ev=` / `pv=`）。
+5. **历史遗留验收（低优先）**：v1.4.0/M4、v1.3.1、v1.3.0 的验收清单仍挂着，明细见
+   `CHANGELOG [1.4.0]/[1.4.1]/[1.3.1]`；这些条目长期未执行，先按 1–3 走。
+6. **之后按 ROADMAP**：P1-7 终端与写文件健壮性 → P1-8 连接健壮性 → P1-9 SDK 新更新类型 → P1-3 打包瘦身 → P2-*。
 
 ---
 
@@ -109,11 +114,8 @@
 
 ## 关键决策记录（Key Decisions）
 
-- **v1.0.3 已发布**：GitHub Release <https://github.com/zouv/vscode-acp-client/releases/tag/v1.0.3>
-  附 `vscode-acp-client-1.0.3.vsix`。版本号取 patch：本轮是「两个修复 + 图标 + README」的打磨，
-  没有新增能力面（用户 2026-10-13 在 1.0.3 与 1.1.0 之间选了前者）。
-  `.vsix` 不进 git（`.gitignore` 已忽略），只作为 Release 资产——打包产物固定落 `release/`，
-  由 `npm run vsix` 生成（见 `scripts/package-vsix.mjs`）。
+- **v1.0.3 已发布**：GitHub Release 附 `vscode-acp-client-1.0.3.vsix`；`.vsix` 不进 git（`.gitignore`），
+  打包产物固定落 `release/`（`npm run vsix`）。
 - **图标只有一个几何源**：`scripts/make-icon.mjs` 里的 `MARKS` 同时产出单色 SVG（活动栏，24×24，
   单色 `currentColor`）与 128×128 徽标 PNG（Marketplace + 编辑区标签页）。改外观改脚本、重跑，
   不手改产物。图形为「对话气泡 + 终端提示符 `>_`」。

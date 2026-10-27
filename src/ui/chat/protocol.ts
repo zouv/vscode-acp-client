@@ -6,6 +6,8 @@ import type { SessionConfigOption, SessionModeState } from '@agentclientprotocol
 import type { SessionModelState } from '../../core/SessionManager';
 // [CUSTOM- 自定义模型类型从共享的 config 模块引入（SessionManager 也要读同一份）。
 import type { CustomModel } from '../../config/CustomModels';
+// [CUSTOM- 设置项的存储作用域（All IDEs / This IDE / Workspace）由宿主算好再下发。
+import type { SettingScope, SettingSource } from '../../config/GlobalSettings';
 
 import type { EntryPatch, TranscriptEntry, TranscriptSnapshot } from './transcript/types';
 import type { ToolCallView } from './content/toolCalls';
@@ -204,6 +206,9 @@ export interface SettingItem {
   /** [CUSTOM- number 行的输入范围（缺省沿用各调用点原来的 0/2000 与 160/480 规则）。 */
   min?: number;
   max?: number;
+  /** [CUSTOM- 这一项默认属于哪一层；`source` 给出当前实际生效层与各层取值。 */
+  scope?: SettingScope;
+  source?: SettingSource;
 }
 
 /**
@@ -265,6 +270,9 @@ export type ExtToChat =
   | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'compact' | 'reading' }
   // [CUSTOM- 设置面板的数据（回复 getSettings，也在每次 setSetting 之后重发）。宿主是唯一写者。
   | { type: 'settings'; items: SettingItem[] }
+  // [CUSTOM- 自定义模型变了（设置面板保存 / VS Code 设置里改）：输入卡的模型菜单要立刻换
+  // 描述与别名，不能等下一次 meta/draftOptions —— 那正是「改完描述看起来没生效」的来源。
+  | { type: 'customModels'; customModels: CustomModel[] }
   // 历史会话列表（回复 `listHistory`）。
   // `source` 说明这份列表从哪来：agent 侧 `session/list`，还是本地 workspaceState 缓存
   // （未连接时不去 spawn agent，见 ChatPanelHost.handleListHistory）。
@@ -349,7 +357,7 @@ export type ChatToExt =
   // [CUSTOM- 设置面板：宿主是唯一写者（配置项写 VS Code 设置，面板项写 UiPrefs）。
   | { type: 'getSettings' }
   | { type: 'setSetting'; key: string; value: unknown }
-  | { type: 'settingAction'; action: string }
+  | { type: 'settingAction'; action: string; key?: string; layer?: 'workspace' | 'user' | 'global' }
   // [CUSTOM- 状态卡上的自动连接开关。**非会话作用域**（正是没有会话时
   // 才需要它），所以必须放在 verifySession 守卫**之前**处理，与 setUiPref 同一位置。
   | { type: 'setAutoConnect'; value: boolean }

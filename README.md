@@ -22,7 +22,7 @@ VAC 是一个 [ACP（Agent Client Protocol）](https://agentclientprotocol.com/)
 
 > **只实现协议，不绑定厂商。** 与「把某个 agent 焊死在一个扩展里」不同，任何说 ACP 的 agent 都能接进来：新增一个 agent 通常只需要在设置里加一条 `vac.agents` 配置。
 
-> 项目状态：v1.3.0，早期阶段，接口与设置项仍可能变动。VS Code Marketplace 上架中，目前请从 [Releases](https://github.com/zouv/vscode-acp-client/releases) 安装 VSIX。
+> 项目状态：v1.7.0，早期阶段，接口与设置项仍可能变动。VS Code Marketplace 上架中，目前请从 [Releases](https://github.com/zouv/vscode-acp-client/releases) 安装 VSIX。
 
 ## 目录
 
