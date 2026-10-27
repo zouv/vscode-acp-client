@@ -90,6 +90,7 @@
 
 | 主题 | 结论 |
 |---|---|
+| 选择器观感（2026-10-27） | 模式 / 模型 / Effort 三个 `configOptions` 选择器共用一个 `buildPicker`：按钮 = **形状图标 + 当前值**（`icons.ts` 的 `mode` / `model` / `effort`），菜单 = 标题 + 每项**名称 + 说明两行** + 选中勾。说明取选项自带的 `description`（自定义模型用 `vac.customModels` 的 description 覆盖）。图标按 `category` 选，不按 agent 名/选项 id 分支（pitfalls #19） |
 | 数据从哪来 | `ChatPanelHost.rememberAgentOptions(sessionId)` → `Map<agentName, {configOptions, availableCommands}>`，并按 agent 持久化到 `globalState`（`vac.draftOptions.v1`，照抄 077 的 `uiPrefs` 模式）。**不持久化等于默认路径不生效**：VS Code 重载后宿主内存里的活动会话全没了，"全新窗口点 + 还是空输入卡"正是用户报的现象 |
 | 挂在哪些事件上 | `session-created` / `session-load-end` / `config-options-changed` / `available-commands-changed`。**不挂 `pushMeta`**：它在"没有 surface attach"或"不是聚焦会话"时提前 return，后台会话的变化进不了快照 |
 | 为什么还要 `session-load-end` | `loadSession` 是"先注册 placeholder → emit `session-created` → 收到响应才写 `configOptions`"，**而且不走 `applyConfigOptions`** ⇒ 只挂 `session-created` 会让"打开一个历史会话"把快照的配置项清空 |

@@ -113,9 +113,24 @@ export const contextMenuClient = `
         label: 'Close',
         run: function () { if (NS.tabs && NS.tabs.closeTabNode) { NS.tabs.closeTabNode(tab); } }
       }];
-      // Rename 只对**真会话** tab 有意义（草稿/待恢复的还没有会话可改名，× 已是它们的语义）。
+      // Rename / 复制类动作只对**真会话** tab 有意义（草稿/待恢复的还没有会话，× 已是它们的语义）。
       // 初值取行上**看得见**的标签（与用户看到的一致，155 的同源原则）；宿主弹原生输入框。
       if (tab.getAttribute('data-session-id')) {
+        // [CUSTOM- 会话 tab 右键：在这个会话的目录里再开一个新会话（目录与额外根目录
+        // 都由宿主从源会话取，客户端不猜）。会话作用域 ⇒ 走 postForSession（守卫按 sessionId 校验）。
+        tabItems.splice(0, 0, {
+          label: 'New Session in This Folder',
+          run: function () {
+            NS.bridge.postForSession({ type: 'newSessionInDirectory', sessionId: tab.getAttribute('data-session-id') });
+          }
+        });
+        // [CUSTOM- 复制会话 = 在末尾 fork（不带 messageId），新会话继承源会话的上下文与消息记录。
+        tabItems.splice(1, 0, {
+          label: 'Duplicate',
+          run: function () {
+            NS.bridge.postForSession({ type: 'duplicateSession', sessionId: tab.getAttribute('data-session-id') });
+          }
+        });
         tabItems.push({
           label: 'Rename',
           run: function () {

@@ -32,6 +32,11 @@ export interface SessionSummary {
    */
   unread: boolean;
   /**
+   * [CUSTOM- 2026-10-27：agent 的类型（claude / codex / generic）。只用于 agent 选择器
+   * 的第二行说明与图标；老调用方不传也不影响。
+   */
+  agentKind?: string;
+  /**
    * [CUSTOM- A permission prompt or a form is parked on this session, so
    * nothing moves until the reader answers. Distinct from `running`: both are usually
    * true at once, and the tab dot paints them with two independent signals (colour vs.
@@ -161,6 +166,13 @@ export interface UiPrefs {
   sendKey?: 'enter' | 'ctrlEnter';
   // [CUSTOM- 每个 agent 的默认模型（新建会话时套用）；空串/缺省 = 由 agent 决定。
   defaultModelByAgent?: Record<string, string>;
+  // [CUSTOM- 每个 agent 的默认推理强度（config option `category === 'thought_level'`，
+  // 新建会话时套用）；空串/缺省 = 由 agent 决定。与默认模型同一形态、同一族设置 key。
+  defaultEffortByAgent?: Record<string, string>;
+  // [CUSTOM- 目录选择抽屉里「Recently used」最多列几条（3–16，默认 8）。
+  recentDirectoryLimit?: number;
+  // [CUSTOM- Markdown 渲染预设。`editor` = 跟随编辑器（现有逻辑，默认）。
+  markdownStyle?: 'editor' | 'github' | 'compact' | 'reading';
 }
 
 /** [CUSTOM- 设置面板的分组。左侧导航按这个顺序排；没有条目的分组不显示。 */
@@ -189,6 +201,9 @@ export interface SettingItem {
   actionLabel?: string;
   /** 子项：卡片类型复选框缩进显示在主开关下面。 */
   indent?: boolean;
+  /** [CUSTOM- number 行的输入范围（缺省沿用各调用点原来的 0/2000 与 160/480 规则）。 */
+  min?: number;
+  max?: number;
 }
 
 /**
@@ -247,7 +262,7 @@ export type ExtToChat =
   // [CUSTOM- 大纲钉住/宽度偏好，随 boot 一起带回（跨窗口重载存活）。
   // [CUSTOM- 外加 tab 栏的手工顺序（同一条记录）。
   // [CUSTOM- 外加 Times 的按会话记录 + 默认值（同一条记录）。
-  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string> }
+  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'compact' | 'reading' }
   // [CUSTOM- 设置面板的数据（回复 getSettings，也在每次 setSetting 之后重发）。宿主是唯一写者。
   | { type: 'settings'; items: SettingItem[] }
   // 历史会话列表（回复 `listHistory`）。
@@ -330,7 +345,7 @@ export type ChatToExt =
   // 由宿主**合并**（重建会把对方那一半抹掉）。缺的字段 = 这一轮没改它。
   // [CUSTOM- Times 同样走这条（第三个写者）：timesBySession 整份发上来
   // （与 tabOrder 同一形态 —— 顺序与开关都是"一整张表"，逐条 delta 反而要宿主维护版本）。
-  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string> }
+  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'compact' | 'reading' }
   // [CUSTOM- 设置面板：宿主是唯一写者（配置项写 VS Code 设置，面板项写 UiPrefs）。
   | { type: 'getSettings' }
   | { type: 'setSetting'; key: string; value: unknown }
@@ -419,6 +434,12 @@ export type ChatToExt =
   // **会话作用域**（走 `verifySession` 守卫之后）。`entryId` 是面板记录 id —— 宿主据它取回
   // 那一条的 ACP `messageId`，所以记录序列化不必带 messageId。
   | { type: 'forkFromMessage'; sessionId: string; entryId: string }
+  // [CUSTOM- 会话 tab 右键：在**这个会话的目录**里再开一个新会话。
+  // 会话作用域（守卫之后）——目录/额外根目录都取源会话的，客户端不必知道。
+  | { type: 'newSessionInDirectory'; sessionId: string }
+  // [CUSTOM- 会话 tab 右键：复制会话（`session/fork` 不带 messageId = 在末尾分叉），
+  // 新会话继承源会话的上下文与消息记录，然后自动聚焦。
+  | { type: 'duplicateSession'; sessionId: string }
   | { type: 'focusAgent'; agentName: string }
   // [CUSTOM- 带上行区间 = 只摘那一段（同一个文件可以引用多段）；不带 = 整个路径全摘。
   | { type: 'detachFile'; sessionId: string; path: string; lineStart?: number; lineEnd?: number }

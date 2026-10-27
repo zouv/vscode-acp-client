@@ -502,7 +502,16 @@ export const bootClient = `
     if (messages) {
       if (flat) { messages.classList.add('flat-tools'); } else { messages.classList.remove('flat-tools'); }
     }
-    if (toggle) { toggle.className = flat ? 'nest-toggle off' : 'nest-toggle'; }
+    if (toggle) { toggle.className = flat ? 'nest-toggle off' : 'nest-toggle on'; }
+  }
+
+  /**
+   * [CUSTOM- Markdown 渲染预设（2026-10-27）：只给 body 打一个 data 属性，
+   * styles.ts 里按它套用排版覆盖。默认 'editor' = 完全沿用现有主题变量。
+   */
+  function applyMarkdownStyle(style) {
+    var value = style === 'github' || style === 'compact' || style === 'reading' ? style : 'editor';
+    if (document.body) { document.body.setAttribute('data-md-style', value); }
   }
 
   // [CUSTOM- 「Times」的整块状态机搬去了 client/times.ts（按会话记 + 默认值 +
@@ -564,6 +573,7 @@ export const bootClient = `
         // [CUSTOM- 子代理分组、发送快捷键、输入卡尺寸（2026-10-21 第二批设置）。
         if (typeof message.flatTools === 'boolean') { applyGrouping(message.flatTools); }
         if (NS.composer && NS.composer.applyUiPrefs) { NS.composer.applyUiPrefs(message); }
+        applyMarkdownStyle(message.markdownStyle);
         break;
 
       // [CUSTOM- 设置面板的数据（回复 getSettings，以及每次 setSetting 之后的重发）。

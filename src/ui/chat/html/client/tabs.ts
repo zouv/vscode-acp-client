@@ -10,6 +10,8 @@ export const tabsClient = `
   var stripEl = null;
   var agentBar = null;
   var agentSelect = null;
+  var agentMenu = null;
+  var tipEl = null;
   var cwdBtn = null;
 
   // [CUSTOM- 'drafts' are LOCAL tabs: a new session that does not
@@ -150,7 +152,13 @@ export const tabsClient = `
     stripEl = NS.dom.qs('tabStrip');
     agentBar = NS.dom.qs('agentBar');
     agentSelect = NS.dom.qs('agentSelect');
+    agentMenu = NS.dom.qs('agentMenu');
     cwdBtn = NS.dom.qs('cwdBtn');
+    // [CUSTOM- 会话 tab / 目录图标的悬停提示要**分色**（SessionId、State 用灰色），
+    // 原生 title 做不到分段着色 —— 用一条自绘的浮层（2026-10-27）。
+    tipEl = NS.dom.el('div', 'tab-tip');
+    tipEl.hidden = true;
+    document.body.appendChild(tipEl);
 
     NS.dom.qs('newTab').addEventListener('click', function () {
       // [CUSTOM- '+' opens a LOCAL DRAFT instead of creating a
@@ -175,10 +183,20 @@ export const tabsClient = `
       if (NS.composer) { NS.composer.focusInput(); }
     });
 
-    agentSelect.addEventListener('change', function () {
-      var agentName = agentSelect.value;
-      if (agentName) { NS.bridge.post({ type: 'focusAgent', agentName: agentName }); }
+    agentSelect.addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (!agentMenu) { return; }
+      var open = agentMenu.className.indexOf('open') !== -1;
+      closeAgentMenu();
+      if (!open) {
+        agentMenu.className = 'picker-menu down agent-menu open';
+        renderAgentMenu();
+      }
     });
+    // 点菜单外任意处收起（菜单项自己的 click 会 stopPropagation）。
+    document.addEventListener('click', function () { closeAgentMenu(); });
+    document.addEventListener('scroll', hideTip, true);
+    window.addEventListener('resize', hideTip);
 
     // [CUSTOM- The tablist keyboard contract: arrows move the
     // selection, Delete closes. Needed because the roving tabindex deliberately
@@ -486,6 +504,8 @@ export const tabsClient = `
   }
 
   function renderTabs() {
+    // 重建会移除触发悬停的节点，mouseleave 不会再到达 —— 先收起自绘提示。
+    hideTip();
     NS.dom.clear(tabsEl);
     var models = tabModels();
     // Roving tabindex: exactly ONE tab in the tab order across both kinds (the
@@ -512,13 +532,16 @@ export const tabsClient = `
         tab.setAttribute(idAttr, model.id);
         tab.setAttribute('aria-selected', active ? 'true' : 'false');
         tab.tabIndex = active || (!activeSeen && index === 0) ? 0 : -1;
-        tab.title = isDraft
-          ? (model.draft.cwd || 'Default directory') + '\\n(not created yet)'
+        // [CUSTOM- 自绘悬停提示（2026-10-27）：标签名正常色，会话 id 灰色。
+        var tabLines = isDraft
+          ? [{ text: model.draft.cwd || 'Default directory' },
+            { text: '(not created yet)', dim: true }]
           : (isRestore
-            ? label + '\\n' + model.id
-              + (model.restore.app ? '\\n(' + model.restore.app + ')' : '')
-              + '\\n(not loaded yet \\u2014 click to open)'
-            : label + '\\n' + model.id);
+            ? [{ text: label },
+              { text: model.id, dim: true }]
+              .concat(model.restore.app ? [{ text: '(' + model.restore.app + ')', dim: true }] : [])
+              .concat([{ text: '(not loaded yet \\u2014 click to open)', dim: true }])
+            : [{ text: label }, { text: model.id, dim: true }]);
 
         // [CUSTOM- 目录标识：dot 里写目录缩写，一个字母一个 span
         // （3 个走「上 2 下 1」、4 个走 2x2，靠 styles.ts 那套两列网格排）。
@@ -527,15 +550,28 @@ export const tabsClient = `
         // （颜色读不出名字，得让悬停能问）。没有 cwd 的会话只留状态那一行。
         var dot = NS.dom.el('span', isDraft ? 'tab-dot draft'
           : (isRestore ? 'tab-dot restore' : dotClass(model.summary)));
+        var dotLines = null;
         if (!isDraft && !isRestore) {
           var abbrev = directoryAbbrev(model.summary.cwd);
           if (abbrev.length > 0) { dot.setAttribute('data-len', String(abbrev.length)); }
           for (var li = 0; li < abbrev.length; li++) {
             dot.appendChild(NS.dom.el('span', 'dir-letter', abbrev[li]));
           }
-          dot.title = (model.summary.cwd ? 'Dir: ' + model.summary.cwd + '\\n' : '')
-            + 'State: ' + dotStatusText(model.summary);
+          // [CUSTOM- 2026-10-27：路径不再带 'Dir:' 前缀，State 文字用次要色。
+          dotLines = (model.summary.cwd ? [{ text: model.summary.cwd }] : [])
+            .concat([{ text: 'State: ' + dotStatusText(model.summary), dim: true }]);
         }
+        // [CUSTOM- 同一层 mouseover 决定这次悬停讲的是「tab」还是「目录图标」：
+        // mouseenter 不冒泡，从图标移回 tab 背景时不会再触发一次，提示会消失。
+        tab.addEventListener('mouseover', function (event) {
+          var target = event && event.target;
+          var onDot = dotLines && target
+            && (target === dot || (dot.contains && dot.contains(target)));
+          showTip(onDot ? dot : tab, onDot ? dotLines : tabLines);
+        });
+        tab.addEventListener('mouseleave', hideTip);
+        tab.addEventListener('focus', function () { showTip(tab, tabLines); });
+        tab.addEventListener('blur', hideTip);
         tab.appendChild(dot);
         tab.appendChild(NS.dom.el('span', 'tab-label', label));
 
@@ -585,6 +621,31 @@ export const tabsClient = `
     }
   }
 
+  /**
+   * [CUSTOM- 自绘悬停提示（2026-10-27）。原生 title 只能整段同色，而用户要求
+   * 会话 tab 的 SessionId、目录图标的 State 用灰色 —— 只能渲染成一条浮层。
+   * 'lines' 里每项是 { text, dim }；dim = 次要色。
+   */
+  function hideTip() {
+    if (tipEl) { tipEl.hidden = true; }
+  }
+
+  function showTip(anchor, lines) {
+    if (!tipEl || !anchor || !lines || lines.length === 0) { return; }
+    NS.dom.clear(tipEl);
+    for (var i = 0; i < lines.length; i++) {
+      tipEl.appendChild(NS.dom.el(
+        'div', 'tab-tip-line' + (lines[i].dim ? ' dim' : ''), lines[i].text || ''));
+    }
+    tipEl.hidden = false;
+    var rect = anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: 0, bottom: 0, width: 0 };
+    var width = tipEl.getBoundingClientRect ? tipEl.getBoundingClientRect().width : 0;
+    var viewport = window.innerWidth || 800;
+    var left = Math.max(4, Math.min(rect.left || 0, viewport - width - 8));
+    tipEl.style.left = left + 'px';
+    tipEl.style.top = ((rect.bottom || 0) + 6) + 'px';
+  }
+
   /** The agent bar is only worth showing when more than one agent is live. */
   function renderAgentBar() {
     var agents = [];
@@ -595,16 +656,64 @@ export const tabsClient = `
     }
     if (agents.length <= 1) {
       agentBar.hidden = true;
+      closeAgentMenu();
       return;
     }
     agentBar.hidden = false;
+    // [CUSTOM- 按钮本身也是「图标 + 当前 agent 名」（2026-10-27）。
     NS.dom.clear(agentSelect);
+    var glyph = NS.icons && NS.icons.icon ? NS.icons.icon('agent', 'picker-icon') : null;
+    if (glyph) { agentSelect.appendChild(glyph); }
+    agentSelect.appendChild(NS.dom.el('span', 'picker-label', state.focusedAgent || agents[0]));
+    if (agentMenu && agentMenu.className.indexOf('open') !== -1) { renderAgentMenu(); }
+  }
+
+  function closeAgentMenu() {
+    if (agentMenu) { agentMenu.className = 'picker-menu down agent-menu'; }
+  }
+
+  function agentDescription(name) {
+    var kind = null;
+    for (var i = 0; i < state.sessions.length; i++) {
+      if (state.sessions[i].agentName === name) { kind = state.sessions[i].agentKind || null; break; }
+    }
+    if (kind === 'claude') { return 'Claude Code agent'; }
+    if (kind === 'codex') { return 'OpenAI Codex agent'; }
+    return 'ACP agent';
+  }
+
+  function renderAgentMenu() {
+    if (!agentMenu) { return; }
+    NS.dom.clear(agentMenu);
+    agentMenu.appendChild(NS.dom.el('div', 'picker-title', 'Agents'));
+    var agents = [];
+    var seen = {};
+    for (var i = 0; i < state.sessions.length; i++) {
+      var name = state.sessions[i].agentName;
+      if (!seen[name]) { seen[name] = true; agents.push(name); }
+    }
     for (var j = 0; j < agents.length; j++) {
-      var opt = document.createElement('option');
-      opt.value = agents[j];
-      opt.textContent = agents[j];
-      if (agents[j] === state.focusedAgent) { opt.selected = true; }
-      agentSelect.appendChild(opt);
+      (function (name) {
+        var active = name === state.focusedAgent;
+        var item = NS.dom.el('button', 'picker-item' + (active ? ' active' : ''), '');
+        item.type = 'button';
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', active ? 'true' : 'false');
+        var body = NS.dom.el('span', 'picker-item-body');
+        body.appendChild(NS.dom.el('span', 'picker-item-label', name));
+        body.appendChild(NS.dom.el('span', 'picker-item-desc', agentDescription(name)));
+        item.appendChild(body);
+        if (active) {
+          var check = NS.icons && NS.icons.icon ? NS.icons.icon('check', 'picker-check') : null;
+          if (check) { item.appendChild(check); }
+        }
+        item.addEventListener('click', function (event) {
+          event.stopPropagation();
+          closeAgentMenu();
+          NS.bridge.post({ type: 'focusAgent', agentName: name });
+        });
+        agentMenu.appendChild(item);
+      })(agents[j]);
     }
   }
 

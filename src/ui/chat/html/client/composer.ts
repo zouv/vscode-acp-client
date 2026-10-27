@@ -747,11 +747,13 @@ export const composerClient = `
     return custom ? (custom.name || custom.modelId) : null;
   }
 
+  // [CUSTOM- 四个选择器的按钮图标（2026-10-27）：返回 icons.ts 里的形状名。
+  // 含义不清的字符字形已退役（闪电 / 菱形 / 省略号 / 齿轮）。
   function iconFor(category) {
-    if (category === 'mode') { return '\\u26a1'; }
-    if (category === 'model') { return '\\u25c8'; }
-    if (category === 'thought_level') { return '\\u22ef'; }
-    return '\\u2699';
+    if (category === 'mode') { return 'mode'; }
+    if (category === 'model') { return 'model'; }
+    if (category === 'thought_level') { return 'effort'; }
+    return 'settings';
   }
 
   function renderPickers() {
@@ -772,7 +774,10 @@ export const composerClient = `
     // 会话的选择"——不说清楚，按钮上显示的值（来自该 agent 上一次会话）会被当成新会话已有的值。
     var hint = option.description || option.name || option.id;
     btn.title = state.draft ? 'For the session this message creates: ' + hint : hint;
-    btn.appendChild(NS.dom.el('span', 'picker-icon', iconFor(option.category)));
+    var glyph = NS.icons && NS.icons.icon
+      ? NS.icons.icon(iconFor(option.category), 'picker-icon')
+      : null;
+    if (glyph) { btn.appendChild(glyph); }
     btn.appendChild(NS.dom.el('span', 'picker-label', optionLabel(option)));
     wrap.appendChild(btn);
 
@@ -793,8 +798,12 @@ export const composerClient = `
 
   function renderMenu(menu, option) {
     NS.dom.clear(menu);
+    // [CUSTOM- 菜单标题（选项名）：截图里那种「Modes / Select a model」的抬头，
+    // 让读者知道这一列在选什么（按钮上只有一个值，没有名称）。
+    if (option.name) { menu.appendChild(NS.dom.el('div', 'picker-title', String(option.name))); }
     if (option.type === 'boolean') {
-      menu.appendChild(menuItem(menu, option, option.currentValue ? false : true, option.currentValue ? 'Off' : 'On'));
+      menu.appendChild(menuItem(menu, option, option.currentValue ? false : true,
+        option.currentValue ? 'Off' : 'On', option.description || ''));
       return;
     }
     var options = option.options || [];
@@ -803,30 +812,41 @@ export const composerClient = `
       if (entry && entry.options) {
         menu.appendChild(NS.dom.el('div', 'picker-group', entry.name || ''));
         for (var j = 0; j < entry.options.length; j++) {
-          menu.appendChild(menuItem(menu, option, entry.options[j].value, entry.options[j].name));
+          menu.appendChild(menuItem(menu, option, entry.options[j].value, entry.options[j].name,
+            entry.options[j].description || ''));
         }
       } else if (entry) {
-        menu.appendChild(menuItem(menu, option, entry.value, entry.name));
+        menu.appendChild(menuItem(menu, option, entry.value, entry.name, entry.description || ''));
       }
     }
     // [CUSTOM- 自定义模型现在由 agent 经 '_meta.extraModels' 注入后进入 model 配置项
     // （见 SessionManager），这里不再硬塞一个「自定义」分组 —— 再塞会与 agent 候选重复。
   }
 
-  function menuItem(menu, option, value, label) {
+  function menuItem(menu, option, value, label, description) {
     // [CUSTOM- 自定义模型的 description 用在这里（2026-10-21）：此前只存不用。
     // 现在它是菜单项的副标题 + 悬停 tooltip；name 覆盖 agent 给的裸 id 标签。
+    // [CUSTOM- 2026-10-27：**所有**选项都走「名称 + 说明」两行（模式/模型/Effort），
+    // 说明优先用 agent/自定义模型给的 description，没有就只显示一行。
     var custom = option.category === 'model' ? customModelOf(value) : null;
     var text = custom && custom.name ? custom.name : label;
+    var desc = (custom && custom.description) || description || '';
+    var active = String(option.currentValue) === String(value);
     // [CUSTOM- A real <button> — the config menus were mouse-only.
-    var item = NS.dom.el('button', 'picker-item' + (String(option.currentValue) === String(value) ? ' active' : ''), '');
+    var item = NS.dom.el('button', 'picker-item' + (active ? ' active' : ''), '');
     item.type = 'button';
-    item.appendChild(NS.dom.el('span', 'picker-item-label', text));
-    if (custom && custom.description) {
-      item.appendChild(NS.dom.el('span', 'picker-item-desc', custom.description));
-      item.title = custom.description;
+    var body = NS.dom.el('span', 'picker-item-body');
+    body.appendChild(NS.dom.el('span', 'picker-item-label', text));
+    if (desc) {
+      body.appendChild(NS.dom.el('span', 'picker-item-desc', desc));
+      item.title = desc;
     }
-    item.setAttribute('aria-pressed', String(option.currentValue) === String(value) ? 'true' : 'false');
+    item.appendChild(body);
+    if (active) {
+      var check = NS.icons && NS.icons.icon ? NS.icons.icon('check', 'picker-check') : null;
+      if (check) { item.appendChild(check); }
+    }
+    item.setAttribute('aria-pressed', active ? 'true' : 'false');
     item.addEventListener('click', function (event) {
       event.stopPropagation();
       closeMenus();

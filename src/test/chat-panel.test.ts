@@ -4221,10 +4221,14 @@ suite('chat panel: active editor file → composer reference ()', () => {
     assert.deepStrictEqual(
       readActiveFileFrom(editor({ selection: { isEmpty: false, start: { line: 2, character: 4 }, end: { line: 5, character: 0 } } })),
       { path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs', lineStart: 3, lineEnd: 5 });
-    // 单行选区不带区间（引用整个文件）
+    // 单行选区也算行选择（用户报：选中一行里的几个字时识别不出行号）⇒ 1 基 5-5
     assert.deepStrictEqual(
       readActiveFileFrom(editor({ selection: { isEmpty: false, start: { line: 4, character: 1 }, end: { line: 4, character: 8 } } })),
-      { path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs' });
+      { path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs', lineStart: 5, lineEnd: 5 });
+    // 拖到下一行行首（character 0）选中整行时，同样是单行区间 5-5
+    assert.deepStrictEqual(
+      readActiveFileFrom(editor({ selection: { isEmpty: false, start: { line: 4, character: 0 }, end: { line: 5, character: 0 } } })),
+      { path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs', lineStart: 5, lineEnd: 5 });
   });
 
   test('attachPath 的 meta 进了附件（显示名带行区间），发送时 uri 带 #L 片段', async () => {

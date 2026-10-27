@@ -155,11 +155,12 @@ export const settingsPanelClient = `
     if (item.type === 'number') {
       var num = NS.dom.el('input', 'settings-number');
       num.type = 'number';
-      // 大纲宽度 160–480；自动展开的限高 0（不限）–2000。
+      // 大纲宽度 160–480；自动展开的限高 0（不限）–2000；其余行由宿主给范围。
       var outlineWidth = item.key === 'panel.outlineWidth';
-      num.setAttribute('min', outlineWidth ? '160' : '0');
-      num.setAttribute('max', outlineWidth ? '480' : '2000');
-      num.setAttribute('step', '10');
+      num.setAttribute('min', String(item.min !== undefined ? item.min : (outlineWidth ? 160 : 0)));
+      num.setAttribute('max', String(item.max !== undefined ? item.max : (outlineWidth ? 480 : 2000)));
+      // 1 的步长适合小整数（目录条数 3–16）；尺寸类仍用 10。
+      num.setAttribute('step', item.max !== undefined && item.max <= 20 ? '1' : '10');
       num.value = String(item.value === undefined || item.value === null ? '' : item.value);
       num.addEventListener('change', function () { send(item.key, num.value); });
       wrap.appendChild(num);

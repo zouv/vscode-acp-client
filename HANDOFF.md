@@ -15,21 +15,21 @@
 
 ## 状态快照
 
-- **最近更新**：2026-10-26
-- **整体状态**：✅ **v1.5.1 已发布**（标签栏运行中涟漪撑出纵向滚动条导致的抖动修复）；
-  v1.5.0 的 Codex 支持仍在等真机验证（P1-1）。发布内容见 `CHANGELOG [1.5.1]` / `[1.5.0]`。
-  「滚动条到底、消息仍被截断」**未复现**，见「当前任务」第 2 条。
+- **最近更新**：2026-10-27
+- **整体状态**：✅ **v1.6.0 已发布**（会话操作 / 选择器 / Markdown 预设等两批用户反馈）；
+  v1.5.0 的 Codex 支持仍在等真机验证（P1-1）。发布内容见 `CHANGELOG [1.6.0]`。
 - **当前分支（必填）**：`main`（已提交并推送，与 `origin/main` 同步）。
-- **最后验证状态**（2026-10-26）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（114 项）·
-  `npm test`（真实宿主）✅ **507 项** · `check-webview-client` ✅ ·
-  真 Chromium 探针 `#tabbusyprobe` 读数 `tabsVScroll=0`（改前 10）。
-  ⚠️ 未做 `npm run dev:host` 真机验收。
+- **最后验证状态**（2026-10-27）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（114 项）·
+  `npm test`（真实宿主）✅ **508 项** · `check-webview-client` ✅ · `check-docs` ✅。
+  ⚠️ 发布前**未做** `npm run dev:host` 真机验收（验收项见「下一步」1）。
 
 ---
 
 ## 当前任务（In Progress）
 
-- **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」第 1 条。
+- **v1.6.0 真机验收（待做）**：`npm run dev:host` 后按「下一步」1 的清单逐条确认；
+  发布前只跑了自动检查。
+- **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」2。
 - **「滚动条到底、消息仍被截断」待复现**（用户 2026-10-26 报，现场已消失）：日志里 2300+ 条
   `scroll#` 全部自洽（`cov=0`、末条底边在输入卡上方 27px），现有判据打不到这种形态。
   **下次出现时先别关面板**，直接读 `~/.vac/vac.log` 抓现场。
@@ -38,11 +38,11 @@
 
 ## 待归档暂存区（仅本轮未归档的完成项）
 
-- （无。本轮成果已写入 `CHANGELOG [1.5.1]`。）
+- （无。v1.6.0 成果已写入 `CHANGELOG [1.6.0]`。）
 
 ## 进行中（半成品 / 未提交）
 
-- （无。本轮改动已随 v1.5.1 发布。）
+- （无。v1.6.0 已提交并发布。）
 
 ## 阻塞 / 待决策（Blockers）
 
@@ -52,20 +52,28 @@
 
 ## 下一步（Next Steps）
 
-1. **P1-1 Codex 真机验证**（最高优先）：`npm run dev:host` → 连 Codex CLI → 发一条会跑命令的消息
+1. **v1.6.0 真机验收（最高优先）**：`npm run dev:host` 后确认：
+   ① tab 右键两条新项；同目录新建落在源会话 cwd；Duplicate 派生成功且历史可见（失败有提示）。
+   ② 设置 → Chat 的默认 Effort / Recently used（3–16）落盘且生效。
+   ③ 单行内选中几个字 → 引用 tag 显示 `文件名:N`，发送后 agent 收到 `#LN`。
+   ④ 地址栏 Times / 自动展开 / Sub-agents / ☰：关=灰无底框，开=变色有底框（两种主题）。
+   ⑤ 模式/模型/Effort/Agent 四个选择器的图标清晰；菜单项两行、选中项打勾；Agent 选择器可切换。
+   ⑥ hover 会话 tab / 目录图标：SessionId 与 State 为灰色，目录提示无 `Dir:` 前缀。
+   ⑦ 设置 → Appearance 的 Markdown style 四档即时生效（editor 档与改动前一致）。
+2. **P1-1 Codex 真机验证**：`npm run dev:host` → 连 Codex CLI → 发一条会跑命令的消息
    （如「列出当前目录文件」），确认：① 工具卡里直接显示命令输出（console 文本），失败时有「Exited with code N」；
    ② 模式 / 模型 / 推理强度选择器可切换；③ 未登录机器上选 API Key → 输入 key → 重启后不再询问；
    ④ `VAC: Log Out of Agent` 后再发消息会重新要求认证；⑤ Dashboard 的 Codex 用量与 `~/.codex/sessions` 对得上；
    ⑥ `vac.agents` 里仍是旧包 `@zed-industries/codex-acp` 时，激活弹迁移提示。
    顺带回归 Claude：Bash 输出、子 agent 嵌套、历史补全（按 kind 改造后）不变。
-2. **v1.4.0 真机验收（M4+M5）**：`npm run dev:host` 后确认：
+3. **v1.4.0 真机验收（M4+M5）**：`npm run dev:host` 后确认：
    ① 齿轮面板：四组、固定尺寸、`+` 紧跟最后一个 tab、齿轮固定右侧；Browse… 弹系统目录选择器；
    ② 设置改动落盘并与 VS Code Settings 同步；子面板里的自定义模型 / Agent JSON 编辑器；
    ③ 地址栏自动展开：新输出展开、历史回放不展开；卡片类型与高度在 **Appearance** 里调（0 = 不限）；
    ④ 中键关闭（运行中弹确认；草稿/待恢复各自语义）；打开面板即连接；首帧 `Starting VAC…`；
    ⑤ v1.4.1 排版：Agent JSON 铺满 + Cancel/Save 右下；Custom models 说明行/表头/Add 右对齐/Done 右下；
       Custom models 与 Agent configuration 的 Edit… 与其它控件右缘对齐。
-3. **其中 M4 遗留项**：
+4. **其中 M4 遗留项**：
    ① 新建草稿页选 `<custom-model>` → 发送 → 模型不再弹回 opus（看日志 `SessionManager: model ... (source)`）；
    ② 会话 tab 右键出现 **Copy Session ID** 且内容正确；
    ③ 关闭窗口再打开 → 恢复卡片能显示 `(VS Code Insiders)` 之类的跨环境标注（用共享 user-data 复现）；
@@ -76,10 +84,10 @@
       **2026-10-26 补充**：这条会话的采样全是 `cov=0`，说明还有第三种形态没被现有判据覆盖
       （`cov` 只比「末条底边 vs 输入卡顶边」，没管表单/权限抽屉）。复现时优先看：末条 `last`/`comp`、
       `#messages` 自己的 rect 与 `window.innerHeight` 的关系、以及抽屉变量（`ev=` / `pv=`）。
-4. **v1.3.1 真机验收（遗留）**：见 `CHANGELOG [1.3.1]` 的 9 条（markdown / Copy / 图标 / 置顶卡 / 历史弹窗 /
+5. **v1.3.1 真机验收（遗留）**：见 `CHANGELOG [1.3.1]` 的 9 条（markdown / Copy / 图标 / 置顶卡 / 历史弹窗 /
    Times / tab 高亮与涟漪）。
-5. **P1-2 宿主实测验收（v1.3.0 遗留）**：Dashboard、聊天面板、树/历史弹窗 Delete、Fork、sub-agent 卡等。
-6. **之后按 ROADMAP**：P1-7 终端与写文件健壮性 → P1-8 连接健壮性 → P1-9 SDK 新更新类型 → P1-3 打包瘦身 → P2-*。
+6. **P1-2 宿主实测验收（v1.3.0 遗留）**：Dashboard、聊天面板、树/历史弹窗 Delete、Fork、sub-agent 卡等。
+7. **之后按 ROADMAP**：P1-7 终端与写文件健壮性 → P1-8 连接健壮性 → P1-9 SDK 新更新类型 → P1-3 打包瘦身 → P2-*。
 
 ---
 

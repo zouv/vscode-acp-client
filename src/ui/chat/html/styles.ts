@@ -88,18 +88,15 @@ export function styles(): string {
     gap: 6px;
     padding: 4px 8px;
     border-bottom: 1px solid var(--vscode-panel-border);
+    position: relative;
   }
   .agent-select {
     flex: 1;
     min-width: 0;
-    background: var(--vscode-dropdown-background);
-    color: var(--vscode-dropdown-foreground);
-    border: 1px solid var(--vscode-dropdown-border);
-    border-radius: 3px;
-    padding: 2px 4px;
-    font-family: inherit;
-    font-size: inherit;
+    max-width: none;
+    justify-content: flex-start;
   }
+  #agentMenu { left: 0; right: auto; min-width: 220px; }
 
   /* [CUSTOM- 待恢复的 tab（本地页，宿主里还没有它）：与草稿同族但**不是**新会话 ——
      用虚一点的名字色 + 一个空心点区分，tooltip 写明 click to open；不可拖拽（顺序由 tabOrder 决定）。 */
@@ -267,6 +264,20 @@ export function styles(): string {
     0% { transform: scale(0.7); opacity: 0.9; }
     100% { transform: scale(1.9); opacity: 0; }
   }
+  /* [CUSTOM- 会话 tab / 目录图标的自绘悬停提示（2026-10-27）：需要分段着色，
+     原生 title 做不到。position: fixed，跟随锚点几何写入 left/top；不拦截鼠标。 */
+  .tab-tip {
+    position: fixed; z-index: 70; max-width: 420px;
+    padding: 5px 8px; border-radius: 3px;
+    background: var(--vscode-editorWidget-background, var(--vscode-dropdown-background));
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+    box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0,0,0,0.3));
+    font-size: 0.88em; line-height: 1.45;
+    white-space: pre-wrap; word-break: break-all;
+    pointer-events: none;
+  }
+  .tab-tip-line.dim { color: var(--vscode-descriptionForeground); }
   /* [CUSTOM- 手工排序的落点指示：目标 tab 的哪一侧会被插进去。
      2px 的竖线用 inset 阴影画（跟着 .tab 的圆角走），拖动中的那个自己淡化 —— 让人看清
      "被搬走的是哪一个"。 */
@@ -1387,6 +1398,54 @@ export function styles(): string {
   .md th, .md td { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
   .bubble a, .md a { color: var(--vscode-textLink-foreground); text-decoration: none; cursor: pointer; }
   .bubble a:hover, .md a:hover { text-decoration: underline; }
+  /* [CUSTOM- Markdown 渲染预设（2026-10-27，设置 → Appearance）。
+     'editor'（默认）= 上面那套「跟随主题变量」的逻辑，不加任何覆盖。
+     其余三套只改排版，不硬编码颜色（仍吃主题 token），所以明暗主题都成立：
+       · github  —— GitHub 风格：宽松行距、标题带下边框、代码块/表格有描边；
+       · compact —— 紧凑：小一号字、收紧段距与列表，适合长对话快速扫读；
+       · reading —— 舒适阅读：大一号字、更大行距与段距。 */
+  body[data-md-style="github"] .md { line-height: 1.65; }
+  body[data-md-style="github"] .md p { margin: 0 0 10px; }
+  body[data-md-style="github"] .md h1, body[data-md-style="github"] .md h2,
+  body[data-md-style="github"] .md h3, body[data-md-style="github"] .md h4,
+  body[data-md-style="github"] .md h5, body[data-md-style="github"] .md h6 {
+    margin: 16px 0 8px; padding-bottom: 3px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+  }
+  body[data-md-style="github"] .md pre {
+    padding: 10px; border-radius: 6px;
+    border: 1px solid var(--vscode-panel-border);
+  }
+  body[data-md-style="github"] .md :not(pre) > code {
+    border: 1px solid var(--vscode-panel-border);
+  }
+  body[data-md-style="github"] .md blockquote { padding-left: 12px; }
+  body[data-md-style="github"] .md th {
+    background: var(--vscode-textCodeBlock-background);
+    font-weight: 600;
+  }
+
+  body[data-md-style="compact"] .md { font-size: 0.92em; line-height: 1.4; }
+  body[data-md-style="compact"] .md p { margin: 0 0 3px; }
+  body[data-md-style="compact"] .md h1, body[data-md-style="compact"] .md h2,
+  body[data-md-style="compact"] .md h3, body[data-md-style="compact"] .md h4,
+  body[data-md-style="compact"] .md h5, body[data-md-style="compact"] .md h6 {
+    margin: 5px 0 2px;
+  }
+  body[data-md-style="compact"] .md ul,
+  body[data-md-style="compact"] .md ol { margin: 2px 0; padding-left: 16px; }
+  body[data-md-style="compact"] .md pre { margin: 3px 0; padding: 5px; }
+  body[data-md-style="compact"] .md th,
+  body[data-md-style="compact"] .md td { padding: 1px 4px; }
+
+  body[data-md-style="reading"] .md { font-size: 1.04em; line-height: 1.75; }
+  body[data-md-style="reading"] .md p { margin: 0 0 11px; }
+  body[data-md-style="reading"] .md h1, body[data-md-style="reading"] .md h2,
+  body[data-md-style="reading"] .md h3, body[data-md-style="reading"] .md h4,
+  body[data-md-style="reading"] .md h5, body[data-md-style="reading"] .md h6 {
+    margin: 14px 0 6px;
+  }
+  body[data-md-style="reading"] .md li { margin: 2px 0; }
   /* GFM 任务列表的勾选态（）：由宿主侧 markdown.ts 的 checkbox
      钩子渲染，白名单里因此不需要 INPUT。 */
   .task-box { font-family: var(--vscode-editor-font-family); opacity: .85; }
@@ -1581,11 +1640,33 @@ export function styles(): string {
   .messages.flat-tools .tool[data-parent-id] { margin-left: 0; }
 
   .nest-toggle {
-    flex: 0 0 auto; padding: 1px 7px; border-radius: 10px; cursor: pointer;
-    background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
-    border: none; font-family: inherit; font-size: 0.82em;
+    flex: 0 0 auto; padding: 2px 7px; border-radius: 3px; cursor: pointer;
+    background: transparent; color: var(--vscode-descriptionForeground);
+    border: 1px solid transparent; font-family: inherit; font-size: 1em; line-height: 1;
   }
-  .nest-toggle.off { opacity: 0.5; }
+  /* [CUSTOM- 地址栏功能按钮统一观感（2026-10-27）：未开启 = 灰色 + 无底框；
+     开启 = 强调色 + 可见底框。Times / 自动展开 / Sub-agents 走同一套 .on/.off，
+     历史 ↺ 是动作（没有开关态），按未开启的样式呈现即可。颜色只用主题 token，
+     侧边栏与编辑区两个面、所有配色主题自动一致。 */
+  .session-header .outline-btn {
+    color: var(--vscode-descriptionForeground);
+    background: transparent; border-color: transparent;
+  }
+  .session-header .outline-btn:hover,
+  .session-header .nest-toggle:hover {
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+    color: var(--vscode-foreground);
+  }
+  .session-header .outline-btn.on,
+  .session-header .nest-toggle.on {
+    background: var(--vscode-list-activeSelectionBackground);
+    color: var(--vscode-list-activeSelectionForeground);
+    border-color: var(--vscode-focusBorder, var(--vscode-panel-border));
+  }
+  .session-header .nest-toggle.off {
+    background: transparent; border-color: transparent;
+  }
+  .nest-toggle.off { opacity: 1; }
   /* [CUSTOM- Times 改成纯图标后是**方块**按钮（文字容量不再存在）：
      只给 #timeToggle 收窄内边距，旁边的 'Sub-agents' 仍是有文字的胶囊。 */
   #timeToggle {
@@ -1823,24 +1904,37 @@ export function styles(): string {
     font-family: inherit; font-size: 0.88em; max-width: 220px;
   }
   .picker-btn:hover { background: var(--vscode-list-hoverBackground); }
+  .picker-icon { display: inline-flex; align-items: center; flex: none; opacity: .8; }
+  .picker-icon svg { display: block; width: 12px; height: 12px; }
   .picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .picker-menu {
     position: absolute; bottom: 100%; left: 0; z-index: 20;
-    min-width: 180px; max-height: 260px; overflow-y: auto;
+    min-width: 240px; max-width: 380px; max-height: 320px; overflow-y: auto;
     background: var(--vscode-dropdown-background);
     border: 1px solid var(--vscode-dropdown-border); border-radius: 3px;
     box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0,0,0,0.3));
     padding: 2px 0; display: none;
   }
   .picker-menu.open { display: block; }
+  .picker-title { padding: 5px 8px 3px; font-size: 0.82em; color: var(--vscode-descriptionForeground); }
   .picker-group { padding: 3px 8px 1px; font-size: 0.82em; color: var(--vscode-descriptionForeground); }
-  .picker-item { padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+  /* [CUSTOM- 选项行是「名称 + 说明」两行（2026-10-27，参考 Claude Code 的 Modes / Model 菜单）：
+     名称正常字号、说明小号次要色；选中项右侧一枚对勾。flex 布局让长说明自然折行。 */
+  .picker-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 5px 8px; cursor: pointer; white-space: normal; text-align: left;
+  }
+  .picker-item-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
   .picker-item:hover { background: var(--vscode-list-hoverBackground); }
   .picker-item.active { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+  .picker-item.active .picker-item-desc { color: inherit; opacity: .85; }
+  .picker-check { flex: none; margin-left: auto; display: inline-flex; align-items: center; opacity: .9; }
+  .picker-check svg { display: block; }
   /* [CUSTOM- '+' 菜单里灰置的项（已有会话的 Workspace directories）。 */
   .picker-item:disabled { opacity: 0.45; cursor: default; }
-  /* [CUSTOM- '+' 菜单项：图标与文字之间留一点间距（图标是 .chip-icon 12px inline-flex）。 */
-  .picker-item .add-menu-label { margin-left: 6px; }
+  /* [CUSTOM- '+' 菜单项：图标与文字之间留一点间距（图标是 .chip-icon 12px inline-flex）。
+     2026-10-27 起 .picker-item 已是 flex + gap: 8px，这里不再额外加 margin。 */
+  .picker-item .add-menu-label { margin-left: 0; }
   /* [CUSTOM- 历史列表的目录过滤 chip + 菜单：**复用** composer 那套
      .picker-btn / .picker-menu / .picker-item（同一个"选一个值"的控件，观感应当一致），
      只补三件它没有的东西：
@@ -1864,7 +1958,7 @@ export function styles(): string {
   .filter-icon svg { display: block; }
   .filter-caret { flex: none; opacity: .7; }
   .filter-item { display: flex; align-items: center; gap: 8px; }
-  .filter-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .filter-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .picker-count { flex: none; opacity: .7; font-size: 0.9em; }
 
   .attachments { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }

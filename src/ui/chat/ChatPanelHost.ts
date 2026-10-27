@@ -277,6 +277,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // [CUSTOM- 每个 agent 的默认模型（设置面板）也只在**新建**会话时套用；
   // 与 modeApply 同一形态：草稿页的显式选择要排在它之后。
   private readonly modelApply: Map<string, Promise<void>> = new Map();
+  // [CUSTOM- 每个 agent 的默认推理强度（设置面板）：与 modelApply 同一形态，
+  // 但它排在默认模型之后（模型切换可能级联出新的 effort 候选）。
+  private readonly effortApply: Map<string, Promise<void>> = new Map();
 
   // [CUSTOM- 轮次之外还在干活的后台子任务（见 noteBackgroundTask）。
   // 存在的理由：`running` 原本只看"轮次请求还没返回"，而 Claude Code 的后台子任务（Task 工具
@@ -384,7 +387,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         const applied = this.applyRememberedMode(sessionId);
         this.modeApply.set(sessionId, applied);
         // [CUSTOM- 默认模型（设置面板）同样只套用到新建会话；草稿页的选择排在它后面。
-        this.modelApply.set(sessionId, this.applyRememberedModel(sessionId));
+        const model = this.applyRememberedModel(sessionId);
+        this.modelApply.set(sessionId, model);
+        // [CUSTOM- 默认推理强度排在默认模型之后：模型切换可能级联出新的 effort 候选，
+        // 先让模型落定、再套用一个仍然有效的值。草稿页的显式选择同样排在它们之后。
+        this.effortApply.set(sessionId, model.then(() => this.applyRememberedEffort(sessionId)));
       }
     });
     on('session-closed', (sessionId: string, _agentName: string, reason: CloseReason) => {
@@ -413,6 +420,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // [CUSTOM- …and a mode application that never got awaited.
       this.modeApply.delete(sessionId);
       this.modelApply.delete(sessionId);
+      this.effortApply.delete(sessionId);
       // [CUSTOM- …and any wait on a background task of this session.
       this.endBackgroundTask(sessionId, 'closed');
       // [CUSTOM- Session ids are never reused: drop the title bookkeeping too.
@@ -483,6 +491,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // [CUSTOM- 设置面板里的配置项（自动批准 / 协议日志 / 默认目录）也可能在
         // VS Code 的 Settings UI 里被改：面板上的控件不能显示过期值。
         if (e.affectsConfiguration('vac')) { this.postSettings(); }
+        if (e.affectsConfiguration('vac.agents')) {
+          this.agentKindCache.clear();
+          this.refreshSessions();
+        }
       }),
     );
     // [CUSTOM- 编辑器里"当前打开的文件/选区"→ 输入框的引用栏（见 pushActiveFile）。
@@ -868,6 +880,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         const inputMaxHeight = (msg as { inputMaxHeight?: unknown }).inputMaxHeight;
         const sendKey = (msg as { sendKey?: unknown }).sendKey;
         const defaultModelByAgent = (msg as { defaultModelByAgent?: unknown }).defaultModelByAgent;
+        const defaultEffortByAgent = (msg as { defaultEffortByAgent?: unknown }).defaultEffortByAgent;
         const next: UiPrefs = {
           outlineMode: mode === undefined
             ? previous.outlineMode
@@ -920,6 +933,17 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           ? previous.defaultModelByAgent
           : sanitizeStringMap(defaultModelByAgent);
         if (models !== undefined) { next.defaultModelByAgent = models; }
+        const efforts = defaultEffortByAgent === undefined
+          ? previous.defaultEffortByAgent
+          : sanitizeStringMap(defaultEffortByAgent);
+        if (efforts !== undefined) { next.defaultEffortByAgent = efforts; }
+        const recentLimit = (msg as { recentDirectoryLimit?: unknown }).recentDirectoryLimit;
+        if (recentLimit !== undefined) {
+          next.recentDirectoryLimit = clampNumber(recentLimit, 3, 16,
+            ChatPanelHost.DEFAULT_RECENT_DIRECTORIES);
+        }
+        const markdownStyle = (msg as { markdownStyle?: unknown }).markdownStyle;
+        if (markdownStyle !== undefined) { next.markdownStyle = resolveMarkdownStyle(markdownStyle); }
         this.uiPrefs = next;
         this.globalState?.update(UI_PREFS_KEY, this.uiPrefs);
         // [CUSTOM- 另外那个面（侧边栏 / 编辑区）也要跟着换序，否则它下次被重开
@@ -1018,6 +1042,32 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         const messageId = entry.kind === 'assistant' ? entry.messageId : undefined;
         log(`${LOG_PREFIX}: fork session ${sessionId} at entry ${entryId} (messageId=${messageId ?? 'end'})`);
         void this.sessionManager.forkSession(agentName, sessionId, messageId ? { messageId } : {})
+          .then(() => this.refreshSessions())
+          .catch(e => this.reportError(sessionId, e));
+        return;
+      }
+      // [CUSTOM- 会话 tab 右键：在同一个目录里再开一个新会话（目录取源会话的，
+      // 额外根目录也一并继承）。新会话照常套用记住的模式/默认模型/默认强度。
+      case 'newSessionInDirectory': {
+        const source = sessionOf(this.sessionManager, sessionId);
+        if (!source) { return; }
+        log(`${LOG_PREFIX}: new session beside ${sessionId} in ${source.cwd} (agent ${source.agentName})`);
+        void this.sessionManager.createSession(source.agentName, {
+          cwd: source.cwd,
+          additionalDirectories: source.additionalDirectories,
+          focus: true,
+        })
+          .then(() => this.refreshSessions())
+          .catch(e => this.reportError(sessionId, e));
+        return;
+      }
+      // [CUSTOM- 复制会话 = 在末尾 fork（不带 messageId）：新会话继承源会话的
+      // 上下文与消息记录，随后由 `openExistingSession` 重放并聚焦。
+      case 'duplicateSession': {
+        const source = sessionOf(this.sessionManager, sessionId);
+        if (!source) { return; }
+        log(`${LOG_PREFIX}: duplicating session ${sessionId} (agent ${source.agentName})`);
+        void this.sessionManager.forkSession(source.agentName, sessionId)
           .then(() => this.refreshSessions())
           .catch(e => this.reportError(sessionId, e));
         return;
@@ -2772,8 +2822,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   // --- Draft page: directory choices + create-on-first-send (058) ----------
 
-  /** How many recent directories the picker offers (keeps the drawer scannable). */
-  private static readonly MAX_RECENT_DIRECTORIES = 8;
+  /** How many recent directories the picker offers (user-configurable; keeps the drawer scannable). */
+  private static readonly DEFAULT_RECENT_DIRECTORIES = 8;
+
+  private recentLimit(): number {
+    return clampNumber(this.uiPrefs?.recentDirectoryLimit, 3, 16,
+      ChatPanelHost.DEFAULT_RECENT_DIRECTORIES);
+  }
 
   // 草稿页的输入卡要"显示完整"（模式/模型/命令）。
   // 数据只能来自**该 agent 上一次会话**：模式/模型/可用命令在 ACP 里都是会话级的，而
@@ -2936,6 +2991,46 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     }
   }
 
+  /**
+   * [CUSTOM- 把设置面板里的「默认推理强度」套用到新建会话（2026-10-27）。
+   * 推理强度在 ACP 里就是 category === 'thought_level' 的 config option
+   * （Claude 的 Effort / Codex 的 reasoning_effort 都是这个类目），所以与默认模型同一组门槛：
+   * 选项还在、值仍是候选、相同就跳过；失败只记日志，不打扰用户。
+   */
+  private async applyRememberedEffort(sessionId: string): Promise<void> {
+    const session = sessionOf(this.sessionManager, sessionId);
+    if (!session) { return; }
+    const effort = this.uiPrefs?.defaultEffortByAgent?.[session.agentName];
+    if (!effort) { return; }
+    const option = (session.configOptions ?? []).find(
+      o => (o as { category?: string }).category === 'thought_level',
+    ) as { id?: string; currentValue?: unknown; options?: unknown } | undefined;
+    if (!option || typeof option.id !== 'string') {
+      log(`${LOG_PREFIX}: default effort ${effort} is not offered by ${sessionId} (agent ${session.agentName}); skipped`);
+      return;
+    }
+    if (String(option.currentValue ?? '') === effort) { return; }
+    if (!selectValues(option as SessionConfigOption).includes(effort)) {
+      log(`${LOG_PREFIX}: default effort ${effort} is no longer a candidate; skipped`);
+      return;
+    }
+    try {
+      await this.sessionManager.setConfigOption(sessionId, option.id, effort);
+      const state = this.choiceState(sessionId);
+      if (state) { this.choices.set(sessionId, state); }
+      this.pushMeta(sessionId);
+      log(`${LOG_PREFIX}: applied default effort ${option.id}=${effort} to ${sessionId}`);
+    } catch (e: any) {
+      log(`${LOG_PREFIX}: applying the default effort failed (ignored): ${e?.message ?? e}`);
+    }
+  }
+
+  private async awaitEffortApply(sessionId: string): Promise<void> {
+    const pending = this.effortApply.get(sessionId);
+    this.effortApply.delete(sessionId);
+    if (pending) { await pending; }
+  }
+
   private async awaitModelApply(sessionId: string): Promise<void> {
     const pending = this.modelApply.get(sessionId);
     this.modelApply.delete(sessionId);
@@ -2994,11 +3089,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    */
   private async recentDirectories(agent: string | null): Promise<string[]> {
     if (!agent) { return []; }
+    const limit = this.recentLimit();
     const merged: string[] = [];
     const push = (candidate: unknown): void => {
       if (typeof candidate !== 'string' || candidate.length === 0) { return; }
       if (merged.includes(candidate)) { return; }
-      if (merged.length >= ChatPanelHost.MAX_RECENT_DIRECTORIES) { return; }
+      if (merged.length >= limit) { return; }
       merged.push(candidate);
     };
 
@@ -3094,6 +3190,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       await this.awaitModeApply(session.sessionId);
       // [CUSTOM- 默认模型也要先落地，避免和草稿页的显式模型选择抢同一条连接（后到的赢）。
       await this.awaitModelApply(session.sessionId);
+      // [CUSTOM- 默认推理强度排在默认模型之后（见 session-created 那处注释）。
+      await this.awaitEffortApply(session.sessionId);
       await this.applyDraftSelections(session, selections);
       this.post({ type: 'draftResolved', draftId, sessionId: session.sessionId }, to);
       // [CUSTOM- 草稿页攒的附件：会话已经有了，**走与普通附件完全相同的那条路**
@@ -3405,7 +3503,14 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           { value: 'ctrlEnter', label: 'Ctrl/Cmd+Enter' },
         ],
       },
-      ...this.defaultModelItems(prefs),
+      {
+        key: 'panel.recentDirectoryLimit', group: 'chat', type: 'number',
+        label: 'Recently used directories',
+        description: 'How many recent directories the picker offers (3–16).',
+        value: prefs.recentDirectoryLimit ?? ChatPanelHost.DEFAULT_RECENT_DIRECTORIES,
+        min: 3, max: 16,
+      },
+      ...this.defaultAgentItems(prefs),
       {
         key: 'vac.autoApprovePermissions', group: 'chat', type: 'select',
         label: 'Permission requests',
@@ -3422,6 +3527,18 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         label: 'Show record times',
         description: 'Default for sessions that have no per-session value.',
         value: prefs.timesDefault === true,
+      },
+      {
+        key: 'panel.markdownStyle', group: 'appearance', type: 'select',
+        label: 'Markdown style',
+        description: 'How rendered messages are typeset. “Follow editor” uses the current theme as-is.',
+        value: resolveMarkdownStyle(prefs.markdownStyle),
+        options: [
+          { value: 'editor', label: 'Follow editor' },
+          { value: 'github', label: 'GitHub' },
+          { value: 'compact', label: 'Compact' },
+          { value: 'reading', label: 'Comfortable reading' },
+        ],
       },
       {
         key: 'panel.outlineMode', group: 'appearance', type: 'select',
@@ -3524,36 +3641,64 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     return this.storageRoot ? join(this.storageRoot, 'agents') : undefined;
   }
 
-  /** [CUSTOM- 每个 agent 一行「默认模型」：有候选就下拉，没候选就退化成文本输入。 */
-  private defaultModelItems(prefs: UiPrefs): SettingItem[] {
-    return getAgentNames().map((agent): SettingItem => {
-      const key = `panel.defaultModel.${agent}`;
-      const value = prefs.defaultModelByAgent?.[agent] ?? '';
-      const choices = this.modelChoicesFor(agent);
-      return choices
+  /**
+   * [CUSTOM- 每个 agent 两行「默认模型 / 默认推理强度」（新建会话时套用）：
+   * 有候选就下拉，没候选就退化成文本输入（值在应用时仍会逐项校验）。
+   */
+  private defaultAgentItems(prefs: UiPrefs): SettingItem[] {
+    const rows: SettingItem[] = [];
+    for (const agent of getAgentNames()) {
+      const modelKey = `panel.defaultModel.${agent}`;
+      const modelValue = prefs.defaultModelByAgent?.[agent] ?? '';
+      const modelChoices = this.agentChoicesFor(agent, 'model');
+      rows.push(modelChoices
         ? {
-          key, group: 'chat', type: 'select', indent: true,
+          key: modelKey, group: 'chat', type: 'select', indent: true,
           label: `${agent} default model`,
-          value,
-          options: choices,
+          value: modelValue,
+          options: modelChoices,
         }
         : {
-          key, group: 'chat', type: 'text', indent: true,
+          key: modelKey, group: 'chat', type: 'text', indent: true,
           label: `${agent} default model`,
           description: 'Empty = the agent default. Enter a model id.',
-          value,
-        };
-    });
+          value: modelValue,
+        });
+      const effortKey = `panel.defaultEffort.${agent}`;
+      const effortValue = prefs.defaultEffortByAgent?.[agent] ?? '';
+      const effortChoices = this.agentChoicesFor(agent, 'thought_level');
+      rows.push(effortChoices
+        ? {
+          key: effortKey, group: 'chat', type: 'select', indent: true,
+          label: `${agent} default effort`,
+          value: effortValue,
+          options: effortChoices,
+        }
+        : {
+          key: effortKey, group: 'chat', type: 'text', indent: true,
+          label: `${agent} default effort`,
+          description: 'Empty = the agent default. Enter an effort id.',
+          value: effortValue,
+        });
+    }
+    return rows;
   }
 
-  private modelChoicesFor(agent: string): SettingOption[] | null {
+  /**
+   * [CUSTOM- 某个 agent 最后一次见到的某类配置项的候选值（用于设置面板的下拉）。
+   * `category` 是 ACP 的类目：`model` / `thought_level` / `mode`…
+   * 自定义模型（`vac.customModels`）不在 agent 的候选里，但用户显式配置过，所以一并列出。
+   */
+  private agentChoicesFor(agent: string, category: string): SettingOption[] | null {
     const snapshot = this.draftOptions.get(agent);
     const option = (snapshot?.configOptions ?? []).find(
-      o => (o as { category?: string }).category === 'model',
+      o => (o as { category?: string }).category === category,
     ) as { options?: unknown } | undefined;
     if (!option || !Array.isArray(option.options)) { return null; }
     const names = new Map<string, string>();
-    for (const model of this.customModels()) { names.set(model.modelId, model.name || model.modelId); }
+    if (category === 'model') {
+      for (const model of this.customModels()) { names.set(model.modelId, model.name || model.modelId); }
+    }
     const out: SettingOption[] = [{ value: '', label: 'Agent default' }];
     for (const entry of option.options as Array<{ value?: unknown; name?: unknown; options?: unknown }>) {
       if (entry && Array.isArray(entry.options)) {
@@ -3627,6 +3772,14 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       case 'panel.inputMaxHeight':
         this.patchUiPrefs({ inputMaxHeight: clampNumber(value, 80, 800, 320) });
         break;
+      case 'panel.recentDirectoryLimit':
+        this.patchUiPrefs({
+          recentDirectoryLimit: clampNumber(value, 3, 16, ChatPanelHost.DEFAULT_RECENT_DIRECTORIES),
+        });
+        break;
+      case 'panel.markdownStyle':
+        this.patchUiPrefs({ markdownStyle: resolveMarkdownStyle(value) });
+        break;
       case 'vac.customModels':
         await config.update('customModels', normalizeCustomModels(value), global);
         break;
@@ -3645,13 +3798,22 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         break;
       }
       default:
-        // [CUSTOM- 每个 agent 的默认模型走同一族 key（`panel.defaultModel.<agent>`）。
+        // [CUSTOM- 每个 agent 的默认模型/默认推理强度走同一族 key
+        // （`panel.defaultModel.<agent>` / `panel.defaultEffort.<agent>`）。
         if (key.startsWith('panel.defaultModel.')) {
           const agent = key.slice('panel.defaultModel.'.length);
           const map = { ...(this.uiPrefs?.defaultModelByAgent ?? {}) };
           const modelId = typeof value === 'string' ? value.trim() : '';
           if (modelId) { map[agent] = modelId; } else { delete map[agent]; }
           this.patchUiPrefs({ defaultModelByAgent: sanitizeStringMap(map) });
+          break;
+        }
+        if (key.startsWith('panel.defaultEffort.')) {
+          const agent = key.slice('panel.defaultEffort.'.length);
+          const map = { ...(this.uiPrefs?.defaultEffortByAgent ?? {}) };
+          const effortId = typeof value === 'string' ? value.trim() : '';
+          if (effortId) { map[agent] = effortId; } else { delete map[agent]; }
+          this.patchUiPrefs({ defaultEffortByAgent: sanitizeStringMap(map) });
           break;
         }
         log(`${LOG_PREFIX}: unknown setting ${key}`);
@@ -3848,7 +4010,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // `unread`.
     const agentConnected = this.panelAgentConnected();
     const signature = `conn:${agentConnected ? 1 : 0}\n` + sessions
-      .map(s => `${s.sessionId}|${s.agentName}|${s.title ?? ''}|${s.loading ? 1 : 0}|${s.running ? 1 : 0}|${s.unread ? 1 : 0}|${s.waiting ? 1 : 0}`)
+      .map(s => `${s.sessionId}|${s.agentName}|${s.agentKind ?? ''}|${s.title ?? ''}|${s.loading ? 1 : 0}|${s.running ? 1 : 0}|${s.unread ? 1 : 0}|${s.waiting ? 1 : 0}`)
       .join('\n');
     if (signature === this.lastSessionsSignature) { return; }
     this.lastSessionsSignature = signature;
@@ -3896,7 +4058,20 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // waiting" (pitfalls #19).
       waiting: (this.permissionBridge?.hasPendingFor(session.sessionId) ?? false)
         || (this.elicitationBridge?.hasPendingFor(session.sessionId) ?? false),
+      // [CUSTOM- agent 选择器的第二行说明用它（2026-10-27）。
+      agentKind: this.agentKindOf(session.agentName),
     };
+  }
+
+  /** [CUSTOM- summary 会在每条流式 chunk 上重建，所以 agent kind 按名字缓存。 */
+  private readonly agentKindCache = new Map<string, string>();
+
+  private agentKindOf(agentName: string): string {
+    const cached = this.agentKindCache.get(agentName);
+    if (cached) { return cached; }
+    const kind = getAgentKind(agentName);
+    this.agentKindCache.set(agentName, kind);
+    return kind;
   }
 
   /**
@@ -4249,6 +4424,11 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.max(min, Math.min(max, Math.round(n)));
 }
 
+/** [CUSTOM- Markdown 渲染预设的合法值（设置面板与 setUiPref 共用一处白名单）。 */
+export function resolveMarkdownStyle(value: unknown): 'editor' | 'github' | 'compact' | 'reading' {
+  return value === 'github' || value === 'compact' || value === 'reading' ? value : 'editor';
+}
+
 /** agent → 默认模型 id 的小表（键/值都有长度上限，最多 20 条）。 */
 function sanitizeStringMap(value: unknown): Record<string, string> {
   const out: Record<string, string> = {};
@@ -4386,11 +4566,13 @@ export interface ActiveEditorLike {
 }
 
 /**
- * [CUSTOM- 编辑器里当前打开的文件 + 多行选区的行区间（1 基、含两端），喂给输入框的引用栏。
+ * [CUSTOM- 编辑器里当前打开的文件 + 选区的行区间（1 基、含两端），喂给输入框的引用栏。
  *
  * **行号是 0 基、界面上是 1 基**：这里统一换成 1 基。选区若停在下一行的行首（character 0），那一行
  * 不算选中 —— 与编辑器自己的显示一致（否则从第 3 行拖到第 5 行开头会显示成 3-5，而编辑器显示 3-4）。
- * 单行选区不带区间（引用整个文件）；没有可见编辑器、或不是本地文件（`untitled:` / 虚拟文档）时返回 null。
+ * **单行选区也算行选择**（2026-10-27 用户报：选中一行里的几个字时识别不出行号）：返回
+ * `lineStart === lineEnd` 的单行区间，而不是退化成整个文件。只有**空选区**（光标停留）才引用整个文件。
+ * 没有可见编辑器、或不是本地文件（`untitled:` / 虚拟文档）时返回 null。
  */
 export function readActiveFileFrom(
   editor: ActiveEditorLike | undefined,
@@ -4402,7 +4584,6 @@ export function readActiveFileFrom(
   if (!sel || sel.isEmpty) { return { path, name }; }
   let endLine = sel.end.line;
   if (sel.end.character === 0 && endLine > sel.start.line) { endLine -= 1; }
-  if (endLine <= sel.start.line) { return { path, name }; }
   return { path, name, lineStart: sel.start.line + 1, lineEnd: endLine + 1 };
 }
 

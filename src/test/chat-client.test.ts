@@ -952,21 +952,22 @@ suite('chat client logic: tab strip (stub DOM)', () => {
   // the per-tab × was its own tab stop (defeating the roving tabindex), and the header's
   // directory button stayed visible — and clickable — with nothing focused.
 
-  function tabStrip(): { NS: Record<string, any>; els: Record<string, StubNode> } {
+  function tabStrip(): { NS: Record<string, any>; els: Record<string, StubNode>; doc: Record<string, any> } {
     const els: Record<string, StubNode> = {
       tabStrip: new StubNode('div'),
       tabs: new StubNode('div'),
       agentBar: new StubNode('div'),
-      agentSelect: new StubNode('select'),
+      agentSelect: new StubNode('button'),
+      agentMenu: new StubNode('div'),
       cwdBtn: new StubNode('button'),
       newTab: new StubNode('button'),
     };
     // [CUSTOM- 落点监听挂在条带上，所以桩里 #tabs 必须是它的子节点 ——
     // 否则 stripEl.querySelectorAll('.tab') 一个都找不到（桩的 dispatch 也不冒泡）。
     els.tabStrip.appendChild(els.tabs);
-    const { NS } = loadClient(els);
+    const { NS, doc } = loadClient(els);
     NS.tabs.init();
-    return { NS, els };
+    return { NS, els, doc };
   }
 
   const summary = (id: string) => ({
@@ -1007,7 +1008,16 @@ suite('chat client logic: tab strip (stub DOM)', () => {
   // What a stub DOM CANNOT check is the layout itself (9.1px vs 7px, one row vs a 2-column
   // grid): that is `scripts/preview-records.mjs` #tabsprobe's job — see `letterRows`.
   test('the directory badge declares its letter count and shows the path on hover', () => {
-    const { NS, els } = tabStrip();
+    const { NS, els, doc } = tabStrip();
+    const tipFor = (dot: StubNode) => {
+      dot.parentNode!.dispatch('mouseover', { target: dot });
+      const tip = (doc.body as StubNode).querySelector('.tab-tip')!;
+      assert.ok(tip, 'hover creates the tooltip');
+      return {
+        lines: tip.childNodes.map(n => n.textContent),
+        dims: tip.childNodes.map(n => n.className.includes('dim')),
+      };
+    };
     const dotFor = (cwd: string) => {
       NS.tabs.setSessions([{ ...summary('s1'), cwd }]);
       return els.tabs.querySelector('.tab-dot') as StubNode;
@@ -1016,7 +1026,10 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     const one = dotFor('/work/pavilion');
     assert.strictEqual(one.textContent, 'P');
     assert.strictEqual(one.getAttribute('data-len'), '1');
-    assert.strictEqual(one.title, 'Dir: /work/pavilion\nState: Idle');
+    // [CUSTOM- 2026-10-27：路径不再带 'Dir:' 前缀；State 一行用灰色（dim）。
+    assert.deepStrictEqual(tipFor(one), {
+      lines: ['/work/pavilion', 'State: Idle'], dims: [false, true],
+    });
 
     const two = dotFor('/work/alpha-beta');
     assert.strictEqual(two.textContent, 'AB');
@@ -1037,7 +1050,7 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     const none = dotFor('');
     assert.strictEqual(none.textContent, '');
     assert.strictEqual(none.getAttribute('data-len'), null);
-    assert.strictEqual(none.title, 'State: Idle');
+    assert.deepStrictEqual(tipFor(none), { lines: ['State: Idle'], dims: [true] });
   });
 
   // [CUSTOM-229 The colour says the state, but a colour has no name and the strip has no
@@ -1045,20 +1058,34 @@ suite('chat client logic: tab strip (stub DOM)', () => {
   // agree with dotClass line for line: if the two ever drift, the colour and the text
   // contradict each other about the same session.
   test('the badge tooltip names the state, ranked like the colour', () => {
-    const { NS, els } = tabStrip();
-    const dotFor = (over: Record<string, unknown>) => {
+    const { NS, els, doc } = tabStrip();
+    const stateFor = (over: Record<string, unknown>) => {
       NS.tabs.setSessions([{ ...summary('s1'), cwd: '/work/pavilion', ...over }]);
-      return els.tabs.querySelector('.tab-dot') as StubNode;
+      const dot = els.tabs.querySelector('.tab-dot') as StubNode;
+      dot.parentNode!.dispatch('mouseover', { target: dot });
+      const tip = (doc.body as StubNode).querySelector('.tab-tip')!;
+      return tip.childNodes.map(n => n.textContent).join(' / ');
     };
-    assert.strictEqual(dotFor({}).title, 'Dir: /work/pavilion\nState: Idle');
-    assert.strictEqual(dotFor({ running: true }).title, 'Dir: /work/pavilion\nState: Turn in progress');
+    assert.strictEqual(stateFor({}), '/work/pavilion / State: Idle');
+    assert.strictEqual(stateFor({ running: true }), '/work/pavilion / State: Turn in progress');
     // Waiting outranks running: the turn is alive either way, and only this one is stuck on
     // the reader — the colour ranks them the same way.
     assert.strictEqual(
-      dotFor({ running: true, waiting: true }).title,
-      'Dir: /work/pavilion\nState: Waiting for your answer');
-    assert.strictEqual(dotFor({ loading: true }).title, 'Dir: /work/pavilion\nState: Loading history');
-    assert.strictEqual(dotFor({ unread: true }).title, 'Dir: /work/pavilion\nState: New output in the background');
+      stateFor({ running: true, waiting: true }),
+      '/work/pavilion / State: Waiting for your answer');
+    assert.strictEqual(stateFor({ loading: true }), '/work/pavilion / State: Loading history');
+    assert.strictEqual(stateFor({ unread: true }), '/work/pavilion / State: New output in the background');
+  });
+
+  test('session tab tooltip: the label is normal, the session id is grey', () => {
+    const { NS, els, doc } = tabStrip();
+    NS.tabs.setSessions([{ ...summary('s1'), title: 'alpha' }]);
+    const tab = els.tabs.querySelector('.tab') as StubNode;
+    const label = tab.querySelector('.tab-label')!.textContent;
+    tab.dispatch('mouseover', { target: tab });
+    const tip = (doc.body as StubNode).querySelector('.tab-tip')!;
+    assert.deepStrictEqual(tip.childNodes.map(n => n.textContent), [label, 's1']);
+    assert.deepStrictEqual(tip.childNodes.map(n => n.className.includes('dim')), [false, true]);
   });
 
   test('the close button is out of the tab order; exactly one tab is tabbable', () => {
@@ -1378,7 +1405,7 @@ suite('chat client logic: Times 开关按会话记忆 (stub DOM, )', () => {
     NS.times.setFocus('A');
     els.timeToggle.dispatch('click', {});
     assert.strictEqual(isOn(els), true, 'the class IS the mechanism');
-    assert.strictEqual(els.timeToggle.className, 'nest-toggle', 'and the button does not read as off');
+    assert.strictEqual(els.timeToggle.className, 'nest-toggle on', 'and the button reads as on');
     assert.deepStrictEqual(setUiPrefPosts(posted), [{
       type: 'setUiPref', timesBySession: { A: true }, timesDefault: true,
     }], 'one write, both halves of the state');
@@ -2606,7 +2633,8 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
     docListeners: Record<string, Array<(event: any) => void>>,
   ): void {
     dispatchClick(pickers.querySelector('.picker-btn')!, docListeners);
-    const item = pickers.querySelectorAll('.picker-item').find(i => i.textContent === label);
+    const item = pickers.querySelectorAll('.picker-item').find(i =>
+      (i.querySelector('.picker-item-label') ?? i).textContent === label);
     assert.ok(item, `the menu must offer "${label}"`);
     dispatchClick(item!, docListeners);
   }
@@ -5408,8 +5436,10 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     assert.deepStrictEqual(posted, [{ type: 'copy', text: 'D:\\\\work\\\\demo' }]);
   });
 
-  test('会话 tab：Close / Rename / Copy Session ID（初值取行上看得见的标签）；草稿 tab 只给 Close', () => {
+  test('会话 tab：同目录新建 / 复制会话 / Close / Rename / Copy Session ID；草稿 tab 只给 Close', () => {
     const { NS, posted } = withEntry();
+    // 这两条是会话作用域消息（宿主按 sessionId 校验后处理），桩里也要接住。
+    NS.bridge.postForSession = (message: Record<string, unknown>) => { posted.push(message); };
     const tab = new StubNode('button');
     tab.className = 'tab';
     tab.setAttribute('data-session-id', 's1');
@@ -5419,18 +5449,25 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     tab.appendChild(tabLabel);
 
     const items = NS.contextMenu.itemsFor(tabLabel) as Array<{ label: string; run: () => void }>;
-    assert.strictEqual(labels(items), 'Close / Rename / Copy Session ID');
+    assert.strictEqual(labels(items),
+      'New Session in This Folder / Duplicate / Close / Rename / Copy Session ID');
+    items[0].run();
+    assert.deepStrictEqual(posted[0], { type: 'newSessionInDirectory', sessionId: 's1' },
+      '新会话沿用这个 tab 的目录（目录由宿主从源会话取）');
     items[1].run();
-    assert.deepStrictEqual(posted, [{ type: 'renameSession', sessionId: 's1', currentTitle: 'alpha one' }],
+    assert.deepStrictEqual(posted[1], { type: 'duplicateSession', sessionId: 's1' },
+      '复制会话走 session/fork（保留上下文与消息记录）');
+    items[3].run();
+    assert.deepStrictEqual(posted[2], { type: 'renameSession', sessionId: 's1', currentTitle: 'alpha one' },
       '改名的初值就是标签上看得见的标题（与用户看到的一致）');
-    items[2].run();
-    assert.deepStrictEqual(posted[1], { type: 'copy', text: 's1' }, '复制的是数据上的 sessionId，不是标签文字');
+    items[4].run();
+    assert.deepStrictEqual(posted[3], { type: 'copy', text: 's1' }, '复制的是数据上的 sessionId，不是标签文字');
 
     const draft = new StubNode('button');
     draft.className = 'tab tab-draft';
     draft.setAttribute('data-draft-id', 'd1');
     const draftItems = NS.contextMenu.itemsFor(draft) as Array<{ label: string }>;
-    assert.strictEqual(labels(draftItems), 'Close', '草稿没有会话可改名/复制');
+    assert.strictEqual(labels(draftItems), 'Close', '草稿没有会话可新建/复制/改名');
   });
 
   test('历史列表行：右键也给 Archive / Delete / Rename（键盘用户的入口）', () => {
@@ -5831,7 +5868,7 @@ suite('chat client logic: 会话恢复（stub DOM, ）', () => {
       agentBar: new StubNode('div'), agentSelect: new StubNode('select'), cwdBtn: new StubNode('button'),
     };
     els.tabStrip.appendChild(els.tabs);
-    const { NS } = loadClient(els);
+    const { NS, doc } = loadClient(els);
     const sent: Array<Record<string, unknown>> = [];
     NS.bridge.post = (m: Record<string, unknown>) => { sent.push(m); };
     NS.tabs.init();
@@ -5845,7 +5882,10 @@ suite('chat client logic: 会话恢复（stub DOM, ）', () => {
     assert.deepStrictEqual(tabs.map(t => t.getAttribute('data-restore-id')), ['bbbbbbbb-2', 'aaaaaaaa-1'],
       '与真会话同一张 tabOrder ⇒ 恢复出原来的位置');
     assert.strictEqual(tabs[0].querySelector('.tab-label')!.textContent, 'Commit both repos');
-    assert.ok(String(tabs[0].title).includes('not loaded yet'), 'tooltip 说明它还没加载');
+    tabs[0].dispatch('mouseover', { target: tabs[0] });
+    const tip = (doc.body as StubNode).querySelector('.tab-tip')!;
+    assert.ok(tip.childNodes.map(n => n.textContent).some(t => t.includes('not loaded yet')),
+      'tooltip 说明它还没加载');
     assert.strictEqual(tabs[0].getAttribute('draggable'), null, '待恢复的不可拖拽（顺序已由 tabOrder 决定）');
 
     dispatchClick(tabs[1], {});

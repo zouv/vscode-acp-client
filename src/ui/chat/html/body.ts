@@ -17,7 +17,11 @@ import { buildStamp } from '../../../utils/BuildInfo';
 export function body(surface: SurfaceKey = 'view'): string {
   return `<body class="surface-${surface}" data-vac-build="${buildStamp()}" data-composer="off">
   <div id="agentBar" class="agent-bar" hidden>
-    <select id="agentSelect" class="agent-select" aria-label="Focused agent"></select>
+    <!-- [CUSTOM- Agent 选择器从原生 <select> 换成与输入卡同一套 picker（2026-10-27）：
+         原生下拉放不下「名称 + 说明」两行，也没有图标。菜单在 tabs.ts 里渲染。 -->
+    <button id="agentSelect" class="agent-select picker-btn" type="button"
+            aria-label="Focused agent" aria-haspopup="listbox"></button>
+    <div id="agentMenu" class="picker-menu down agent-menu" role="listbox"></div>
   </div>
 
   <div id="tabStrip" class="tab-strip">

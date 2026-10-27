@@ -55,7 +55,7 @@ export const autoExpandClient = `
       NS.transcriptView.setAutoExpand(on, kinds);
     }
     if (toggleEl) {
-      toggleEl.className = on ? 'nest-toggle' : 'nest-toggle off';
+      toggleEl.className = on ? 'nest-toggle on' : 'nest-toggle off';
       toggleEl.title = on
         ? 'Stop expanding cards as new output arrives'
         : 'Expand cards as new output arrives';

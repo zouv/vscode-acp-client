@@ -417,7 +417,8 @@ chip 加 —— 真链接给代码图标会误导）。实测：`caretTop 85 / c
 - **点 `×`**：会话页 `detachFile`；草稿页就地删本地那份。
 - **tag 本体可点**（`data-path` → 既有的 `openFile` 通道，与记录里的文件 chip 一致）。
 - **行区间**：`readActiveFileFrom(editor)` 把 0 基行号换成 1 基，并处理"拖到下一行行首不算那一行"
-  （与编辑器自己的显示一致）；单行选区不带区间。**抽成接收结构子集的纯函数**是为了可测 —— 真
+  （与编辑器自己的显示一致）；**单行选区也算行区间**（2026-10-27：选中一行里的几个字返回
+  `lineStart === lineEnd`，只有空选区才引用整个文件）。**抽成结构子集的纯函数**是为了可测 —— 真
   `vscode.window.activeTextEditor` 在测试宿主里造不出来（同 `pickDefaultCwd` 的既有做法）。
 - **推的方式**：按"路径 + 行区间"签名去重（`onDidChangeTextEditorSelection` 每次光标移动都回调，
   叠成行号之后同一行里动就不发），面刚挂上来时 `force` 推一次（签名是全局的，第二个面不该因为
@@ -506,7 +507,8 @@ hide 与恢复都不报。"变量=0 而卡片可见"于是可达。
   取不到时退回行上可见文本）——不是选区，也不需要选区；
 - **地址栏**（`.session-title`，即 body.ts 的 `#cwdBtn`；用类选择器是为了桩 DOM 也认）：
   `Copy` = `NS.tabs.currentCwd()`（拿不到退回按钮文本 —— 草稿页它可能是 "Default directory"）；
-- **会话 tab**（`.tab`）：`Close`（= tab 上的 × 同一条路，`NS.tabs.closeTabNode` 按 kind 分派
+- **会话 tab**（`.tab`）：`New Session in This Folder` / `Duplicate Session`（仅真会话 tab，
+  见下）＋ `Close`（= tab 上的 × 同一条路，`NS.tabs.closeTabNode` 按 kind 分派
   草稿=丢弃 / 待恢复=本地忘掉 / 真会话=closeSession）＋ `Rename`（仅真会话 tab，改名见下）；
 - **历史列表行**（`.outline-item[data-open-session]`）：`Archive` / `Rename` —— 悬停图标够不着的
   键盘用户（Shift+F10）走这里同一对动作、同一个出口。
@@ -517,6 +519,14 @@ hide 与恢复都不报。"变量=0 而卡片可见"于是可达。
 改名由宿主弹原生输入框，回执后 `refreshSessions` 把新标题经 `sessionsChanged` 推回来 —— tab
 自己也就换了名字。**首版曾按用户早先口述做了 `Remove`（归档+忘掉+关闭），用户随后更正
 "要的是 Rename 不是 Remove"，已整条删除**（包含 `removeSession` 消息）。
+
+**会话 tab 的新建 / 复制（2026-10-27）**：两个都只在**真会话 tab** 上出现（草稿/待恢复没有
+`data-session-id`，维持只有 Close）。`New Session in This Folder` 发 `newSessionInDirectory`
+（会话作用域）→ 宿主按源会话的 `cwd` + `additionalDirectories` 调 `createSession`；新会话照常
+套用记住的模式/默认模型/默认强度。`Duplicate` 发 `duplicateSession` → 宿主走
+`session/fork` **不带 messageId**（在末尾分叉），新会话继承源会话的上下文与消息记录，再由
+`openExistingSession` 重放并聚焦。agent 不支持 fork 时由 `reportError` 在记录区给出提示。
+tab 的悬停提示改为自绘浮层：标题正常色、**SessionId 灰色**（`tabs.ts` 的 `showTip`）。
 
 **历史行的悬停动作（212，仅悬停显示）**：`sessionMenu.renderList` 把每行包进
 `.session-row`（`position: relative`），动作层 `.row-actions` 是**行的兄弟**（button 不能嵌

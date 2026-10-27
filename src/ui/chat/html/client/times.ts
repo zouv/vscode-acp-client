@@ -35,7 +35,7 @@ export const timesClient = `
       if (on) { messagesEl.classList.add('show-times'); } else { messagesEl.classList.remove('show-times'); }
     }
     if (toggleEl) {
-      toggleEl.className = on ? 'nest-toggle' : 'nest-toggle off';
+      toggleEl.className = on ? 'nest-toggle on' : 'nest-toggle off';
       // [CUSTOM- 图标化之后，状态与含义都只能靠 tooltip / aria 说明：
       // 悬停给出"现在能做什么"，读屏给出 pressed 状态。
       toggleEl.title = on
