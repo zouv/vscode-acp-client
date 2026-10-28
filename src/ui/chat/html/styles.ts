@@ -325,7 +325,7 @@ export function styles(): string {
   /* [CUSTOM- 把右侧那一组（Times / Sub-agents / ☰）钉在右边。原先靠 '.session-title'
      的 flex: 1 吃掉剩余宽度把它们顶过去 —— 那一格一旦不显示了（上面那种空态），整组就会滑到
      ↺ 旁边。有 flex 项能成长时 auto margin 分不到任何空间，所以这条对原有布局零影响。 */
-  .session-header > #autoExpandBtn { margin-left: auto; }
+  .session-header > #tailBtn { margin-left: auto; }
   /* --- Conversation outline () ---------------------- */
   /* 抽屉从标题栏下沿展开。.session-header 没有 overflow: hidden（已核对），
      否则绝对定位的抽屉会被裁掉——这是这类浮层最常见的失灵原因。 */

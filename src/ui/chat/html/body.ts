@@ -42,16 +42,16 @@ export function body(surface: SurfaceKey = 'view'): string {
          同一份数据在底部已经有一个更省地方的呈现（圆环），顶部这一条只是重复占位。 -->
     <!-- [CUSTOM- 文字 'Times' 改成图标（时钟，由 times.ts 在 init 时挂上：
          icons.ts 是图标的唯一来源）。tooltip 说明它做什么，.off 的透明度表达开关状态。 -->
-    <!-- [CUSTOM- 新输出自动展开（2026-10-21）：挨在 Times 左边，同一组右侧动作。
+    <!-- [CUSTOM- Tail（消息面板自动追尾，2026-10-28）：右侧这一组的**第一个**（auto margin
+         挂它身上，见 styles.ts）。图标由 client/tail.ts 在 init 时挂上；滚动面板会把它自动关掉。 -->
+    <button id="tailBtn" class="nest-toggle"
+            title="Follow new output automatically"
+            aria-label="Follow new output"></button>
+    <!-- [CUSTOM- 新输出自动展开（2026-10-21）：在 Tail 右边、Times 左边，同一组右侧动作。
         图标由 autoExpand.ts 在 init 时挂上；受影响的卡片类型在设置面板里勾选。 -->
     <button id="autoExpandBtn" class="nest-toggle"
             title="Expand cards as new output arrives"
             aria-label="Auto-expand new output"></button>
-    <!-- [CUSTOM- Tail（消息面板自动追尾，2026-10-28）：挨着自动展开，同一组右侧动作。
-         图标由 client/tail.ts 在 init 时挂上（icons.ts 的 'tail'）；滚动面板会把它自动关掉。 -->
-    <button id="tailBtn" class="nest-toggle"
-            title="Follow new output automatically"
-            aria-label="Follow new output"></button>
     <button id="timeToggle" class="nest-toggle"
             title="Show the wall-clock time of each record"
             aria-label="Show record times"></button>
