@@ -58,7 +58,8 @@
 | 悬浮后的 z-index | 底栏 `z-index: 8`：高于置顶卡片（6）与引导条（3）；消息内容本身不带 z-index。`.picker-menu`（20）与 `.slash-popup`（30）都在底栏的层叠上下文内，所以它们照样盖住消息区 |
 | 默认两行 | `autoGrow` 里 60px 的下限已放开，高度就是内容的自然高度；空内容 / JS 未跑时由 `.prompt-input` 的 `min-height: calc(1.4em * 2 + 4px)` 保底（两行，与 1.4 的行高同源），`<textarea rows="2">` 是 JS 未跑时的兜底。**IME 自适应**：`compositionend` 再调一次 `autoGrow`——中文输入法合成期间 textarea 的 `scrollHeight` 可能没跟上合成文本，偶现"输入了不增高" |
 | 高度上限是两件事 | `autoGrow` 的 320 是**内容**上限；`--vac-input-max-h: min(320px, 38vh)` 是**视口**上限。两者并存时浏览器取小的那个，所以 JS 不需要知道视口有多高 |
-| '/' 命令按钮 | 输入栏左下角、'+' 旁边的 `/` 按钮（`#slashBtn`）：点击**直接弹出命令列表、不在输入框写 '/'**（`openSlash()` 只聚焦 + `state.slashMatches = commands.slice()` + `renderSlash()`）；选中的命令才由 `acceptSlash` 落成 `/name `。禁用态跟输入框走（`refreshControls` 里 `slashBtn.disabled = !canCompose()`）。命令列表本身（`#slashPopup`）没动 |
+| '/' 命令按钮 | 输入栏左下角、'+' 旁边的 `/` 按钮（`#slashBtn`）：点击**直接弹出命令列表、不在输入框写 '/'**（`openSlash()` 只聚焦 + `state.slashMatches = commands.slice()` + `renderSlash()`）；选中的命令才由 `acceptSlash` 落成 `/name `。禁用态跟输入框走（`refreshControls` 里 `slashBtn.disabled = !canCompose()`）。**点空白处（弹层与输入框之外）即收起**（2026-10-28，document click 监听；点输入框本身不关——那是在改查询词），输入框里按 Esc 仍然可用 |
+| Send 灰置（2026-10-28） | `refreshSendState()` 是唯一判据：`draftPending`、或「没有可发往的会话/草稿」、或「没东西可发」时灰置。**没东西可发 = `input.value.trim()` 为空（只有空白 / 换行也算空）且没有附件**。输入、附件增删、焦点切换、草稿恢复、发送清空都要重算；`state.running` 时按钮是 Stop，**始终可点**（逃生门） |
 | 预留功能区（138 + 143） | 与输入区并列的第二列，宽度与大纲栏同源。**[143] 只在钉住的大纲栏可见时才占宽度**（`applyReserve` 写 0 或侧栏宽）—— 没有大纲就没有那根竖线，输入卡随之在面板里居中；`width` / `border-left` / `padding-left` 三处都用 `min(…, var(--vac-aside-w, 0px))`，否则宽度归零时那 1px 边框与 8px padding 仍然占着位置。**里面先空着**：用户要求"留着后面设计好方案再谈怎么用"，138 搬进去的上下文圆环 143 已回到按钮栏。`max-width: 40%` 仍是窄面板下的安全阀 |
 | 未连接时不显示底栏（143） | `body[data-phase="disconnected"] .composer, body[data-phase="connecting"] .composer { display: none }` —— 那时输入框本来就是禁用的，露一个"看得见却打不了字"的框只会让人以为它坏了。相位由 `stateCard` 写在 `body[data-phase]` 上（与上面 `Times` 那条同一个机制）。副产品：`display: none` 让 ResizeObserver 把 `--vac-composer-h` 归零，消息区不再为一条并不存在的底栏留白 |
 | 空态也不显示底栏 | `body[data-composer="off"] .composer { display: none }` —— **连上了但没有会话/草稿**（真正的空态）时同样藏掉底栏（同 143 的道理）。`data-composer` 由 `composer.refreshControls` 按「`state.sessionId || state.draft`」写（`on`/`off`），`<body>` 初始 `data-composer="off"` 防空态闪一下。**注意别用 `data-phase="ready"` 当判据**：`phase()` 在会话聚焦时也返回 `ready`，会误藏有会话的底栏 |
@@ -90,7 +91,7 @@
 
 | 主题 | 结论 |
 |---|---|
-| 选择器观感（2026-10-27） | 模式 / 模型 / Effort 三个 `configOptions` 选择器共用一个 `buildPicker`：按钮 = **形状图标 + 当前值**（`icons.ts` 的 `mode` / `model` / `effort`），菜单 = 标题 + 每项**名称 + 说明两行** + 选中勾。说明取选项自带的 `description`（自定义模型用 `vac.customModels` 的 description 覆盖）。图标按 `category` 选，不按 agent 名/选项 id 分支（pitfalls #19） |
+| 选择器观感（2026-10-27） | 模式 / 模型 / Effort 三个 `configOptions` 选择器共用一个 `buildPicker`：按钮 = **形状图标 + 当前值**（`icons.ts` 的 `mode` / `model` / `effort`），菜单 = 标题 + 每项**名称 + 说明两行** + 选中勾。说明取选项自带的 `description`（自定义模型用 `vac.customModels` 的 description 覆盖）。图标按 `category` 选，不按 agent 名/选项 id 分支（pitfalls #19）。**Effort 图标 2026-10-28 换成三根递增信号条**（原表盘只画在 viewBox 下半部，显小且对不齐），`.picker-icon` 统一 14px |
 | 数据从哪来 | `ChatPanelHost.rememberAgentOptions(sessionId)` → `Map<agentName, {configOptions, availableCommands}>`，并按 agent 持久化到 `globalState`（`vac.draftOptions.v1`，照抄 077 的 `uiPrefs` 模式）。**不持久化等于默认路径不生效**：VS Code 重载后宿主内存里的活动会话全没了，"全新窗口点 + 还是空输入卡"正是用户报的现象 |
 | 挂在哪些事件上 | `session-created` / `session-load-end` / `config-options-changed` / `available-commands-changed`。**不挂 `pushMeta`**：它在"没有 surface attach"或"不是聚焦会话"时提前 return，后台会话的变化进不了快照 |
 | 为什么还要 `session-load-end` | `loadSession` 是"先注册 placeholder → emit `session-created` → 收到响应才写 `configOptions`"，**而且不走 `applyConfigOptions`** ⇒ 只挂 `session-created` 会让"打开一个历史会话"把快照的配置项清空 |

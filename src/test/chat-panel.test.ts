@@ -3357,6 +3357,24 @@ suite('chat panel: ui prefs merge ()', () => {
     assert.deepStrictEqual(prefsOf(harness).tabOrder, ['b', 'a'], 'and it survives the reverse order');
   });
 
+  // [CUSTOM- 回归（2026-10-28）：设置面板写的是 `patchUiPrefs`，地址栏开关写的是
+  // `setUiPref`。后者一旦按"这一轮认识的字段"重建记录，就会把设置面板刚写下的
+  // markdownStyle / flatTools / sendKey / recentDirectoryLimit 静默抹掉
+  // （用户现象：改完 Markdown style 再点「自动拖尾」，样式退回默认）。
+  test('an address-bar write keeps the newer settings-panel keys', async () => {
+    const harness = makeHarness('s-1');
+    harness.surface.sent.length = 0;
+
+    harness.host.onMessage({ type: 'setSetting', key: 'panel.markdownStyle', value: 'github' });
+    harness.host.onMessage({ type: 'setSetting', key: 'panel.recentDirectoryLimit', value: 12 });
+    harness.host.onMessage({ type: 'setUiPref', tailBySession: { s1: false }, tailDefault: false });
+    await waitForPrefs(harness);
+
+    assert.strictEqual(prefsOf(harness).markdownStyle, 'github', 'Markdown style survives a Tail toggle');
+    assert.strictEqual(prefsOf(harness).recentDirectoryLimit, 12, 'and so does the recent-directory limit');
+    assert.deepStrictEqual(prefsOf(harness).tailBySession, { s1: false });
+  });
+
   test('junk in the order never reaches globalState', async () => {
     const harness = makeHarness('s-1');
     harness.surface.sent.length = 0;

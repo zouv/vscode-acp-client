@@ -2435,8 +2435,8 @@ export function styles(): string {
     font-family: inherit; font-size: 0.88em; max-width: 220px;
   }
   .picker-btn:hover { background: var(--vscode-list-hoverBackground); }
-  .picker-icon { display: inline-flex; align-items: center; flex: none; opacity: .8; }
-  .picker-icon svg { display: block; width: 12px; height: 12px; }
+  .picker-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 14px; height: 14px; opacity: .8; }
+  .picker-icon svg { display: block; width: 14px; height: 14px; }
   .picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .picker-menu {
     position: absolute; bottom: 100%; left: 0; z-index: 20;

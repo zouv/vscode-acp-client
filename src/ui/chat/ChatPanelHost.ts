@@ -912,7 +912,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         const sendKey = (msg as { sendKey?: unknown }).sendKey;
         const defaultModelByAgent = (msg as { defaultModelByAgent?: unknown }).defaultModelByAgent;
         const defaultEffortByAgent = (msg as { defaultEffortByAgent?: unknown }).defaultEffortByAgent;
+        // [CUSTOM- **先整份继承，再逐项覆盖**。原先这里只列了"这一轮认识的字段"，
+        // 于是消息里没带的项（设置面板写的 markdownStyle / flatTools / sendKey /
+        // recentDirectoryLimit）会被静默抹掉 —— 用户现象：改完 Markdown style 再点
+        // 地址栏 Tail，样式退回默认。以后新增字段也不用再回来补一行。
         const next: UiPrefs = {
+          ...previous,
           outlineMode: mode === undefined
             ? previous.outlineMode
             : (mode === 'sidebar' ? 'sidebar' : 'popup'),

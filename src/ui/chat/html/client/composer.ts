@@ -114,6 +114,7 @@ export const composerClient = `
     var text = sessionId ? drafts[sessionId] : undefined;
     input.value = text === undefined ? '' : text;
     autoGrow();
+    refreshSendState();
   }
 
   /** Drop a closed session's draft (hygiene: ids are never reused). */
@@ -148,6 +149,8 @@ export const composerClient = `
       stashDraft();
       persistDraftsSoon();
       updateSlashPopup();
+      // [CUSTOM- 空 / 只有空白与换行时 Send 要立刻灰掉（反之立刻点亮）。
+      refreshSendState();
       // [CUSTOM- 那条说明的判据里有"输入框里有没有东西"，所以它跟着每次输入走。
       refreshSteerHint();
     });
@@ -173,6 +176,14 @@ export const composerClient = `
       if (!pickersEl.contains(event.target)) { closeMenus(); }
       // [CUSTOM- '+' 菜单也随点外部收起。
       if (!addMenu || !addMenu.contains(event.target)) { closeAddMenu(); }
+      // [CUSTOM- '/' 命令面板：点弹层与输入框之外的任意位置都收起（此前只有输入框里
+      // 按 Esc 才关）。点输入框本身不关 —— 那是在改查询词，列表还得跟着过滤。
+      if (slashPopup && !slashPopup.hidden
+          && event.target !== input
+          && (!slashBtn || event.target !== slashBtn)
+          && !slashPopup.contains(event.target)) {
+        hideSlash();
+      }
     });
     // [CUSTOM- '+' 入口：按钮开一级菜单；菜单里点一级项切层级、二级项切换目录/Browse/返回。
     if (addBtn) {
@@ -233,6 +244,25 @@ export const composerClient = `
     return (!!state.sessionId || !!state.draft) && !state.loading;
   }
 
+  // [CUSTOM- 输入框里有**可发送的内容**：文字去掉首尾空白后非空（纯换行 / 空格也算空），
+  // 或者带了附件。与 send() 的门禁同一判据。
+  function hasSendableContent() {
+    return !!(input && input.value && input.value.trim().length > 0)
+      || (state.attachments && state.attachments.length > 0);
+  }
+
+  /**
+   * [CUSTOM- Send 按钮的灰置（2026-10-28 用户要求）：
+   * · 没东西可发（空 / 只有空白与换行 / 没有附件）⇒ 灰；
+   * · 没有可发往的会话或草稿、或建会话的首次发送还在路上 ⇒ 灰。
+   * Stop 态永远可点（它是逃生门）。输入、附件、焦点、轮次状态变化都要重算。
+   */
+  function refreshSendState() {
+    if (!sendBtn) { return; }
+    sendBtn.disabled = state.draftPending
+      || (!state.running && (!canCompose() || !hasSendableContent()));
+  }
+
   // [CUSTOM- Send/Stop 图标化：文字换成内联 SVG，语义保留在 title/aria-label。
   function setSendIcon(running) {
     NS.dom.clear(sendBtn);
@@ -255,7 +285,7 @@ export const composerClient = `
     }
     input.disabled = !enabled;
     if (slashBtn) { slashBtn.disabled = !enabled; }
-    sendBtn.disabled = !enabled && !state.running;
+    refreshSendState();
     sendBtn.className = 'send-stop ' + (state.running ? 'stop' : 'send');
     if (state.draftPending) {
       // A create-then-send is in flight: the button must not accept a second one.
@@ -356,6 +386,7 @@ export const composerClient = `
     persistDraftsSoon();
     hideSlash();
     autoGrow();
+    refreshSendState();
   }
 
   /**
@@ -682,6 +713,7 @@ export const composerClient = `
     hideSlash();
     input.focus();
     autoGrow();
+    refreshSendState();
   }
 
   function hideSlash() {
@@ -965,6 +997,7 @@ export const composerClient = `
     // 去引用改走附件 chip 自己的 ×（那个 × 按"路径 + 区间"的同一性摘，只摘这一段）。
     if (state.attachments.length === 0 && !activeFile) {
       attachmentsEl.hidden = true;
+      refreshSendState();
       return;
     }
     attachmentsEl.hidden = false;
@@ -1017,6 +1050,7 @@ export const composerClient = `
         attachmentsEl.appendChild(chip);
       })(state.attachments[i]);
     }
+    refreshSendState();
   }
 
   // [CUSTOM- 「编辑器当前文件」那一格。

@@ -2,7 +2,7 @@
   "name": "vscode-acp-client",
   "displayName": "VAC - Agent Client for VS Code",
   "description": "Chat with Claude Code and Codex inside VS Code through the Agent Client Protocol (ACP): multi-session chat, permissions, forms, usage dashboard.",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "publisher": "zouv",
   "license": "MIT",
   "icon": "resources/icon.png",

@@ -2507,6 +2507,36 @@ suite('chat client logic: composer input bar (stub DOM)', () => {
       .dispatch('keydown', { key: 'Enter', shiftKey: false, preventDefault: () => {} });
   }
 
+  // [CUSTOM- Send 的灰置（2026-10-28 用户要求）：输入框为空、或只有空白与换行时不可点；
+  // 有附件可以空文字发送；轮次进行中那颗按钮是 Stop，必须始终可点（逃生门）。
+  test('Send is greyed out until there is something to send', () => {
+    const { NS, input, sendBtn } = composerBar();
+    NS.composer.setFocus(session('s-1'), { availableCommands: [], configOptions: [], usage: null });
+
+    assert.strictEqual(sendBtn.disabled, true, 'an empty box has nothing to send');
+
+    input.value = '  \n\t  ';
+    input.dispatch('input', {});
+    assert.strictEqual(sendBtn.disabled, true, 'whitespace and newlines are still "empty"');
+
+    input.value = 'hello';
+    input.dispatch('input', {});
+    assert.strictEqual(sendBtn.disabled, false, 'real text enables it');
+
+    input.value = '';
+    input.dispatch('input', {});
+    assert.strictEqual(sendBtn.disabled, true, 'clearing the box greys it again');
+
+    NS.composer.setAttachments([{ id: 'a', kind: 'file', name: 'x.ts', path: '/tmp/x.ts' }]);
+    assert.strictEqual(sendBtn.disabled, false, 'an attachment is sendable without text');
+
+    NS.composer.setAttachments([]);
+    assert.strictEqual(sendBtn.disabled, true, 'removing the last attachment greys it again');
+
+    NS.composer.setRunning(true);
+    assert.strictEqual(sendBtn.disabled, false, 'while a turn runs the button is Stop, not Send');
+  });
+
   test('Enter sends mid-turn when the agent takes mid-turn messages (187)', () => {
     const { NS, input, sent, steerHint } = composerBar();
     NS.composer.setFocus(session('s-1'), { availableCommands: [], configOptions: [], usage: null, steering: true });
@@ -2792,6 +2822,27 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
     const items = slashPopup.querySelectorAll('.slash-item');
     assert.strictEqual(items.length, 1, 'the command list opens');
     assert.match(items[0].textContent, /compact/);
+  });
+
+  // [CUSTOM- 2026-10-28 用户要求：命令面板打开后，点空白区域要收起（此前只有输入框里按 Esc 能关）。
+  test('clicking outside dismisses the command list', () => {
+    const { NS, input, slashPopup, slashBtn, docListeners } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+    NS.composer.setDraftOptions({ draftId: 'd1', ...snapshot() });
+
+    dispatchClick(slashBtn, docListeners);
+    assert.strictEqual(slashPopup.hidden, false);
+
+    dispatchClick(input, docListeners);
+    assert.strictEqual(slashPopup.hidden, false, 'clicking the box keeps the list (the query is still being edited)');
+
+    dispatchClick(new StubNode('div'), docListeners);
+    assert.strictEqual(slashPopup.hidden, true, 'a click on blank space closes it');
+
+    dispatchClick(slashBtn, docListeners);
+    dispatchClick(slashPopup.querySelector('.slash-item')!, docListeners);
+    assert.strictEqual(slashPopup.hidden, true, 'picking a command still closes it');
+    assert.strictEqual(input.value, '/compact ', 'and lands the command in the box');
   });
 
   test('picking a value records it instead of messaging the agent', () => {
