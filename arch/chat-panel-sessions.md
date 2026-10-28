@@ -151,6 +151,7 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 | 消息位置 | 三条请求都**非会话作用域**，因此在 `verifySession` 守卫**之前**（§5.4 规则二）；四条应答都**定向**给发起请求的那个面 |
 | 目录候选 | 工作区文件夹（**含多根**，此前只用了 `workspaceFolders[0]`）/ 最近用过（本地 `recentDirectories` 与 agent 侧 `session/list` 的 cwd **合并**——前者是 `workspaceState` 作用域的，新工作区开局为空）/ 默认目录 / 「浏览…」走宿主 `showOpenDialog`（webview 打不开） |
 | **目录候选的刷新（203）** | 这份列表会变（Browse 选的目录、刚用过的目录要等宿主把它们算进最近列表），所以**每次打开抽屉都回头问一次**：先用手上那份渲染（列表永远瞬间出来），回复到了再重渲染。**只在"还没数据"与"打开时"问** —— boot 在切草稿/切会话时也会调 `refresh`，那时抽屉是关的，不能每次都付一次宿主往返（它的回复可能带一次 `session/list`）。此前 `choices` 是**一次拉取、终身缓存**（连 `reset()` 都不清）⇒ 当天新用过的目录永远进不了「Recently used」（用户报的就是它） |
+| **「Recently used」删一条（2026-10-28）** | 行右侧的垃圾桶按钮（与主按钮是**兄弟**，button 不能嵌套）：点完本地立刻拿掉、再发 `removeRecentDirectory`。列表是**派生**的（会话条目的 cwd + agent 的 `session/list`），所以宿主记的是"不想再看到"（`vac.recentCwdDismissed.v1`）并在两个来源合并时统一过滤；同一目录再新建会话即自动恢复。**去重按 `directoryKey`（见上）**：`F:/x` 与 `f:/x` 只留第一条（2026-10-28 用户报的重复行），删除也按同一性生效。 |
 | 已开始的会话 | 目录**只读**（协议固定），抽屉里点候选 = 在那个目录里开一个**新草稿**（不假装能改） |
 | 空态 Connect | 改为 `ensureConnected` + 草稿：只拉进程、**不建会话**（按钮的意义"我这个 agent 起得来吗"靠 `ensureConnected` 仍会抛错来保留）；该 agent 已有会话则聚焦最新那条 |
 | 键盘 | `#cwdBtn` 是真 `<button>`（047 的规矩）；三个抽屉（outline / history / cwd）**互斥**，开一个关掉另外两个 |

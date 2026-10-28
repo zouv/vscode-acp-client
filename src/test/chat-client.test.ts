@@ -28,6 +28,8 @@ import { composerClient } from '../ui/chat/html/client/composer';
 import { tabsClient } from '../ui/chat/html/client/tabs';
 // [CUSTOM- Times 开关的状态机（按会话记 + 默认值）。
 import { timesClient } from '../ui/chat/html/client/times';
+// [CUSTOM- 地址栏「Tail」（消息面板自动追尾，2026-10-28）。
+import { tailClient } from '../ui/chat/html/client/tail';
 // [CUSTOM- 新输出自动展开（与 Times 同形态）+ 设置面板。
 import { autoExpandClient } from '../ui/chat/html/client/autoExpand';
 import { settingsPanelClient } from '../ui/chat/html/client/settingsPanel';
@@ -383,7 +385,7 @@ function loadClient(
   // [CUSTOM- `sessionMenu` joined the list for its own suite: unlike
   // boot, its IIFE runs nothing at load time (init() is called by boot, and here by
   // the test), so loading it costs the record-layer tests nothing.
-  for (const source of [domClient, iconsClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, autoExpandClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient]) {
+  for (const source of [domClient, iconsClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient]) {
     new Function('window', 'document', source)(win, doc);
   }
   return { NS, metrics, doc, docListeners, jumps, timers, win };
@@ -1464,6 +1466,20 @@ suite('chat client logic: Times 开关按会话记忆 (stub DOM, )', () => {
     assert.strictEqual(isOn(els), false);
   });
 
+  test('已开启的会话被落定：在 A 拨开关不会改到 B（2026-10-28）', () => {
+    // 用户要求：改开关只影响当前会话，"只影响下一个新开会话的初始状态"。
+    // 没有落定这一步时，A 一拨就把默认值改掉，**所有没有记录的会话**（B）也跟着变。
+    const { NS, els } = timesWith();
+    NS.times.init();
+    NS.times.noteSessions([{ sessionId: 'A' }, { sessionId: 'B' }]);
+    NS.times.applyPrefs({ timesBySession: {}, timesDefault: false });
+
+    NS.times.setFocus('A');
+    els.timeToggle.dispatch('click', {});        // A: 开（默认也变开）
+    NS.times.setFocus('B');
+    assert.strictEqual(isOn(els), false, 'B 保持自己被落定的"关"，不受 A 的动作影响');
+  });
+
   test('宿主那份 prefs 一到，就按当前焦点应用（另一个面改的也算）', () => {
     const { NS, els } = timesWith();
     NS.times.init();
@@ -1534,6 +1550,77 @@ suite('chat client logic: Times 开关按会话记忆 (stub DOM, )', () => {
     local = { showTimes: true, timesMigrated: true };
     NS.times.init();
     assert.strictEqual(setUiPrefPosts(posted).length, 1, 'once per document');
+  });
+});
+
+// [CUSTOM- 地址栏「Tail」（消息面板自动追尾，2026-10-28）。与 Times 同一套状态机
+// （按会话记 + 一个默认值，默认 true），外加两条"用户自己滚了"的退出路径 ——
+// 都由 scroll.ts 喊（cancelFromScroll / cancelFromRestore），且**都不改默认值**。
+suite('chat client logic: Tail 开关（按会话记忆 + 滚动即取消）', () => {
+  function tailWith(): {
+    NS: Record<string, any>; els: Record<string, StubNode>;
+    posted: Array<Record<string, unknown>>;
+    calls: Array<{ on: boolean; immediate: boolean }>;
+  } {
+    const els: Record<string, StubNode> = { tailBtn: new StubNode('button') };
+    const { NS } = loadClient(els);
+    const posted: Array<Record<string, unknown>> = [];
+    const calls: Array<{ on: boolean; immediate: boolean }> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    // scroller 的真实行为在 scroll.ts（另有专门用例）；这里只记录它被喂了什么。
+    NS.scroll.setTail = (on: boolean, immediate: boolean) => { calls.push({ on, immediate }); };
+    return { NS, els, posted, calls };
+  }
+
+  const posts = (posted: Array<Record<string, unknown>>) => posted.filter(m => m.type === 'setUiPref');
+  const lastCall = (calls: Array<{ on: boolean; immediate: boolean }>) => calls[calls.length - 1];
+
+  test('默认开着：按钮 on，并让 scroll 进入追尾（换会话时不立刻跳）', () => {
+    const { NS, els, calls } = tailWith();
+    NS.tail.init();
+    assert.strictEqual(els.tailBtn.className, 'nest-toggle on');
+    assert.deepStrictEqual(lastCall(calls), { on: true, immediate: false },
+      '换会话由 restore 决定落点，这里只切旗标');
+    assert.ok(els.tailBtn.querySelector('.tail-icon'), '图标在 init 时挂上（地址栏不留空按钮）');
+  });
+
+  test('点一下：关掉并落盘（记到当前会话 + 成为默认值），且立刻生效', () => {
+    const { NS, els, posted, calls } = tailWith();
+    NS.tail.init();
+    NS.tail.setFocus('A');
+    els.tailBtn.dispatch('click', {});
+    assert.strictEqual(els.tailBtn.className, 'nest-toggle off');
+    assert.deepStrictEqual(lastCall(calls), { on: false, immediate: true });
+    assert.deepStrictEqual(posts(posted),
+      [{ type: 'setUiPref', tailBySession: { A: false }, tailDefault: false }]);
+  });
+
+  test('用户滚动改了阅读进度 ⇒ 只关这个会话（**不动默认值**）', () => {
+    const { NS, els, posted } = tailWith();
+    NS.tail.init();
+    NS.tail.noteSessions([{ sessionId: 'A' }, { sessionId: 'B' }]);
+    NS.tail.applyPrefs({ tailBySession: {}, tailDefault: true });
+    posted.length = 0;
+
+    NS.tail.setFocus('A');
+    NS.tail.cancelFromScroll();
+    assert.strictEqual(els.tailBtn.className, 'nest-toggle off', '按钮跟着关');
+    assert.deepStrictEqual(posts(posted),
+      [{ type: 'setUiPref', tailBySession: { A: false, B: true }, tailDefault: true }],
+      '只改这个会话那一条；滚动不是"拨偏好"，默认值不动');
+  });
+
+  test('已开启的会话被落定：在 A 拨开关不会改到 B（只影响下一个新会话）', () => {
+    const { NS, els } = tailWith();
+    NS.tail.init();
+    NS.tail.noteSessions([{ sessionId: 'A' }, { sessionId: 'B' }]);
+    NS.tail.applyPrefs({ tailBySession: {}, tailDefault: true });
+
+    NS.tail.setFocus('A');
+    els.tailBtn.dispatch('click', {});         // A: 关（默认也变关）
+    NS.tail.setFocus('B');
+    assert.strictEqual(els.tailBtn.className, 'nest-toggle on',
+      'B 保持自己被落定的"开"，不受 A 的动作影响');
   });
 });
 
@@ -4800,6 +4887,23 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
       '新用过的目录（Browse 选的）出现在「Recently used」里');
   });
 
+  test('「Recently used」行右侧的删除：本地立刻拿掉，并请宿主持久化', () => {
+    const d = drawer();
+    d.open();
+    d.choices(['/a', '/b']);
+    // 只有最近用过的那几行带删除按钮；工作区分组与「Browse…」没有。
+    assert.strictEqual(d.list.querySelectorAll('.outline-remove').length, 2);
+    assert.strictEqual(d.list.querySelectorAll('.outline-item').length, 4,
+      '工作区 1 条 + 最近 2 条 + Browse 1 条');
+
+    d.posted.length = 0;
+    const event = { preventDefault: () => { /* stub */ }, stopPropagation: () => { /* stub */ } };
+    d.list.querySelectorAll('.outline-remove')[0].dispatch('click', event);
+    assert.deepStrictEqual(rows(d.list), ['/ws', '/b', null], '删掉的那一行立刻消失');
+    assert.deepStrictEqual(d.posted, [{ type: 'removeRecentDirectory', path: '/a' }],
+      '请宿主记下"不想再看到"（列表是派生的，删不掉源数据）');
+  });
+
   test('boot 那条"切草稿/切会话"的路径只在**首次**问一次，之后不再打扰宿主', () => {
     const d = drawer();
     // 首次必须问：草稿要据此采用默认目录，头部不能停在 "Default directory"（058 的第一条坑）。
@@ -5115,6 +5219,31 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
       + ' 旧实现这里每次都读，那正是几百次强制重排的来源');
   });
 
+  // [CUSTOM- Tail 的运行时（2026-10-28）：**关掉 = 绝不自动滚**；开着且贴底才跟；
+  // 用户自己滚动（非程序写入的 scroll 事件）就地取消。pinned 仍然如实反映"是否贴底"
+  // （大纲跳转 / 探针都读它），Tail 不许伪造它。
+  test('Tail 关掉 ⇒ 绝不自动跟；打开且贴底才跟到底；用户一滚就取消', () => {
+    const { NS, el } = mountScroll();
+    NS.dom = { schedule: (fn: () => void) => { fn(); } };
+    el.scrollTop = 600;                      // max = 1000 − 400：贴底
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isPinned(), true);
+
+    el.scrollHeight = 1200;                  // 内容长高（没有 scroll 事件）
+    NS.scroll.follow();                      // 还没开 Tail
+    assert.strictEqual(el.scrollTop, 600, 'Tail 关着时绝不替用户移动视口');
+
+    NS.scroll.setTail(true, false);
+    NS.scroll.follow();
+    assert.strictEqual(el.scrollTop, 1200, '打开后跟到内容末尾');
+    assert.strictEqual(NS.scroll.isTail(), true);
+
+    el.scrollTop = 300;                      // 用户改了阅读进度
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isTail(), false, 'Tail 就地取消');
+    assert.strictEqual(NS.scroll.isPinned(), false, 'pinned 仍是如实的（不是被 Tail 伪造的）');
+  });
+
   // [CUSTOM- 「到底了、尾巴却还压在输入卡后面」的**按结果自愈**。
   // 判据是"末条记录的底边 vs 输入卡的顶边"（用户看得见的量，pitfalls #25/#26），
   // 修复动作是让 composer 重测高度（唯一写者）。前置有两条：**真在滚动范围末尾**（st ≥ max−1）
@@ -5186,6 +5315,178 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
     // （真机日志 104 次 tail-covered-heal）。门槛要求「实高比变量高出 ≥2px」才出手。
     const m = mountHeal({ pad: '24px', scrollTop: 600, lastBottom: 990, composerTop: 900, composerH: 100, composerVar: '100px' });
     assert.strictEqual(m.healed(), 0, '变量没失真，被盖是视口矮，不是该自愈的病灶');
+  });
+});
+
+// [CUSTOM- 内层滚动卡片（2026-10-28）：「滚轮默认滚面板，点进卡片才滚卡片内层」的焦点门控，
+// 以及流式卡片内层滚动区的自动追尾（内容长高时跟到最后一行）。两条都注册在 scroll.ts 的 init 里。
+//
+// 桩只建模**判据真会读到的那几样**：overflowY（按节点的 style 给）、滚动几何、以及 scrollTop 的
+// 夹紧 —— 真浏览器会夹，桩不夹就量不出"滚到卡片末尾把余量交给面板"那一步。
+// document 上的监听器由测试直接派发（capture 在桩里没有意义）。
+suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
+  function box(tag: string, cls: string, scrollHeight = 0, clientHeight = 0): StubNode {
+    const node = new StubNode(tag);
+    node.className = cls;
+    node.scrollHeight = scrollHeight;
+    node.clientHeight = clientHeight;
+    return node;
+  }
+
+  /** scrollTop 像浏览器一样夹在 [0, scrollHeight - clientHeight] 里。 */
+  function clamped(node: StubNode): StubNode {
+    let top = 0;
+    Object.defineProperty(node, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => { top = Math.max(0, Math.min(value, node.scrollHeight - node.clientHeight)); },
+    });
+    return node;
+  }
+
+  interface Panel {
+    NS: Record<string, any>;
+    messages: StubNode;
+    card: StubNode;
+    inner: StubNode;
+    docListeners: Record<string, Array<(event: any) => void>>;
+    observers: Array<(records: any[]) => void>;
+  }
+
+  function mountPanel(opts: { live?: boolean } = {}): Panel {
+    const NS: Record<string, any> = {};
+    const docListeners: Record<string, Array<(event: any) => void>> = {};
+    const observers: Array<(records: any[]) => void> = [];
+    const body = box('body', '');
+    const messages = box('div', 'messages', 2000, 400);
+    const card = box('div', 'tool');
+    const inner = clamped(box('div', 'tool-seg-out', 600, 200));
+    inner.style.overflowY = 'auto';
+    card.appendChild(inner);
+    // 工具卡在跑（tc-in_progress）= 这张卡片还在长内容，是「自动追尾」的唯一入口。
+    if (opts.live) { card.appendChild(box('span', 'tool-status tc-in_progress')); }
+    messages.appendChild(card);
+    body.appendChild(messages);
+
+    class FakeMutationObserver {
+      constructor(cb: (records: any[]) => void) { observers.push(cb); }
+      observe(): void { /* 记录由测试自己派发 */ }
+      disconnect(): void { /* no-op */ }
+    }
+
+    const win: Record<string, any> = {
+      __vac: NS,
+      // scroll.ts 从计算样式里只读这两样。
+      getComputedStyle: (node: any) => ({
+        paddingBottom: '0px',
+        overflowY: (node && node.style && node.style.overflowY) || 'visible',
+      }),
+      setTimeout: () => 0,
+      addEventListener: () => {},
+      MutationObserver: FakeMutationObserver,
+    };
+    const doc: Record<string, any> = {
+      body,
+      addEventListener: (type: string, fn: (event: any) => void) => {
+        (docListeners[type] = docListeners[type] ?? []).push(fn);
+      },
+      contains: (node: any) => body.contains(node),
+    };
+    new Function('window', 'document', scrollClient)(win, doc);
+    NS.dom = { schedule: (fn: () => void) => { fn(); } };
+    NS.boot = { recallUi: () => ({}), persistUi: () => {} };
+    NS.scroll.init(messages, { hidden: true, addEventListener: () => {} });
+    return { NS, messages, card, inner, docListeners, observers };
+  }
+
+  function fireDoc(
+    listeners: Record<string, Array<(event: any) => void>>, type: string, event: any,
+  ): void {
+    for (const fn of listeners[type] ?? []) { fn(event); }
+  }
+
+  function wheel(
+    listeners: Record<string, Array<(event: any) => void>>, target: StubNode, deltaY: number,
+  ): any {
+    const event = {
+      target, deltaY, deltaX: 0, deltaMode: 0, cancelable: true, defaultPrevented: false,
+      preventDefault(): void { this.defaultPrevented = true; },
+    };
+    fireDoc(listeners, 'wheel', event);
+    return event;
+  }
+
+  test('滚轮落在**未聚焦**的卡片上 ⇒ 滚的是整个面板，卡片自己的滚动区不动', () => {
+    const { messages, inner, docListeners } = mountPanel();
+    const event = wheel(docListeners, inner, 100);
+    assert.strictEqual(event.defaultPrevented, true, '卡片吃滚轮这条默认行为必须被拦下');
+    assert.strictEqual(messages.scrollTop, 100, '滚动量交给面板');
+    assert.strictEqual(inner.scrollTop, 0, '未聚焦的卡片不许抢滚轮');
+  });
+
+  test('点进卡片之后滚轮才滚这张卡片；滚到它自己的末尾就停，面板原地不动', () => {
+    const { messages, inner, card, docListeners } = mountPanel();
+    // 落在标题栏上（不在滚动区里）也要能聚焦这张卡片。
+    fireDoc(docListeners, 'pointerdown', { target: card });
+    assert.ok(String(inner.className).split(' ').includes('scroll-active'),
+      '聚焦的滚动区要能看出来（样式差异）');
+
+    // 指针停在卡片**标题栏**上：仍在"卡片区域内"，滚的应该是卡片自己的滚动区。
+    wheel(docListeners, card, 100);
+    assert.strictEqual(inner.scrollTop, 100, '已聚焦 ⇒ 滚卡片');
+    assert.strictEqual(messages.scrollTop, 0);
+
+    inner.scrollTop = 400;                     // max = 600 − 200：卡片已经到底
+    wheel(docListeners, card, 100);
+    assert.strictEqual(inner.scrollTop, 400, '卡片到底了不再动');
+    assert.strictEqual(messages.scrollTop, 0, '聚焦时面板必须原地不动（余量不再交给面板）');
+  });
+
+  test('聚焦卡片时指针移出卡片区域 ⇒ 不再拦截，交回浏览器滚面板', () => {
+    const { inner, card, messages, docListeners } = mountPanel();
+    fireDoc(docListeners, 'pointerdown', { target: card });
+    const event = wheel(docListeners, messages, 100);   // 落点在面板空白
+    assert.strictEqual(event.defaultPrevented, false, '卡片之外交给浏览器默认（面板）');
+    assert.strictEqual(inner.scrollTop, 0, '卡片不动');
+  });
+
+  test('点面板空白处 ⇒ 交还焦点，滚轮回到面板', () => {
+    const { messages, inner, docListeners } = mountPanel();
+    fireDoc(docListeners, 'pointerdown', { target: inner });
+    fireDoc(docListeners, 'pointerdown', { target: messages });
+    wheel(docListeners, inner, 100);
+    assert.strictEqual(inner.scrollTop, 0);
+    assert.strictEqual(messages.scrollTop, 100);
+  });
+
+  test('横向滚动（Shift+滚轮 / 触控板横滑）不拦，留给代码块与宽表格', () => {
+    const { messages, inner, docListeners } = mountPanel();
+    const event = {
+      target: inner, deltaX: 100, deltaY: 0, deltaMode: 0, cancelable: true, defaultPrevented: false,
+      preventDefault(): void { this.defaultPrevented = true; },
+    };
+    fireDoc(docListeners, 'wheel', event);
+    assert.strictEqual(event.defaultPrevented, false);
+    assert.strictEqual(messages.scrollTop, 0);
+  });
+
+  test('流式卡片的内层滚动区自动跟到最后一行；已完成的卡片不追', () => {
+    const live = mountPanel({ live: true });
+    live.observers[0]([{ target: live.inner, addedNodes: [] }]);
+    assert.strictEqual(live.inner.scrollTop, 400, '贴着自身底部的滚动区跟到内容末尾');
+
+    const done = mountPanel();
+    done.observers[0]([{ target: done.inner, addedNodes: [] }]);
+    assert.strictEqual(done.inner.scrollTop, 0, '历史回放 / 已完成的卡片停在开头，不追尾');
+  });
+
+  test('用户在内层容器里自己滚上去了 ⇒ 不再自动追尾', () => {
+    const live = mountPanel({ live: true });
+    live.inner.scrollTop = 0;
+    fireDoc(live.docListeners, 'scroll', { target: live.inner });   // 距底 400 ⇒ 不贴底
+    live.inner.scrollHeight = 1200;                                  // 内容又长高
+    live.observers[0]([{ target: live.inner, addedNodes: [] }]);
+    assert.strictEqual(live.inner.scrollTop, 0, '用户自己的阅读位置不许被抢走');
   });
 });
 

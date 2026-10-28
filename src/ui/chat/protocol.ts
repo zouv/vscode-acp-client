@@ -173,6 +173,12 @@ export interface UiPrefs {
   defaultEffortByAgent?: Record<string, string>;
   // [CUSTOM- 目录选择抽屉里「Recently used」最多列几条（3–16，默认 8）。
   recentDirectoryLimit?: number;
+  // [CUSTOM- 「Tail」（消息面板自动追尾，2026-10-28）：与 Times 同一形态 ——
+  // tailBySession 记用户在那个会话里最后的开关状态，tailDefault 是没有记录的会话的默认值
+  // （默认 **true**：不开按钮时也照旧自动跟到最后一条）。滚轮/滚动条一旦改变用户阅读进度，
+  // 客户端会把它就地关掉（只改这个会话那一条，不动默认值）。
+  tailBySession?: Record<string, boolean>;
+  tailDefault?: boolean;
   // [CUSTOM- Markdown 渲染预设。`editor` = 跟随编辑器（现有逻辑，默认）。
   markdownStyle?: 'editor' | 'github' | 'compact' | 'reading';
 }
@@ -267,7 +273,7 @@ export type ExtToChat =
   // [CUSTOM- 大纲钉住/宽度偏好，随 boot 一起带回（跨窗口重载存活）。
   // [CUSTOM- 外加 tab 栏的手工顺序（同一条记录）。
   // [CUSTOM- 外加 Times 的按会话记录 + 默认值（同一条记录）。
-  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'compact' | 'reading' }
+  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'compact' | 'reading' }
   // [CUSTOM- 设置面板的数据（回复 getSettings，也在每次 setSetting 之后重发）。宿主是唯一写者。
   | { type: 'settings'; items: SettingItem[] }
   // [CUSTOM- 自定义模型变了（设置面板保存 / VS Code 设置里改）：输入卡的模型菜单要立刻换
@@ -353,7 +359,7 @@ export type ChatToExt =
   // 由宿主**合并**（重建会把对方那一半抹掉）。缺的字段 = 这一轮没改它。
   // [CUSTOM- Times 同样走这条（第三个写者）：timesBySession 整份发上来
   // （与 tabOrder 同一形态 —— 顺序与开关都是"一整张表"，逐条 delta 反而要宿主维护版本）。
-  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'compact' | 'reading' }
+  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'compact' | 'reading' }
   // [CUSTOM- 设置面板：宿主是唯一写者（配置项写 VS Code 设置，面板项写 UiPrefs）。
   | { type: 'getSettings' }
   | { type: 'setSetting'; key: string; value: unknown }
@@ -393,6 +399,9 @@ export type ChatToExt =
   // 三条都**不是**会话作用域：草稿按定义还没有 sessionId（那正是它存在的意义），
   // 所以它们必须和其他非会话作用域消息一样，在 `verifySession` 守卫**之前**处理（§5.4 规则二）。
   | { type: 'listDirectoryChoices'; agentName?: string }
+  // [CUSTOM- 目录抽屉「Recently used」行右侧的删除：把这条目录从最近列表里移除（持久化）。
+  // 非会话作用域（草稿页同样要能删），宿主处理完会重发一份 directoryChoices。
+  | { type: 'removeRecentDirectory'; path: string }
   | { type: 'pickDirectory'; purpose?: 'cwd' | 'additionalDirectories' }
   // [CUSTOM- 'Files or folders'：打开文件选择器（多选文件）。
   | { type: 'pickFiles' }

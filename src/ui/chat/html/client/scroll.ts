@@ -21,6 +21,174 @@ export const scrollClient = `
   var restoreTarget = null;
   var expectedTop = 0;
 
+  // [CUSTOM- 内层滚动卡片：焦点门控 + 自动追尾（2026-10-28）。
+  //
+  // 问题：卡片内部自带纵向滚动条（.diff-body / .tool-seg-out / .thought-body /
+  // 自动展开的 .tool-body）。滚轮一进卡片就被它吃掉，整块面板的滚动因此中断。
+  //
+  // 两条规则：
+  // · **焦点门控**：滚轮默认滚整个面板；只有用户**点进**某张卡片、让它的内层滚动区
+  //   拿到 scroll-active 环之后，这张卡片才吃滚轮。点面板空白或别的卡片即交还。
+  // · **自动追尾**：正在流式的卡片（推理的 .thought-spin / 工具的 tc-in_progress /
+  //   子 agent 的 running）内容长高时，贴着自身底部的内层滚动区继续跟到最后一行；
+  //   用户自己滚上去了就不再抢（innerPinned 记着这件事）。
+  var ACTIVE_CLASS = 'scroll-active';
+  // 卡片里可能带纵向滚动条的已知容器：点标题栏（落点不在任何滚动区里）时按它找焦点面。
+  // 新增这类容器要加进来；点内容本身仍经祖先链找到，不受这张表限制。
+  var INNER_SCROLL_SELECTOR = '.thought-body, .tool-body, .tool-seg-out, .diff-body, .elic-preview';
+  var activeScroller = null;
+  var activeCard = null;
+  var innerPinned = (typeof WeakMap === 'function') ? new WeakMap() : null;
+  var tailQueue = [];
+  var tailPending = false;
+  // [CUSTOM- Tail（地址栏那颗按钮，2026-10-28）：开着就**无视 pinned** 一律跟到最后一条。
+  // 用户用滚轮 / 拖动滚动条改变了阅读进度（非程序写入的 scroll 事件）⇒ 就地关掉并通知
+  // client/tail.ts（状态与按钮在那边，这里只持有运行时的旗标）。
+  var tail = false;
+  // 上一次"被门控吞掉滚轮"的卡片 —— 只在换卡片时记一条日志。滚动热路径上每 700ms 记一条
+  // 会把日志桥的共享配额（10s/30 条）吃掉，反而埋掉 pinned/unpinned 那些关键信号。
+  var lastGateCard = null;
+
+  function classNameOf(node) {
+    var name = (node && node.className) ? String(node.className) : '';
+    var at = name.indexOf(' ');
+    return (at >= 0 ? name.slice(0, at) : name) || '?';
+  }
+
+  /** 这个元素**自己**能不能纵向滚（overflow 允许 + 内容真的超出）。 */
+  function isVertScrollable(node) {
+    if (!node || node === container || node.nodeType !== 1) { return false; }
+    if (!window.getComputedStyle) { return false; }
+    var cs = window.getComputedStyle(node);
+    if (!cs || (cs.overflowY !== 'auto' && cs.overflowY !== 'scroll')) { return false; }
+    return node.scrollHeight > node.clientHeight + 1;
+  }
+
+  /** 从 node 往上找最近的纵向滚动容器（不越过 #messages）。 */
+  function nearestVertScroller(node) {
+    var current = node;
+    while (current && current !== container) {
+      if (isVertScrollable(current)) { return current; }
+      current = current.parentNode;
+    }
+    return null;
+  }
+
+  /** node 所属的顶层记录节点（#messages 的直系子节点）。 */
+  function topCardOf(node) {
+    var current = node;
+    while (current && current.parentNode && current.parentNode !== container) { current = current.parentNode; }
+    return (current && current.parentNode === container) ? current : null;
+  }
+
+  /** 卡片里第一块纵向滚动区（落点在标题栏这类"不在滚动区里"的地方时用）。 */
+  function firstInnerScroller(card) {
+    if (!card || !card.querySelectorAll) { return null; }
+    var list = card.querySelectorAll(INNER_SCROLL_SELECTOR);
+    for (var i = 0; i < list.length; i++) {
+      if (isVertScrollable(list[i])) { return list[i]; }
+    }
+    return null;
+  }
+
+  function setActive(next, card) {
+    if (next && !card) { card = topCardOf(next); }
+    if (next === activeScroller) { if (card) { activeCard = card; } return; }
+    if (activeScroller && activeScroller.classList) { activeScroller.classList.remove(ACTIVE_CLASS); }
+    activeScroller = next;
+    activeCard = next ? (card || topCardOf(next)) : null;
+    if (activeScroller && activeScroller.classList) { activeScroller.classList.add(ACTIVE_CLASS); }
+    lastGateCard = null;
+    logScrollState('focus:' + (activeScroller ? classNameOf(activeScroller) : 'panel'), true);
+  }
+
+  /** 卡片重建（工具输出每个 chunk 都会重建 body）后，把焦点环挂到新容器上。 */
+  function reclaimActive() {
+    if (!activeCard || !activeScroller) { return; }
+    var attached = document.contains ? document.contains(activeScroller) : !!activeScroller.parentNode;
+    if (attached) { return; }
+    if (document.contains && !document.contains(activeCard)) { activeScroller = null; activeCard = null; return; }
+    activeScroller = firstInnerScroller(activeCard);
+    if (activeScroller && activeScroller.classList) { activeScroller.classList.add(ACTIVE_CLASS); }
+  }
+
+  function wheelDelta(event) {
+    var delta = event.deltaY || 0;
+    if (event.deltaMode === 1) { delta = delta * 16; }
+    else if (event.deltaMode === 2) { delta = delta * (container ? container.clientHeight : 400); }
+    return delta;
+  }
+
+  /**
+   * 滚内层容器。**到边界就停，绝不把余量交给面板**。
+   *
+   * 这是用户明确要的语义（2026-10-28）：「鼠标在卡片区域内 ⇒ 只滚卡片；移出区域 ⇒ 才滚面板」。
+   * 早先那版把滚到头的余量交给面板，手感上就是"卡片和面板一起滚"——聚焦卡片之后面板必须原地不动。
+   */
+  function scrollInner(node, delta) {
+    var max = node.scrollHeight - node.clientHeight;
+    var next = node.scrollTop + delta;
+    if (next < 0) { next = 0; }
+    if (next > max) { next = max; }
+    node.scrollTop = next;
+  }
+
+  /** 这张卡片现在还在长内容吗？（流式推理 / 运行中的工具 / 运行中的子 agent） */
+  function isLiveCard(card) {
+    if (!card || !card.querySelector) { return false; }
+    if (card.querySelector('.thought-spin')) { return true; }
+    if (card.querySelector('.tool-status.tc-in_progress')) { return true; }
+    if (card.querySelector('.subagent-state[data-state="running"]')) { return true; }
+    return false;
+  }
+
+  function pushTailCandidate(node) {
+    if (tailQueue.indexOf(node) < 0) { tailQueue.push(node); }
+  }
+
+  /** 把变化点自己与祖先里所有纵向滚动容器都记进本批候选。 */
+  function noteTailCandidate(node) {
+    var current = node;
+    while (current && current !== container) {
+      if (current.nodeType === 1 && isVertScrollable(current)) { pushTailCandidate(current); }
+      current = current.parentNode;
+    }
+  }
+
+  /** 新增子树里的滚动容器（工具 body 重建时新容器是 addedNode，不在祖先链上）。 */
+  function noteAddedNodes(added) {
+    if (!added) { return; }
+    for (var i = 0; i < added.length; i++) {
+      var node = added[i];
+      if (!node || node.nodeType !== 1) { continue; }
+      if (isVertScrollable(node)) { pushTailCandidate(node); }
+      if (!node.querySelectorAll) { continue; }
+      var inner = node.querySelectorAll(INNER_SCROLL_SELECTOR);
+      for (var j = 0; j < inner.length; j++) {
+        if (isVertScrollable(inner[j])) { pushTailCandidate(inner[j]); }
+      }
+    }
+  }
+
+  function flushTails() {
+    tailPending = false;
+    var list = tailQueue;
+    tailQueue = [];
+    if (!container) { return; }
+    for (var i = 0; i < list.length; i++) {
+      var node = list[i];
+      if (!node.parentNode || !isVertScrollable(node)) { continue; }
+      // 用户在这个容器里自己滚上去了：不再抢（与面板的 pinned 同一条判据）。
+      if (innerPinned && innerPinned.get(node) === false) { continue; }
+      // 只追**还在流式**的卡片。历史回放 / 已完成的卡片不追，否则一打开旧会话，
+      // 每个长输出卡都会停在自己的末尾而不是开头。
+      if (!isLiveCard(topCardOf(node))) { continue; }
+      if (node.scrollTop >= node.scrollHeight - node.clientHeight - 1) { continue; }
+      node.scrollTop = node.scrollHeight;
+      if (innerPinned) { innerPinned.set(node, true); }
+    }
+  }
+
   function init(messagesEl, jumpButton) {
     container = messagesEl;
     jumpBtn = jumpButton;
@@ -30,6 +198,9 @@ export const scrollClient = `
     container.addEventListener('scroll', function () {
       var fromProgram = lastProgrammaticTop >= 0
         && Math.abs(container.scrollTop - lastProgrammaticTop) <= 2;
+      // [CUSTOM- 用户自己改了阅读进度（滚轮 / 拖滚动条）⇒ Tail 就地关掉。
+      // 程序写入（follow / restore / Jump）不算 —— 否则 Tail 会在第一次跟随时把自己关掉。
+      if (!fromProgram) { cancelTail('scroll'); }
       logScrollState(fromProgram ? 'scroll-after-program' : 'user-scroll');
       onScroll();
     });
@@ -49,6 +220,77 @@ export const scrollClient = `
       };
       if (NS.dom && NS.dom.schedule) { NS.dom.schedule(run); } else { run(); }
     }, { passive: true });
+    // [CUSTOM- 点进卡片 = 这张卡片的内层滚动区拿到滚轮（两条规则见文件上方 State 区）。
+    // 点面板空白 / 输入卡 / 标签栏都算"交还"，滚轮回到整个面板。
+    if (document.addEventListener) { document.addEventListener('pointerdown', function (event) {
+      if (!container) { return; }
+      var target = event && event.target;
+      if (!target || !container.contains || !container.contains(target) || target === container) {
+        setActive(null);
+        return;
+      }
+      var card = topCardOf(target);
+      if (!card) { setActive(null); return; }
+      setActive(nearestVertScroller(target) || firstInnerScroller(card), card);
+    }, true); }
+    // [CUSTOM- 滚轮门控（capture + 非 passive）——按**指针位置**分流，两边互不牵连：
+    // · 指针落在**已聚焦卡片**里 ⇒ 只滚这张卡的内层滚动区（到边界就停，面板原地不动）；
+    // · 指针落在**未聚焦卡片**里、且那里确实有内层滚动区 ⇒ preventDefault 后滚面板 ——
+    //   这正是"卡片里的滚动条打断整块面板滚动"的病灶；
+    // · 指针离开卡片（面板空白 / 别的卡片 / 浮层）⇒ 走浏览器默认，滚的是面板；
+    // · 横向滚动（Shift+滚轮 / 触控板横滑）与 Ctrl/Cmd+滚轮（IDE 缩放）一律放行。
+    if (document.addEventListener) { document.addEventListener('wheel', function (event) {
+      if (!container || !event || !container.contains) { return; }
+      var target = event.target;
+      if (!target || !container.contains(target)) { return; }
+      if (event.ctrlKey || event.metaKey) { return; }
+      if (!event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)) { return; }
+      if (event.cancelable === false) { return; }
+      var card = topCardOf(target);
+      if (!card) { return; }
+      var delta = wheelDelta(event);
+      if (!delta) { return; }
+      var focused = !!(activeCard && card === activeCard);
+      // 聚焦卡片的滚动目标是"它自己的滚动区"；滚动区被重建（工具 body 每个 chunk 都会重建）
+      // 或内容缩到装不下时，退回落点所在的那一个。两者都没有 ⇒ 交回默认（面板自己滚）。
+      var own = focused && activeScroller
+        && (document.contains ? document.contains(activeScroller) : !!activeScroller.parentNode)
+        && isVertScrollable(activeScroller);
+      var scroller = own ? activeScroller : nearestVertScroller(target);
+      if (!scroller) { return; }
+      event.preventDefault();
+      if (focused) { scrollInner(scroller, delta); } else { writeTop(container.scrollTop + delta); }
+      if (card !== lastGateCard) {
+        lastGateCard = card;
+        logScrollState((focused ? 'wheel-card:' : 'wheel-gate:') + classNameOf(scroller), false);
+      }
+    }, { passive: false, capture: true }); }
+    // [CUSTOM- 用户在内层容器里自己滚开 ⇒ 不再追尾（判据与面板的 pinned 相同）。
+    if (document.addEventListener) { document.addEventListener('scroll', function (event) {
+      var target = event && event.target;
+      if (!target || !container || !container.contains || target === container) { return; }
+      if (!innerPinned || !container.contains(target)) { return; }
+      if (target.nodeType !== 1 || !isVertScrollable(target)) { return; }
+      var innerMax = target.scrollHeight - target.clientHeight;
+      innerPinned.set(target, target.scrollTop >= innerMax - PIN_THRESHOLD);
+    }, true); }
+    // [CUSTOM- 自动追尾的观察器。写入者在消息任务里同步改 DOM，这里只收"变了哪一块"，
+    // 真正的布局读取与 scrollTop 写入推迟到下一帧（NS.dom.schedule），与 follow() 同一套读写分离。
+    if (window.MutationObserver) {
+      var tailObserver = new window.MutationObserver(function (records) {
+        for (var i = 0; i < records.length; i++) {
+          var changed = records[i].target;
+          if (changed && changed.nodeType === 3) { changed = changed.parentNode; }
+          if (changed) { noteTailCandidate(changed); }
+          noteAddedNodes(records[i].addedNodes);
+        }
+        reclaimActive();
+        if (tailQueue.length === 0 || tailPending) { return; }
+        tailPending = true;
+        if (NS.dom && NS.dom.schedule) { NS.dom.schedule(flushTails); } else { flushTails(); }
+      });
+      tailObserver.observe(container, { childList: true, subtree: true, characterData: true });
+    }
     // [CUSTOM- 「我拖了滚动条，但它没动」——2026-10-05 那次真机日志里，面板停在
     // st=43 而 max=19604，**没有任何一次程序写接近过 43**（80 次程序写全在贴底跟到底），
     // 所以问题不在"我们把他拽回去"，而在**手势没作用到 #messages 上**。
@@ -385,7 +627,9 @@ export const scrollClient = `
   /** Scroll to the bottom, but only when the user has not scrolled away. */
   function follow() {
     if (!container || followPending) { return; }
-    if (!pinned) {
+    // [CUSTOM- Tail 关掉 ⇒ **绝不自动滚**（"别动我的视口"）。开着时仍要求贴底 ——
+    // 用户一滚动 Tail 就被取消，所以"tail 开 + 不贴底"只会出现在程序把视口放到中间的那一瞬间。
+    if (!pinned || !tail) {
       // [CUSTOM- 用户在往上翻：**不跟是对的**（不该抢他的视口）。但"面板没到底"
       // 的正当来源就是这里，而本 bug 的嫌疑正是"他其实在底部、我们却判成不在" —— 所以每次
       // append 记一笔（有节流 + 序号，流式期间不会刷屏）。内容是否同时长高也一并记下。
@@ -404,7 +648,7 @@ export const scrollClient = `
     NS.dom.schedule(function () {
       followPending = false;
       if (!container) { return; }
-      if (!pinned) { logScrollState('unpinned-before-frame'); return; }
+      if (!pinned || !tail) { logScrollState('unpinned-before-frame'); return; }
       var height = container.scrollHeight;
       lastScrollHeight = height;
       var max = height - container.clientHeight;
@@ -444,6 +688,8 @@ export const scrollClient = `
     if (!container || !node) { return; }
     var top = node.offsetTop - container.offsetTop - (clearance || 0);
     if (top < 0) { top = 0; }
+    // [CUSTOM- 跳到某条记录 = 用户主动离开底部 ⇒ 取消 Tail（和"滚动改了阅读进度"同一语义）。
+    cancelTail('scroll');
     pinned = false;
     showJump();
     writeTop(top);
@@ -453,6 +699,31 @@ export const scrollClient = `
 
   /** True while the view sticks to the bottom (diagnostics/tests). */
   function isPinned() { return pinned; }
+
+  /**
+   * [CUSTOM- Tail 的运行时开关（2026-10-28）。'immediate' 才是"用户点了按钮 ⇒ 立刻到底"；
+   * 换会话时由 tail.setFocus 用 false 调进来，位置交给 restore（它可能记着用户读到的中间位置）。
+   */
+  function setTail(on, immediate) {
+    tail = on === true;
+    if (!tail || !container) { return; }
+    restoreTarget = null;
+    if (immediate === true) { writeTop(container.scrollHeight); }
+  }
+
+  function isTail() { return tail; }
+
+  /** 关掉 Tail 并通知状态机（'scroll' = 用户自己改了阅读进度；'restore' = 恢复到了中间位置）。 */
+  function cancelTail(kind) {
+    if (!tail) { return; }
+    tail = false;
+    if (!NS.tail) { return; }
+    if (kind === 'restore') {
+      if (NS.tail.cancelFromRestore) { NS.tail.cancelFromRestore(); }
+    } else if (NS.tail.cancelFromScroll) {
+      NS.tail.cancelFromScroll();
+    }
+  }
 
 
 
@@ -466,6 +737,8 @@ export const scrollClient = `
 
   function restore(sessionId) {
     if (!container) { return; }
+    // 切会话 = 换了一批卡片：上一张卡片的焦点环不能跟过来。
+    setActive(null);
     var saved = sessionId ? offsets[sessionId] : undefined;
     if (saved === undefined) {
       toBottom();
@@ -475,6 +748,9 @@ export const scrollClient = `
       toBottom();
       return;
     }
+    // [CUSTOM- 恢复到一个用户自己选的中间位置 ⇒ Tail 必须关掉（它不该把人拽回底部）。
+    // 只改这个会话那一条记录，不动默认值 —— 这不是"用户拨了开关"。
+    cancelTail('restore');
     pinned = false;
     showJump();
     restoreTarget = saved.top;
@@ -526,7 +802,10 @@ export const scrollClient = `
     remember: remember,
     restore: restore,
     reassert: reassert,
-    forget: forget
+    forget: forget,
+    // [CUSTOM- Tail（地址栏按钮）：状态在 client/tail.ts，这里只执行。
+    setTail: setTail,
+    isTail: isTail
   };
 })(window.__vac = window.__vac || {});
 `;

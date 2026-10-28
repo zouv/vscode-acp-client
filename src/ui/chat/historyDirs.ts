@@ -55,6 +55,42 @@ export function directoryKey(cwd: string | undefined, platform: NodeJS.Platform 
   return platform === 'linux' ? slashed : slashed.toLowerCase();
 }
 
+/**
+ * [CUSTOM- The picker's final "Recently used" list (2026-10-28).
+ *
+ * Two sources feed it (the local session cache and the agent's own `session/list`), and
+ * they routinely spell the same folder differently — on Windows `F:/work` and `f:/work`
+ * are one directory but two strings, so the picker showed the same path twice (user
+ * report, screenshot included). De-duplication must therefore use {@link directoryKey},
+ * not string equality.
+ *
+ * Order is preserved (first spelling wins — that is the most recently active one), the
+ * user's own "removed" list is filtered by the same identity, and `limit` applies last.
+ */
+export function recentDirectoryList(
+  candidates: ReadonlyArray<unknown>,
+  limit: number,
+  dismissed: ReadonlyArray<string> = [],
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const blocked = new Set<string>();
+  for (const cwd of dismissed) {
+    const key = directoryKey(cwd, platform);
+    if (key) { blocked.add(key); }
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || candidate.length === 0) { continue; }
+    const key = directoryKey(candidate, platform);
+    if (!key || seen.has(key) || blocked.has(key)) { continue; }
+    seen.add(key);
+    if (out.length >= limit) { continue; }
+    out.push(candidate);
+  }
+  return out;
+}
+
 /** Last path segment ("D:\Git\x\" → "x"). Trailing separators are ignored. */
 export function folderName(path: string): string {
   const trimmed = String(path ?? '').replace(/[\\/]+$/, '');

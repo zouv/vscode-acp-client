@@ -437,6 +437,22 @@ export function styles(): string {
     border-left: 2px solid transparent;
   }
   .outline-item:hover { background: var(--vscode-list-hoverBackground); }
+  /* [CUSTOM- 「Recently used」行：主按钮 + 右侧删除（两个**兄弟** —— button 不能嵌 button）。
+     主按钮占满剩余宽度，删除按钮常显但低调（次要色），悬停才提亮：它在下拉里必须能被看见，
+     否则用户永远不知道这个列表可以清。 */
+  .outline-row { display: flex; align-items: center; }
+  .outline-row > .outline-item { flex: 1; min-width: 0; width: auto; }
+  .outline-remove {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; margin-right: 4px; padding: 0;
+    border: none; border-radius: 3px; cursor: pointer;
+    background: transparent; color: var(--vscode-descriptionForeground);
+  }
+  .outline-remove:hover {
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+    color: var(--vscode-foreground);
+  }
+  .outline-remove-icon, .outline-remove-icon svg { display: block; width: 12px; height: 12px; }
   .outline-item.active {
     background: var(--vscode-list-activeSelectionBackground);
     color: var(--vscode-list-activeSelectionForeground);
@@ -555,10 +571,12 @@ export function styles(): string {
      整个删掉了，底部改画圆环（.gauge-* 见下），三条规则一起成了死 CSS，一并清掉。 */
 
   /* [CUSTOM- 未连接（含正在连接）时，header 只留历史按钮和地址：
-     Times 在没有记录的界面上没有意义。相位由 stateCard 写在 body 的 data-phase 上，
+     Times / Tail 在没有记录的界面上没有意义。相位由 stateCard 写在 body 的 data-phase 上，
      所以这里不需要任何 JS。 */
   body[data-phase="disconnected"] #timeToggle,
-  body[data-phase="connecting"] #timeToggle { display: none; }
+  body[data-phase="disconnected"] #tailBtn,
+  body[data-phase="connecting"] #timeToggle,
+  body[data-phase="connecting"] #tailBtn { display: none; }
 
   /* --- Messages -------------------------------------------------------- */
   .message-area { position: relative; flex: 1; min-height: 0; display: flex; }
@@ -663,6 +681,16 @@ export function styles(): string {
      对照：.tab-strip 同样是 flex + overflow，但它的子项早就写了 flex: 0 0 auto，所以从没出过这个问题。 */
   .messages > * { flex: 0 0 auto; }
 
+  /* [CUSTOM- 内层滚动卡片的「焦点」指示（2026-10-28）：滚轮默认滚整个面板，
+     只有用户**点进**某张卡片之后，这张卡片内部的滚动区才吃滚轮（见 client/scroll.ts
+     的 setActive）。没有这个环，用户就无从知道"我现在的滚轮会滚谁"。
+     用 outline 而不是 border：不占布局、聚焦瞬间不会让卡片抖 1px；
+     outline-offset: -1px 把环画在盒子内侧，不顶到相邻内容。 */
+  .messages .scroll-active {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+  }
+
   /* [CUSTOM- 「新输出自动展开」的卡片限高（2026-10-21）：只有带 .auto-expanded 的卡
      吃这两个变量（手动点开的不受限）。变量由 client/autoExpand.ts 写到 body 上；
      0 / 'none' = 不限。超出的内容在卡片内部滚动，而不是把整条消息拉成一堵墙。 */
@@ -674,6 +702,22 @@ export function styles(): string {
     max-height: var(--vac-thought-expand-h, 240px);
     overflow-y: auto;
   }
+  /* [CUSTOM- 一张卡片只留**一个**纵向滚动条（2026-10-28）。
+     自动展开时外层 .tool-body 已经是滚动视口，而它里面还套着 .tool-seg-out（510px）与
+     .diff-body（340px）——三条滚动条一根套一根，用户只看得到"卡边层层嵌套"。
+     这里只取消**限高**（overflow 保留：diff / 代码块仍要横向滚），超出的高度交给外层那一个。
+     非自动展开的卡片同理：视口是 .tool-seg-out（510），里面的 diff 不再自己限高。
+     结果：一个卡片恰好一条纵向滚动条，scroll.ts 的"最近滚动容器"也永远只有唯一答案。 */
+  .messages .tool.auto-expanded .tool-body .tool-seg-out,
+  .tool-body .tool-seg-out .diff-body { max-height: none; }
+
+  /* [CUSTOM- 内层滚动区**不许把滚动链传给面板**（2026-10-28）。滚轮的拦截在 scroll.ts，
+     但浏览器把某一串滚轮判成不可取消（或边界接力）时仍会自己滚——那时卡片滚到尽头就会
+     带动整块面板，正是用户报的"卡片和面板一起滚"。contain 把这条链在本层掐断，
+     面板只能由"指针不在卡片上"那条路滚。不许换成 auto（那会显式允许接力）。 */
+  .messages .thought-body,
+  .messages .tool-body,
+  .messages .tool-seg-out { overscroll-behavior: contain; }
 
   /* [CUSTOM- Drop feedback: shown while a file is dragged over the
      panel. Uses the focus border so it is visible in every theme. */
@@ -1674,6 +1718,13 @@ export function styles(): string {
     padding: 3px 5px; line-height: 0;
   }
   #timeToggle .time-icon, #timeToggle .time-icon svg { display: block; }
+  /* [CUSTOM- Tail（自动追尾，2026-10-28）：与 Times 同样是**方块**图标按钮（没有文字），
+     所以内边距收窄、图标自己撑尺寸；.on/.off 沿用上面那套强调色 / 无底框的约定。 */
+  #tailBtn {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 3px 5px; line-height: 0;
+  }
+  #tailBtn .tail-icon, #tailBtn .tail-icon svg { display: block; }
   /* [CUSTOM- 纵向收紧：工具卡一轮十几张，body 的上下留白各收 2px 就有几十像素。 */
   .tool-body { padding: 3px 7px 5px; border-top: 1px solid var(--vscode-panel-border); }
   /* [CUSTOM- IN / OUT 段：**左右两栏**（对齐官方插件）——段标在左列、

@@ -43,7 +43,7 @@ import { isBlankText } from '../ui/chat/content/contentBlocks';
 // [CUSTOM- The markdown link router under test.
 import { SafeMarkdown } from '../ui/chat/markdown';
 import { choiceChanges, choiceSnapshotFromState, choiceSnapshotPatched } from '../ui/chat/sessionChoices';
-import { directoryKey, directoryOptions } from '../ui/chat/historyDirs';
+import { directoryKey, directoryOptions, recentDirectoryList } from '../ui/chat/historyDirs';
 import { readDiskSessions, readTranscriptTimes } from '../ui/chat/diskSessions';
 import { ToolInvocationStore } from '../ui/chat/transcript/ToolInvocationStore';
 // [CUSTOM- 子 agent 身份要一路走到视图模型（卡片头那个 chip 的来源）。
@@ -505,6 +505,39 @@ suite('chat panel: recent directories for the picker', () => {
       entry('Claude Code', '', 's3', '2026-09-01T00:00:00Z'),
     ]);
     assert.deepStrictEqual(store.recentDirectories('Claude Code'), ['/a']);
+  });
+
+  // [CUSTOM- 用户 2026-10-28 报：抽屉的「Recently used」里同一条路径出现两次，只有盘符大小写不同。
+  // 原因是两个来源（本地缓存 / agent 的 session/list）各记一种写法，而去重比的是**原字符串**。
+  test('同一目录只差大小写 ⇒ 只留一条（第一次出现的写法胜出）', () => {
+    const list = recentDirectoryList([
+      'F:/Developer/AI/vibe/agent_claude',
+      'f:/Developer/AI/vibe/agent_claude',
+      'D:/Git/zgithub/vscode-acp-client',
+    ], 8, [], 'win32');
+    assert.deepStrictEqual(list, [
+      'F:/Developer/AI/vibe/agent_claude',
+      'D:/Git/zgithub/vscode-acp-client',
+    ], '重复行消失，顺序不变');
+  });
+
+  test('反斜杠 / 尾斜杠也算同一个目录；删掉的那条按同一性一起过滤', () => {
+    const list = recentDirectoryList([
+      'D:\\Work\\Repo\\',
+      'd:/work/repo',
+      'D:/other',
+    ], 8, ['d:\\work\\repo'], 'win32');
+    assert.deepStrictEqual(list, ['D:/other'],
+      '用户删的是 d:\\work\\repo ⇒ 它的其它写法也不能从另一条来源漏出来');
+  });
+
+  test('Linux 上大小写是两个目录（归一化只按平台规则来）', () => {
+    assert.deepStrictEqual(recentDirectoryList(['/Home/Me', '/home/me'], 8, [], 'linux'),
+      ['/Home/Me', '/home/me']);
+  });
+
+  test('limit 是去重之后再截断的', () => {
+    assert.deepStrictEqual(recentDirectoryList(['/a', '/A', '/b', '/c'], 2, [], 'win32'), ['/a', '/b']);
   });
 });
 

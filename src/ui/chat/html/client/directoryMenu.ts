@@ -61,7 +61,7 @@ export const directoryMenuClient = `
 
   function choose(path) { applyPath(path); }
 
-  function makeRow(label, path, className) {
+  function makeRow(label, path, className, removable) {
     var item = NS.dom.el('button', 'outline-item' + (className ? ' ' + className : ''));
     item.type = 'button';
     if (path) { item.setAttribute('data-cwd-choice', path); item.setAttribute('title', path); }
@@ -75,13 +75,46 @@ export const directoryMenuClient = `
       render();
       NS.bridge.post({ type: 'pickDirectory' });
     });
-    return item;
+    if (!removable || !path) { return item; }
+    // [CUSTOM- 「Recently used」行右侧的删除（2026-10-28）。button 不能嵌 button，
+    // 所以行的两个动作是**兄弟**：主按钮 + 删除按钮，外面套一层 flex 的 .outline-row。
+    // 点完本地立刻拿掉这一行（不等往返），宿主那边记下"不想再看到"并重发候选。
+    var row = NS.dom.el('div', 'outline-row');
+    row.appendChild(item);
+    var remove = NS.dom.el('button', 'outline-remove');
+    remove.type = 'button';
+    remove.title = 'Remove from this list';
+    remove.setAttribute('aria-label', 'Remove ' + path + ' from recently used');
+    var icon = NS.icons && NS.icons.icon ? NS.icons.icon('trash', 'outline-remove-icon') : null;
+    if (icon) { remove.appendChild(icon); } else { remove.textContent = '\\u00d7'; }
+    remove.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      removeRecent(path);
+    });
+    row.appendChild(remove);
+    return row;
   }
 
-  function group(label, paths) {
+  /** 从「Recently used」里删掉一条：本地先移除，再让宿主持久化并回一份新候选。 */
+  function removeRecent(path) {
+    if (choices && choices.recent) {
+      var next = [];
+      for (var i = 0; i < choices.recent.length; i++) {
+        if (choices.recent[i] !== path) { next.push(choices.recent[i]); }
+      }
+      choices.recent = next;
+    }
+    render();
+    NS.bridge.post({ type: 'removeRecentDirectory', path: path });
+  }
+
+  function group(label, paths, removable) {
     if (!paths || paths.length === 0) { return; }
     listEl.appendChild(NS.dom.el('div', 'outline-group', label));
-    for (var i = 0; i < paths.length; i++) { listEl.appendChild(makeRow(paths[i], paths[i], '')); }
+    for (var i = 0; i < paths.length; i++) {
+      listEl.appendChild(makeRow(paths[i], paths[i], '', removable === true));
+    }
   }
 
   function render() {
@@ -99,7 +132,7 @@ export const directoryMenuClient = `
       listEl.appendChild(NS.dom.el('div', 'outline-group',
         'This session will be created in: ' + ((draft && draft.cwd) || 'the default directory')));
       group('Workspace folders', folders);
-      group('Recently used', recent);
+      group('Recently used', recent, true);
       listEl.appendChild(makeRow('Browse\\u2026', null, 'outline-browse'));
       return;
     }
@@ -110,7 +143,7 @@ export const directoryMenuClient = `
     listEl.appendChild(NS.dom.el('div', 'outline-group',
       'This session has already started, so its directory is fixed. Pick one to start a new session there:'));
     group('Workspace folders', folders);
-    group('Recently used', recent);
+    group('Recently used', recent, true);
     listEl.appendChild(makeRow('Another directory\\u2026', null, 'outline-browse'));
   }
 

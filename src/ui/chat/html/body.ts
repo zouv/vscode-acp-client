@@ -47,6 +47,11 @@ export function body(surface: SurfaceKey = 'view'): string {
     <button id="autoExpandBtn" class="nest-toggle"
             title="Expand cards as new output arrives"
             aria-label="Auto-expand new output"></button>
+    <!-- [CUSTOM- Tail（消息面板自动追尾，2026-10-28）：挨着自动展开，同一组右侧动作。
+         图标由 client/tail.ts 在 init 时挂上（icons.ts 的 'tail'）；滚动面板会把它自动关掉。 -->
+    <button id="tailBtn" class="nest-toggle"
+            title="Follow new output automatically"
+            aria-label="Follow new output"></button>
     <button id="timeToggle" class="nest-toggle"
             title="Show the wall-clock time of each record"
             aria-label="Show record times"></button>

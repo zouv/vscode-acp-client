@@ -321,3 +321,67 @@ Tab 栏：`#settingsBtn` 用 `margin-left: auto` 固定在条带最右；`#newTa
 | 自动展开的作用面 | **只作用于 live 路径**（`transcriptView.append` / `patch` / `updateTool`）；`hydrate`（历史回放）刻意不展开 —— 大会话整屏展开既卡又抢滚动位置。展开后 `append` 的 `scroll.follow()` 按最终高度贴底；`patch` 里推理块定稿的"自动折叠"在勾了 `thought` 时不生效。 |
 | 运行中会话的关闭确认 | 宿主 `closeSessionWithConfirm`：`isSessionRunning` 为真时 `showWarningMessage(..., {modal:true}, 'Close')`；确认后仍走 `SessionManager.closeSession`（内部先 `cancelTurn` 并回答待决请求）。× / Delete / 右键 / 中键四条入口共用。 |
 | 中键关闭 | `tabs.ts` 每个 tab 的 `mousedown`（button==1 → `preventDefault`，压住 WebView 的自动滚动）与 `auxclick`（button==1 → `closeModel`）。**不要**用 `modelIndexOf` 找模型（它漏了 `data-restore-id`），回调里直接闭包捕获 `model`。 |
+
+### 5.53 内层滚动卡片的焦点门控与自动追尾（2026-10-28）
+
+**症状**：在消息面板里用滚轮滚动时，指针一进到带滚动条的卡片（`.diff-body` / `.tool-seg-out` /
+`.thought-body` / 自动展开的 `.tool-body`）上，滚动就被卡片接管——整块面板的滚动被打断。
+
+**为什么**：这是嵌套滚动容器的默认行为，纯 CSS 修不了（`overscroll-behavior: contain` 只会让面板
+**更**接不上）。所以把"谁吃滚轮"做成显式的两个状态，逻辑全在 `html/client/scroll.ts`（`init` 里注册）：
+
+| 机制 | 规则 |
+|---|---|
+| 聚焦（`setActive` / `activeScroller` / `activeCard`） | `pointerdown`（document，capture）落在卡片上 ⇒ 该卡片**离落点最近**的纵向滚动容器（落点在标题栏这类"不在滚动区里"的地方时取卡片里第一个）拿到 `.scroll-active`。点面板空白 / 输入卡 / 标签栏即交还。切会话（`restore`）也交还。 |
+| 滚轮门控（document `wheel`，`capture` + `passive:false`） | 按**指针位置**分流，两边互不牵连：指针在**已聚焦**卡片内 ⇒ 只滚它自己的滚动区，**到边界就停、面板原地不动**（`scrollInner` 自己夹紧，**不**把余量交给面板 —— 交还过一版，手感就是"卡片和面板一起滚"）；指针在**未聚焦**卡片内且有内层滚动区 ⇒ `preventDefault` + `writeTop(面板 + delta)`；指针离开卡片 ⇒ 不拦截，浏览器默认滚面板。**横向** delta（Shift+滚轮 / 触控板横滑）与 Ctrl/Cmd+滚轮（IDE 缩放）一律放行。内层滚动区另有一道 CSS 保险：`overscroll-behavior: contain`（`.thought-body` / `.tool-body` / `.tool-seg-out`）——浏览器把某串滚轮判成不可取消时，滚动链也不会从卡片传到面板。 |
+| 一张卡一条滚动条 | 自动展开时外层 `.tool-body` 是视口，里层 `.tool-seg-out`（510）/`.diff-body`（340）**不再各自限高**（`styles.ts` 里 `.tool.auto-expanded .tool-body .tool-seg-out` 与 `.tool-body .tool-seg-out .diff-body` 的 `max-height: none`）。不这么做就是"滚动条套滚动条"，用户 2026-10-28 报的"卡边多层嵌套"就是它。 |
+| 自动追尾（`flushTails`） | `MutationObserver`（`childList`+`characterData`，subtree）收"变了哪一块"，布局读取与写入推迟到 `NS.dom.schedule` 那一帧。一个容器要同时满足：仍纵向可滚 / `innerPinned` 不是 false（用户没在里面往上滚过）/ 所属卡片 `isLiveCard`（`.thought-spin`、`.tool-status.tc-in_progress`、`.subagent-state[data-state="running"]`）才跟到 `scrollHeight`。 |
+| 样式 | `.messages .scroll-active { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }` —— 用 outline 不用 border，聚焦瞬间不产生 1px 布局位移。 |
+
+**三条不变量**（破了不会有任何自动检查报错）：
+
+1. **聚焦卡片内滚动时面板绝不跟着动**。`scrollInner` 只写内层容器、自己夹紧；把余量交给面板那版
+   已经被用户否掉（"卡片内和消息面板一起滚动"）。
+2. **只追"还在流式"的卡片**。历史回放 / 已完成的卡片如果也追，一打开旧会话，每个长输出卡都会停在
+   自己的**末尾**而不是开头（用户要看的是命令输出的第一行）。
+3. **用户在容器里往上滚过就不再追**（`innerPinned`）。工具卡的 body 每个输出 chunk 都会重建
+   （`toolCallView.fillToolBody`），新容器没有历史，因此它默认"贴底"——重建后重新跟到最后一行正是
+   期望行为；而 `.thought-body` 这类身份稳定的容器靠 `scroll` 事件记住用户的取舍。
+
+**诊断**：`focus:<容器类>`（聚焦变化，强制记）、`wheel-card:<容器类>` / `wheel-gate:<容器类>`
+（只在**换了卡片**时记一条，避免每 700ms 一条把日志桥的共享配额吃光，见 §5.46 的配额规矩）。
+
+**验收**：桩 DOM 7 条（`src/test/chat-client.test.ts` 的「scroll: 内层滚动卡片的焦点门控与自动追尾」）。
+真机验收见 `docs/03-验收清单.md`。
+
+### 5.54 Tail（消息面板自动追尾）与会话级开关的「落定」（2026-10-28）
+
+**为什么要它**：用户要一个"一直跟到最后一条"的显式开关；并且明确要求 **Tail / Times / 自动展开 /
+Outline 都是会话级**——在一个会话里拨它只影响这个会话，只有**下一个新开的会话**继承新值。
+
+**状态**：`client/tail.ts`（新模块，与 `times.ts` 完全同形）：
+
+| 项 | 规则 |
+|---|---|
+| 数据 | `UiPrefs.tailBySession`（会话 → 布尔）+ `tailDefault`。宿主存 `globalState`，两个面同一份。**默认 `tailDefault` = true** —— 不开按钮时也照旧"贴底跟随"，那是改动前就有的行为，按钮只是把它显式化。 |
+| 运行时 | `scroll.ts` 的 `tail` 旗标：`setTail(on, immediate)`；`follow()` 的判据是 **`pinned && tail`** —— **Tail 关掉 ⇒ 绝不自动滚**（"别动我的视口"），开着时才跟到底。`pinned` 仍然如实反映"贴底"，Tail **不许伪造它**（大纲跳转、探针、`reflow` 都读它）。`immediate` 只在**用户点按钮**时为真（换会话由 `restore` 决定落点）。 |
+| 退出路径 | ① 用户用滚轮 / 拖动滚动条改变了阅读进度（`.messages` 上**非程序写入**的 scroll 事件）→ `cancelTail('scroll')`；② 大纲跳到某条记录（`jumpTo`，也是用户主动离开底部）；③ 切会话时恢复到一个用户自己选的中间位置（`restore` 里 `saved.pinned === false`）→ `cancelTail('restore')`。**都只改这个会话那一条记录，不动默认值** —— 滚动不是"拨偏好"。 |
+
+**「落定」（`seedKnown`，四个模块同一件事）**：光有"按会话 + 默认值"还不够 —— 一个没有记录的
+**已开启**会话会跟着默认值走，于是"A 里拨开关，切到 B 发现它也变了"。所以 `noteSessions`（boot 在
+`boot` / `sessionsChanged` 处喂**打开的会话**）与 `applyPrefs` 之后，给每个还没有记录的会话补一条
+"此刻的有效值"。之后默认值怎么变都与它们无关，只有真正**新开**的会话才继承。顺序约束：
+宿主偏好到之前（`prefsSeen` 为假）不落定，否则会用本地默认值把用户的真实选择钉死。
+
+**图标**：Tail = `icons.tail`（两颗**同向**的下尖角 = 一直跟到最后一行）；自动展开 = `icons.expand`
+（两颗**朝外**的尖角 = 卡片被撑开）。2026-10-28 用户要求两者对调：原先 Tail 是"箭头 + 底线"、
+自动展开是双下尖角，读起来后者更像 Tail。
+
+**「Recently used」的删除**：列表是从会话条目**派生**的（`SessionHistoryStore.recentDirectories` +
+agent 的 `session/list`），删不掉源数据 ⇒ `SessionHistoryStore` 用**独立 key**
+`vac.recentCwdDismissed.v1` 记一份"不想再看到"的路径集合，`ChatPanelHost.recentDirectories` 在合并
+两个来源时统一过滤；同一目录再新建会话即自动恢复（`upsertNew` 里 `undismiss`）。客户端点完立刻
+把行拿掉（不等往返），再发 `removeRecentDirectory` 让宿主持久化并回一份新候选。
+
+**验收**：桩 DOM 7 条（Tail 4 + Tail 运行时 1 + Times 落定 1 + 目录删除 1）。
+真机见 `docs/03-验收清单.md`。

@@ -61,6 +61,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | Dashboard 用量统计 / 指标 | `src/dashboard/**`（数据层在 `usage/`） | 聊天面板 | §2.9 |
 | 打包 / 发布 | `scripts/build.mjs`、`.vscodeignore`、`package.json(scripts)` | 全部业务代码 | §6 |
 | 图标 / 品牌资源（侧边栏、插件徽标、编辑区标签页） | `scripts/make-icon.mjs`（唯一几何源）+ `resources/` + `package.json(icon, viewsContainers)` + `ui/chat/ChatEditorPanel.ts(iconPath)` | 全部业务代码 | §6 |
+| 记录区滚轮被卡片内的滚动条打断 / 流式卡片不跟到最后一行 | `html/client/scroll.ts` 的 `setActive`（焦点门控）+ document `wheel`（capture / 非 passive）+ `flushTails` / `isLiveCard`（自动追尾）；样式 `.messages .scroll-active`（`styles.ts`） | core、协议 | §2.5 → `arch/chat-panel-state.md` §5.53 |
 | **记录区布局 / 观感**（折叠形状、占几行、有没有重复内容） | `scripts/preview-records.mjs`（真 Chromium 无头截图，**自己看，别推理**）＋ `html/styles.ts` | core、tree、协议代码 | §5 |
 
 > 定位优先级：**函数名 grep > 本表**。表过期时以代码为准并顺手订正本表。
@@ -193,6 +194,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 会话 tab / 目录图标悬停提示 | `html/client/tabs.ts` 的 `showTip` / `hideTip` | 自绘 `.tab-tip` 浮层（原生 `title` 不能分段着色）：tab = 标题 + 灰色 SessionId；目录图标 = 路径（无 `Dir:` 前缀）+ 灰色 State |
 | Markdown 渲染预设 | `UiPrefs.markdownStyle` + `boot.ts` 的 `applyMarkdownStyle` + `styles.ts` 的 `body[data-md-style]` 规则 | `editor`（默认，跟随主题）/ `github` / `compact` / `reading`；只改排版与主题 token 的使用，不改渲染链路 |
 | 新输出自动展开 | `html/client/autoExpand.ts`（状态 + 地址栏按钮）+ `transcriptView.setAutoExpand` / `expandEntry` | 按会话（`autoExpandBySession` + 默认值）与全局卡片类型（`autoExpandKinds`：tool / thought / diff）；只作用于 live append/patch/updateTool，hydrate 不碰 |
+| 消息面板自动追尾（Tail 按钮） | `html/client/tail.ts`（状态 + 地址栏按钮）+ `scroll.setTail` / `follow` / `cancelTail` | 与 Times 同一形态：`tailBySession` + `tailDefault`（默认 true）；用户滚动或恢复中间位置即取消（只改会话那条）；§5.54 |
+| 目录抽屉「Recently used」删一条 / 同路径重复 | `html/client/directoryMenu.ts` 的 `makeRow(..., removable)` / `removeRecent` + 宿主 `handleRemoveRecentDirectory` + `SessionHistoryStore.dismissRecentDirectory` + `historyDirs.recentDirectoryList` | 列表是派生的 ⇒ 记 `vac.recentCwdDismissed.v1` 并在合并时过滤；**去重按 `directoryKey`**（`F:/x` 与 `f:/x` 是同一条）；同目录再建会话即恢复 |
 | 首屏连接预热 / 连接耗时 | `ChatPanelHost.prewarm`（由 `ChatViewProvider.resolveWebviewView` / `openEditorChat` 调用） | 只预热 `ensureConnected`、不建会话；日志里有 `prewarm connected in Nms` 与 `initialized in Nms` / `session ready in Nms` |
 | webview 样式 | `html/styles.ts` | 按 §5 的锚点搜 |
 
@@ -284,6 +287,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 宿主 ↔ Dashboard webview | `postMessage`（见 `dashboard/DashboardModel.ts`） | CSP + nonce；命令走白名单 | 只投递 `snapshot`；不可见时不投 |
 | 会话缓存 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.sessionHistory.v1`，**改名即丢历史** |
 | 跨 IDE 全局配置 | `VAC_HOME/config.json`（默认 `~/.vac`，`GlobalSettings.ts`） | —— | 白名单键（首期 `vac.customModels`）；原子写（临时文件 + rename）；读取顺序：工作区 > 用户 > 全局 > `package.json` 默认 |
+| 「Recently used」的删除 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.recentCwdDismissed.v1`（路径数组）；同一目录新建会话即自动移除 |
 | 会话恢复快照 | `globalState`（`ChatPanelHost.saveOpenSessions`） | —— | key `vac.openSessions.v1`；每条 `RecoverableSession` 可带 `app`（写入时的 IDE 标签），与当前环境相同的会在下发前剥掉，只用于标注 |
 | 模型切换诊断 | `SessionManager.noteModelChange` | —— | `model <旧> -> <新> (<source>)`，source = `session-response` / `set-response` / `notification`；只在值真的变化时写 |
 | 用量索引 | `globalStorageUri` 下 `usage-index.json` | —— | 原子写（临时文件 + rename），损坏则重建 |

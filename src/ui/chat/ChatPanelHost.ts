@@ -87,7 +87,7 @@ import {
 // `directoryOptions` are pure and unit-tested; `folderName` replaces the local
 // `basename` (same "last path segment" idea the client's folderName implements, and
 // two copies of it here is exactly how they drift — pitfalls #19).
-import { directoryKey, directoryOptions, folderName as basename } from './historyDirs';
+import { directoryKey, directoryOptions, folderName as basename, recentDirectoryList } from './historyDirs';
 import { claudeTranscriptDir, readDiskSessions, readTranscriptTimes, readTranscriptUserAttachments } from './diskSessions';
 import type { TranscriptUserParts } from './diskSessions';
 import type { HistorySessionSummary } from './protocol';
@@ -812,6 +812,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       case 'listDirectoryChoices':
         void this.handleListDirectoryChoices((msg as { agentName?: string }).agentName, from);
         return;
+      // [CUSTOM- 目录抽屉「Recently used」的删除（2026-10-28）。非会话作用域（草稿页也要能删）：
+      // 记下这条路径并重发候选，客户端那边点完立刻把行拿掉、这里只是让它在下次也消失。
+      case 'removeRecentDirectory':
+        void this.handleRemoveRecentDirectory((msg as { path?: string }).path, from);
+        return;
       case 'pickDirectory':
         // [CUSTOM- purpose 区分「选 cwd」还是「选 additionalDirectories」，随应答回传。
         void this.handlePickDirectory(from, (msg as { purpose?: 'cwd' | 'additionalDirectories' }).purpose);
@@ -888,6 +893,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // [CUSTOM- Times（第三个写者，同一条记录）：整份表 + 一个默认值。
         const timesBySession = (msg as { timesBySession?: unknown }).timesBySession;
         const timesDefault = (msg as { timesDefault?: unknown }).timesDefault;
+        // [CUSTOM- Tail（消息面板自动追尾，第六个写者）：与 Times 完全同一形态。
+        const tailBySession = (msg as { tailBySession?: unknown }).tailBySession;
+        const tailDefault = (msg as { tailDefault?: unknown }).tailDefault;
         // [CUSTOM- 大纲侧栏的"按会话开/关"（第四个写者，同一形状）。
         const outlineOpenBySession = (msg as { outlineOpenBySession?: unknown }).outlineOpenBySession;
         const outlineOpenDefault = (msg as { outlineOpenDefault?: unknown }).outlineOpenDefault;
@@ -918,6 +926,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         if (times !== undefined) { next.timesBySession = times; }
         const def = timesDefault === undefined ? previous.timesDefault : timesDefault === true;
         if (def !== undefined) { next.timesDefault = def; }
+        const tailMap = tailBySession === undefined ? previous.tailBySession : sanitizeSessionFlags(tailBySession);
+        if (tailMap !== undefined) { next.tailBySession = tailMap; }
+        const tailDef = tailDefault === undefined ? previous.tailDefault : tailDefault === true;
+        if (tailDef !== undefined) { next.tailDefault = tailDef; }
         const openMap = outlineOpenBySession === undefined
           ? previous.outlineOpenBySession
           : sanitizeSessionFlags(outlineOpenBySession);
@@ -3232,6 +3244,17 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   /**
+   * [CUSTOM- 「Recently used」删一条（2026-10-28）。列表是**派生**的（会话条目的 cwd +
+   * agent 的 session/list），所以删的是"不想再看到"的标记，随后重发候选让两处收敛。
+   */
+  private async handleRemoveRecentDirectory(path: string | undefined, to: SurfaceKey): Promise<void> {
+    if (typeof path === 'string' && path.length > 0) {
+      this.sessionManager.getHistoryStore()?.dismissRecentDirectory(path);
+    }
+    await this.handleListDirectoryChoices(undefined, to);
+  }
+
+  /**
    * Directories this agent has used, most recent first.
    *
    * Two sources, merged: the local history cache (durable, but `workspaceState`
@@ -3244,31 +3267,25 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   private async recentDirectories(agent: string | null): Promise<string[]> {
     if (!agent) { return []; }
     const limit = this.recentLimit();
-    const merged: string[] = [];
-    const push = (candidate: unknown): void => {
-      if (typeof candidate !== 'string' || candidate.length === 0) { return; }
-      if (merged.includes(candidate)) { return; }
-      if (merged.length >= limit) { return; }
-      merged.push(candidate);
-    };
-
-    for (const cwd of this.sessionManager.getHistoryStore()?.recentDirectories(agent) ?? []) {
-      push(cwd);
-    }
+    const store = this.sessionManager.getHistoryStore();
+    // [CUSTOM- 同一目录的不同写法只留一条（2026-10-28）。Windows 上同一个文件夹会被写成
+    // 大写盘符与小写盘符两种（本地缓存与 agent 的 session/list 各记一种），原来按**原字符串**
+    // 去重 ⇒ 下拉里出现两条一模一样的路径。身份归一在 historyDirs.recentDirectoryList 里
+    // （与历史筛选器同一个 directoryKey，不另造一份）。
+    const candidates: unknown[] = [];
+    for (const cwd of store?.recentDirectories(agent) ?? []) { candidates.push(cwd); }
     if (this.sessionManager.isAgentConnected(agent)
       && this.sessionManager.getCachedCapabilities(agent)?.list) {
       try {
         const response = await this.sessionManager.listSessions(agent);
-        for (const session of response.sessions) {
-          push((session as { cwd?: unknown }).cwd);
-        }
+        for (const session of response.sessions) { candidates.push((session as { cwd?: unknown }).cwd); }
       } catch (e) {
         // A failed agent query is not worth failing the picker over: the local
         // cache is still a usable answer.
         log(`${LOG_PREFIX}: directory choices: agent list failed (${String(e)})`);
       }
     }
-    return merged;
+    return recentDirectoryList(candidates, limit, store?.dismissedRecentDirectories() ?? []);
   }
 
   /** Native folder picker — the webview cannot open one itself. */
@@ -4096,6 +4113,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         outlineWidth: 240,
         timesBySession: {},
         timesDefault: false,
+        // Tail 的默认值是 true（不开按钮时也照旧自动跟到最后一条）。
+        tailBySession: {},
+        tailDefault: true,
         outlineOpenBySession: {},
         outlineOpenDefault: false,
         autoExpandBySession: {},

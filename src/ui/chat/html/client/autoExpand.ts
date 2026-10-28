@@ -26,6 +26,8 @@ export const autoExpandClient = `
   var toolHeight = 360;
   var thoughtHeight = 240;
   var known = [];
+  // 宿主的偏好到了之前不许"落定"任何会话（见 seedKnown）。
+  var prefsSeen = false;
 
   function enabledFor(sessionId) {
     if (sessionId && Object.prototype.hasOwnProperty.call(bySession, sessionId)) {
@@ -82,6 +84,23 @@ export const autoExpandClient = `
     });
   }
 
+  /**
+   * [CUSTOM- 把"已开启的会话"落定（2026-10-28）：拨开关只影响当前会话，只有**下一个新开的
+   * 会话**才继承新默认值 —— 与 client/times.ts 的 seedKnown 同一件事、同一个理由。
+   */
+  function seedKnown() {
+    if (!prefsSeen) { return; }
+    var changed = false;
+    for (var i = 0; i < known.length; i++) {
+      var id = known[i];
+      if (!Object.prototype.hasOwnProperty.call(bySession, id)) {
+        bySession[id] = fallback === true;
+        changed = true;
+      }
+    }
+    if (changed) { persist(); }
+  }
+
   function noteSessions(sessions) {
     var ids = [];
     for (var i = 0; i < sessions.length; i++) {
@@ -89,16 +108,19 @@ export const autoExpandClient = `
       if (id) { ids.push(id); }
     }
     known = ids;
+    seedKnown();
   }
 
   function setFocus(sessionId) {
     currentSessionId = sessionId || null;
     if (currentSessionId && known.indexOf(currentSessionId) < 0) { known.push(currentSessionId); }
+    seedKnown();
     apply();
   }
 
   /** 收下宿主那份偏好。缺字段 = 那一项从来没被写过 ⇒ 保留本地值（同 times.applyPrefs）。 */
   function applyPrefs(prefs) {
+    prefsSeen = true;
     if (prefs && prefs.autoExpandBySession && typeof prefs.autoExpandBySession === 'object') {
       var next = {};
       for (var key in prefs.autoExpandBySession) {
@@ -127,6 +149,7 @@ export const autoExpandClient = `
         thoughtHeight = heightOf(prefs.autoExpandThoughtHeight, 240);
       }
     }
+    seedKnown();
     applySizes();
     apply();
   }

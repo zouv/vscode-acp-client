@@ -16,47 +16,43 @@
 ## 状态快照
 
 - **最近更新**：2026-10-28
-- **整体状态**：✅ v1.7.0 已发布（配置作用域 + 跨 IDE 全局配置 + custom models 修复 +
-  进场 markdown 修复）。v1.5.0 的 Codex 支持仍在等真机验证（P1-1）。
-- **当前分支（必填）**：`main`（v1.7.0 发布提交；远端 `origin/main` 应与之同步）。
+- **整体状态**：✅ v1.8.0 已发布（消息面板交互：滚轮门控 / 一张卡一条滚动条 / Tail / 会话级开关 /
+  最近目录去重与删除）。v1.5.0 的 Codex 支持仍在等真机验证（P1-1）。
+- **当前分支（必填）**：`main`（v1.8.0 发布提交；远端 `origin/main` 应与之同步）。
 - **最后验证状态**（2026-10-28）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（120 项）·
-  `npm test`（真实宿主）✅ **515 项** · `check-webview-client` ✅ · `check-docs` ✅。
-  ⚠️ v1.7.0 的改动**未做** `npm run dev:host` 真机验收（验收项见「当前任务」与「下一步」1）。
+  `npm test`（真实宿主）✅ **533 项**（滚轮门控 7 条 + 面板交互 11 条）· `check-webview-client` ✅ · `check-docs` ✅。
+  滚动条层数用真 Chromium 量过：自动展开 / 手动展开卡各 **1 条**；把旧限高加回去是 3 条 / 2 条。
+  ⚠️ v1.8.0 的改动**都未做** `npm run dev:host` 真机验收（验收项见「当前任务」与「下一步」1–3）。
 
 ---
 
 ## 当前任务（In Progress）
 
-- **配置作用域改造（2026-10-28，已随 v1.7.0 发布 / 待真机验收）**：
-  - 已实现：`vac.customModels` 默认读写 `VAC_HOME/config.json`（跨 VS Code / Insiders / VSCodium），
-    读取顺序 工作区 > 用户 > 全局 > `package.json` 默认；设置面板每行下发 `scope/source`，
-    客户端显示作用域胶囊 + Inspect（打开/移除/提升为全局）；保存后广播 `customModels`，输入卡菜单立即刷新。
-  - 已验证：`typecheck` ✅ · `lint` ✅ · `test:unit` ✅（120 项）· `npm test` ✅（515 项）· `check-webview-client` ✅。
-  - 待真机：Advanced → Custom models 改描述后，输入卡模型菜单应立即变；有工作区覆盖时胶囊显示
-    `Workspace` 与 `Overridden by workspace settings`；`~/.vac/config.json` 内容与 `All IDEs` 一致。
-  - 关键文件：`config/GlobalSettings.ts`、`config/SettingScope.ts`、`ChatPanelHost.settingsItems` /
-    `handleSetSetting` / `handleSettingAction`、`html/client/settingsPanel.ts`。
-- **markdown 不渲染修复（2026-10-27，待真机验收）**：用户报 ① 打开历史会话 `94e2fb8a` 多数记录停在原文；
-  ② **对话中的会话最后一条卡片经常不渲染**（关掉重开才正常）。取证：回放那次 37 条记录，客户端
-  **只为最后一条**发过请求，两端无报错；`cdcb9416` 两条被反复重问（html 没落进 store）。已随 v1.7.0 发布：
-  宿主三处补渲染（`session-load-end` / `snapshotOf` / **安静 600ms 的 `armSettlePrefill`**，后者覆盖轮次外尾随输出）；
-  客户端「同一条 patch 里带 text 的 html 照收」；boot 只对聚焦会话盖章。`npm test` 515 绿，**未真机验收**（下一步 1）。
-- **v1.7.0 真机验收（待做）**：`npm run dev:host` 后按「下一步」2 的清单逐条确认；
-  发布前只跑了自动检查。
-- **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」3。
+- **滚轮：内层卡片焦点门控 + 自动追尾（已随 v1.8.0 发布 / 待真机验收）**：滚轮默认滚面板；**点进**卡片
+  （`.scroll-active` 焦点环）才滚卡片内部，指针在卡片内只滚卡片、面板原地不动；流式卡片的内层
+  滚动区自动跟到最后一行（用户上滚即停）。顺带修掉「一张卡叠 2–3 条纵向滚动条」。代码在
+  `html/client/scroll.ts` + `styles.ts`；不变量与诊断见 `arch/chat-panel-state.md` §5.53。
+- **Tail / 会话级开关 / 最近目录删除（已随 v1.8.0 发布 / 待真机验收）**：新增 `client/tail.ts`（地址栏
+  Tail 按钮 = 自动追尾，滚动即取消）；Times / 自动展开 / 大纲 / Tail 改为「已开启会话落定」
+  （拨开关只影响当前会话，新会话才继承新值）；地址栏两图标对调（Tail = 同向下尖角、
+  自动展开 = 朝外尖角）；目录抽屉「Recently used」行加删除并按目录同一性去重。细节见 §5.54。
+  **待真机：`docs/03-验收清单.md` 246–252。**
+- **v1.7.0 真机验收（待做）**：配置作用域与 markdown 补渲染都已随 v1.7.0 发布、自动检查全绿；
+  具体项见「下一步」3–4。
+- **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」5。
 - **「滚动条到底、消息仍被截断」待复现**（用户 2026-10-26 报，现场已消失）：日志里 2300+ 条
-  `scroll#` 全部自洽（`cov=0`、末条底边在输入卡上方 27px），现有判据打不到这种形态。
-  **下次出现时先别关面板**，直接读 `~/.vac/vac.log` 抓现场。
+  `scroll#` 全部自洽（`cov=0`），现有判据打不到这种形态。**下次出现时先别关面板**，直接读
+  `~/.vac/vac.log` 抓现场。
 
 ---
 
 ## 待归档暂存区（仅本轮未归档的完成项）
 
-- （无。v1.6.0 成果已写入 `CHANGELOG [1.6.0]`。）
+- （无。v1.8.0 成果已写入 `CHANGELOG [1.8.0]`。）
 
 ## 进行中（半成品 / 未提交）
 
-- （无。v1.6.0 已提交并发布。）
+- （无。v1.8.0 已提交并发布。）
 
 ## 阻塞 / 待决策（Blockers）
 
@@ -66,12 +62,16 @@
 
 ## 下一步（Next Steps）
 
-1. **markdown 补渲染真机验收（最高优先）**：`npm run dev:host` →
+1. **面板交互真机验收（本轮改动，最高优先）**：`npm run dev:host` → 按 `docs/03-验收清单.md`
+   **246–252** 逐条确认（滚轮门控与一张卡一条滚动条；Tail 打开即跟随、一滚就取消；四个开关
+   只影响当前会话而新会话继承；自动展开的新图标；最近目录的删除）。
+   日志关键字：`focus:` / `wheel-card:` / `wheel-gate:` / `tail:`。
+2. **markdown 补渲染真机验收**：`npm run dev:host` →
    ① 历史会话（如 `94e2fb8a`）打开 ≥3 次，全部记录都是渲染后的样子（含思考块）；
    ② **普通对话里不再出现"最后一条卡片停在原文"**：轮次结束约 0.6s 内自动渲染，
    日志见 `settled markdown for N record(s)`；回放路径见 `pre-rendering markdown for N …`；
    ③ 回归：正在流的回复收尾后仍完整渲染（186 的"只认自己那段文本"不能被放宽）。
-2. **v1.7.0 真机验收**：`npm run dev:host` 后确认：
+3. **v1.7.0 真机验收**：`npm run dev:host` 后确认：
    ① tab 右键两条新项；同目录新建落在源会话 cwd；Duplicate 派生成功且历史可见（失败有提示）。
    ② 设置 → Chat 的默认 Effort / Recently used（3–16）落盘且生效。
    ③ 单行内选中几个字 → 引用 tag 显示 `文件名:N`，发送后 agent 收到 `#LN`。
@@ -82,17 +82,17 @@
    ⑧ 设置作用域：Custom models 胶囊 = `All IDEs`，改描述后输入卡菜单立即变；
       有工作区覆盖时显示 `Workspace` + `Overridden by workspace settings`；Inspect 的
       Open / Remove / Make this the default for all IDEs 可用。
-3. **P1-1 Codex 真机验证**：`npm run dev:host` → 连 Codex CLI → 发一条会跑命令的消息
+4. **P1-1 Codex 真机验证**：`npm run dev:host` → 连 Codex CLI → 发一条会跑命令的消息
    （如「列出当前目录文件」），确认：① 工具卡里直接显示命令输出（console 文本），失败时有「Exited with code N」；
    ② 模式 / 模型 / 推理强度选择器可切换；③ 未登录机器上选 API Key → 输入 key → 重启后不再询问；
    ④ `VAC: Log Out of Agent` 后再发消息会重新要求认证；⑤ Dashboard 的 Codex 用量与 `~/.codex/sessions` 对得上；
    ⑥ `vac.agents` 里仍是旧包 `@zed-industries/codex-acp` 时，激活弹迁移提示。
    顺带回归 Claude：Bash 输出、子 agent 嵌套、历史补全（按 kind 改造后）不变。
-4. **滚动问题复现时抓现场**：`~/.vac/vac.log` 的 `scroll#` 行——`cov=1` 即定案；全是 `cov=0` 时优先看
+5. **滚动问题复现时抓现场**：`~/.vac/vac.log` 的 `scroll#` 行——`cov=1` 即定案；全是 `cov=0` 时优先看
    末条 `last`/`comp`、`#messages` 的 rect 与 `window.innerHeight`、以及抽屉变量（`ev=` / `pv=`）。
-5. **历史遗留验收（低优先）**：v1.4.0/M4、v1.3.1、v1.3.0 的验收清单仍挂着，明细见
-   `CHANGELOG [1.4.0]/[1.4.1]/[1.3.1]`；这些条目长期未执行，先按 1–3 走。
-6. **之后按 ROADMAP**：P1-7 终端与写文件健壮性 → P1-8 连接健壮性 → P1-9 SDK 新更新类型 → P1-3 打包瘦身 → P2-*。
+6. **历史遗留验收（低优先）**：v1.4.0/M4、v1.3.1、v1.3.0 的验收清单仍挂着，明细见
+   `CHANGELOG [1.4.0]/[1.4.1]/[1.3.1]`；这些条目长期未执行，先按 1–4 走。
+7. **之后按 ROADMAP**：P1-7 终端与写文件健壮性 → P1-8 连接健壮性 → P1-9 SDK 新更新类型 → P1-3 打包瘦身 → P2-*。
 
 ---
 

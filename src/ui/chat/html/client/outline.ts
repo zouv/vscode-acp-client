@@ -53,6 +53,9 @@ export const outlineClient = `
   // 侧栏弹回来（用户报的第 1 条）。现在 isOpen 从**这两份持久状态**推出来，回话只是让两边收敛。
   var openBySession = {};
   var openDefault = false;
+  // 本面知道的会话 id + 宿主的偏好到没到（见 seedKnown）。
+  var known = [];
+  var prefsSeen = false;
   // [CUSTOM- 焦点会话（boot 在焦点咽喉点喂进来，与 stickyUser.setSession 同形）。
   var currentSessionId = null;
   var dragging = false;   // 是否正在拖调宽手柄
@@ -341,6 +344,34 @@ export const outlineClient = `
   }
 
   /**
+   * [CUSTOM- 把"已开启的会话"落定（2026-10-28）：拨/固定侧栏只影响当前会话，
+   * 只有**下一个新开的会话**才继承新默认值（与 client/times.ts 的 seedKnown 同一件事）。
+   */
+  function seedKnown() {
+    if (!prefsSeen) { return; }
+    var changed = false;
+    for (var i = 0; i < known.length; i++) {
+      var id = known[i];
+      if (!Object.prototype.hasOwnProperty.call(openBySession, id)) {
+        openBySession[id] = openDefault === true;
+        changed = true;
+      }
+    }
+    if (changed) { persistPrefs(); }
+  }
+
+  /** 会话列表的旁观者（boot 在 sessionsChanged 处调）。 */
+  function noteSessions(sessions) {
+    var ids = [];
+    for (var i = 0; i < sessions.length; i++) {
+      var id = sessions[i] && sessions[i].sessionId;
+      if (id) { ids.push(id); }
+    }
+    known = ids;
+    seedKnown();
+  }
+
+  /**
    * [CUSTOM- 记一笔"用户对侧栏做了什么"，并落盘。
    * 一律**两处都写**：这个会话名下 + 默认值（新会话沿用最后一次的选择）—— 与 Times 同一套语义。
    * 只由**用户动作**调（show/hide/pin/unpin）；'applyPrefs' 是收别人的话，不许调它（否则回话会写回自己）。
@@ -357,6 +388,8 @@ export const outlineClient = `
    */
   function setSession(sessionId) {
     currentSessionId = sessionId || null;
+    if (currentSessionId && known.indexOf(currentSessionId) < 0) { known.push(currentSessionId); }
+    seedKnown();
     if (mode !== 'sidebar') { return; }   // 下拉形态有自己的开关，不受影响
     var next = sidebarOpenFor(currentSessionId);
     if (next === isOpen) { return; }
@@ -387,6 +420,7 @@ export const outlineClient = `
   /** 应用宿主带回来的偏好（boot 后由 boot.ts 调一次，之后**每次** setUiPref 的广播也会到这儿）。 */
   function applyPrefs(prefs) {
     if (!prefs) { return; }
+    prefsSeen = true;
     mode = prefs.outlineMode === 'sidebar' ? 'sidebar' : 'popup';
     if (prefs.outlineOpenBySession && typeof prefs.outlineOpenBySession === 'object') {
       var next = {};
@@ -402,6 +436,7 @@ export const outlineClient = `
     // 免得升级后用户的侧栏无声消失（之后由用户的下一次动作接管）。
     else if (mode === 'sidebar' && !hasOpenState()) { openDefault = true; }
     if (typeof prefs.outlineWidth === 'number') { width = clamp(prefs.outlineWidth, MIN_WIDTH, 9999); }
+    seedKnown();
     applyWidth();
     // [CUSTOM- **不再**是 isOpen = (mode === 'sidebar')：那一句让"任何一次回话"
     // 都变成"重新打开侧栏"（用户报的第 1 条：点一下 Times 就弹回来）。开/关一律从上面那两份
@@ -566,7 +601,9 @@ export const outlineClient = `
     invalidate: invalidate,
     applyPrefs: applyPrefs,
     // [CUSTOM- 焦点会话（boot 在焦点咽喉点喂）：侧栏的开/关是按会话记的。
-    setSession: setSession
+    setSession: setSession,
+    // [CUSTOM- 会话列表的旁观者：给"已开启的会话"落定开/关状态（2026-10-28）。
+    noteSessions: noteSessions
   };
 })(window.__vac = window.__vac || {});
 `;

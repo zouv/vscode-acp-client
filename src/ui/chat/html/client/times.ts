@@ -25,6 +25,8 @@ export const timesClient = `
   var timesDefault = false;
   // 本面当前知道的会话 id：写回宿主前用它裁表（见 pruned）。
   var timesKnown = [];
+  // 宿主的偏好到了之前不许"落定"任何会话（见 seedKnown）。
+  var prefsSeen = false;
 
   /**
    * 显示开 / 关。只翻两个类，不重渲染：.rec-time 元素一直在 DOM 里
@@ -74,6 +76,24 @@ export const timesClient = `
     NS.bridge.post({ type: 'setUiPref', timesBySession: pruned(), timesDefault: timesDefault === true });
   }
 
+  /**
+   * [CUSTOM- **把"已开启的会话"落定**（2026-10-28，用户要求：拨开关只影响当前会话，
+   * 只有**下一个新开的会话**才继承新默认值）。没有这一步时，改默认值会连带改掉所有
+   * "还没有记录"的会话 —— 表现就是"改了 A，切到 B 发现它也变了"。
+   */
+  function seedKnown() {
+    if (!prefsSeen) { return; }
+    var changed = false;
+    for (var i = 0; i < timesKnown.length; i++) {
+      var id = timesKnown[i];
+      if (!Object.prototype.hasOwnProperty.call(timesBySession, id)) {
+        timesBySession[id] = timesDefault === true;
+        changed = true;
+      }
+    }
+    if (changed) { persist(); }
+  }
+
   /** 会话列表的旁观者。调用点就在 boot 里既有那两处 setSessions 旁边（boot / sessionsChanged）。 */
   function noteSessions(sessions) {
     var ids = [];
@@ -82,6 +102,7 @@ export const timesClient = `
       if (id) { ids.push(id); }
     }
     timesKnown = ids;
+    seedKnown();
   }
 
   /**
@@ -93,6 +114,7 @@ export const timesClient = `
     // 聚焦的会话一定存在（宿主刚推过来），"会话列表"那条消息还没到也不算"不认识它" —— 否则
     // 此刻拨的开关会被 pruned() 裁掉，用户看到的就是"开了，下次回来又关着"。
     if (currentSessionId && timesKnown.indexOf(currentSessionId) < 0) { timesKnown.push(currentSessionId); }
+    seedKnown();
     apply(timesOnFor(currentSessionId));
   }
 
@@ -102,6 +124,7 @@ export const timesClient = `
    * Times 关掉。收完按当前焦点应用：改它的可能是**另一个面**。
    */
   function applyPrefs(prefs) {
+    prefsSeen = true;
     if (prefs && prefs.timesBySession && typeof prefs.timesBySession === 'object') {
       var next = {};
       for (var key in prefs.timesBySession) {
@@ -112,6 +135,7 @@ export const timesClient = `
       timesBySession = next;
     }
     if (prefs && typeof prefs.timesDefault === 'boolean') { timesDefault = prefs.timesDefault; }
+    seedKnown();
     apply(timesOnFor(currentSessionId));
   }
 
