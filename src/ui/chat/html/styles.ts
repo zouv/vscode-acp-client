@@ -719,6 +719,18 @@ export function styles(): string {
   .messages .tool-body,
   .messages .tool-seg-out { overscroll-behavior: contain; }
 
+  /* [CUSTOM- 卡片内的滚动条统一细一档（2026-10-28）。此前只有 .messages 写了
+     scrollbar-width: thin，卡片自己的滚动视口（.tool-body / .tool-seg-out / .thought-body /
+     .diff-body）漏了 ⇒ 内层滚动条比面板外层粗一大截（用户截图圈出来的那根）。
+     代码块与宽表格的滚动条同样并进来，面板里所有纵向/横向滚动条保持同一档宽度。 */
+  .messages .thought-body,
+  .messages .tool-body,
+  .messages .tool-seg-out,
+  .messages .diff-body,
+  .messages .elic-preview,
+  .messages .md pre,
+  .messages .table-wrap { scrollbar-width: thin; }
+
   /* [CUSTOM- Drop feedback: shown while a file is dragged over the
      panel. Uses the focus border so it is visible in every theme. */
   body.drop-active .message-area {
@@ -1442,54 +1454,522 @@ export function styles(): string {
   .md th, .md td { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
   .bubble a, .md a { color: var(--vscode-textLink-foreground); text-decoration: none; cursor: pointer; }
   .bubble a:hover, .md a:hover { text-decoration: underline; }
-  /* [CUSTOM- Markdown 渲染预设（2026-10-27，设置 → Appearance）。
+  /* [CUSTOM- Markdown 渲染预设（2026-10-27 引入；2026-10-28 重做，设置 → Appearance）。
      'editor'（默认）= 上面那套「跟随主题变量」的逻辑，不加任何覆盖。
-     其余三套只改排版，不硬编码颜色（仍吃主题 token），所以明暗主题都成立：
-       · github  —— GitHub 风格：宽松行距、标题带下边框、代码块/表格有描边；
-       · compact —— 紧凑：小一号字、收紧段距与列表，适合长对话快速扫读；
-       · reading —— 舒适阅读：大一号字、更大行距与段距。 */
-  body[data-md-style="github"] .md { line-height: 1.65; }
-  body[data-md-style="github"] .md p { margin: 0 0 10px; }
-  body[data-md-style="github"] .md h1, body[data-md-style="github"] .md h2,
-  body[data-md-style="github"] .md h3, body[data-md-style="github"] .md h4,
-  body[data-md-style="github"] .md h5, body[data-md-style="github"] .md h6 {
-    margin: 16px 0 8px; padding-bottom: 3px;
-    border-bottom: 1px solid var(--vscode-panel-border);
+     其余三套参考成熟应用：GitHub / Obsidian / Typora —— 不只改排版，也各带一套配色。
+     配色只在 vscode-light / vscode-dark 下取硬值（每个预设都能明暗各看一套），
+     默认变量仍指向主题 token，因此高对比度主题回落到编辑器的可读性配色、不被硬色覆盖。
+     变量定义在 body 上，规则统一作用于 .md（助手气泡 / 推理正文 / 工具输出）。 */
+
+  /* GitHub：GitHub 正文观感 —— 蓝链接、灰细描边、表头底色、标题下边框。 */
+  body[data-md-style="github"] {
+    --vac-md-fg: var(--vscode-foreground);
+    --vac-md-link: var(--vscode-textLink-foreground);
+    --vac-md-border: var(--vscode-panel-border);
+    --vac-md-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-inline-code-fg: var(--vscode-foreground);
+    --vac-md-inline-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-quote-fg: var(--vscode-descriptionForeground);
+    --vac-md-quote-border: var(--vscode-panel-border);
+    --vac-md-quote-bg: transparent;
+    --vac-md-th-bg: var(--vscode-textCodeBlock-background);
   }
+  body.vscode-light[data-md-style="github"] {
+    --vac-md-fg: #1f2328;
+    --vac-md-link: #0969da;
+    --vac-md-border: #d1d9e0;
+    --vac-md-code-bg: #f6f8fa;
+    --vac-md-inline-code-fg: #1f2328;
+    --vac-md-inline-code-bg: rgba(175, 184, 193, 0.2);
+    --vac-md-quote-fg: #59636e;
+    --vac-md-quote-border: #d1d9e0;
+    --vac-md-th-bg: #f6f8fa;
+  }
+  body.vscode-dark[data-md-style="github"] {
+    --vac-md-fg: #e6edf3;
+    --vac-md-link: #4493f8;
+    --vac-md-border: #3d444d;
+    --vac-md-code-bg: #151b23;
+    --vac-md-inline-code-fg: #e6edf3;
+    --vac-md-inline-code-bg: rgba(101, 108, 118, 0.25);
+    --vac-md-quote-fg: #9198a1;
+    --vac-md-quote-border: #3d444d;
+    --vac-md-th-bg: #151b23;
+  }
+  body[data-md-style="github"] .md { color: var(--vac-md-fg); line-height: 1.65; }
+  body[data-md-style="github"] .md p { margin: 0 0 10px; }
+  body[data-md-style="github"] .md p:last-child { margin-bottom: 0; }
+  body[data-md-style="github"] .md h1,
+  body[data-md-style="github"] .md h2 {
+    margin: 18px 0 8px; padding-bottom: 4px;
+    border-bottom: 1px solid var(--vac-md-border);
+  }
+  body[data-md-style="github"] .md h3,
+  body[data-md-style="github"] .md h4,
+  body[data-md-style="github"] .md h5,
+  body[data-md-style="github"] .md h6 { margin: 16px 0 6px; }
+  body[data-md-style="github"] .md h1 { font-size: 1.7em; }
+  body[data-md-style="github"] .md h2 { font-size: 1.45em; }
+  body[data-md-style="github"] .md h3 { font-size: 1.2em; }
+  body[data-md-style="github"] .md h4 { font-size: 1.05em; }
+  body[data-md-style="github"] .md h5 { font-size: 0.95em; }
+  body[data-md-style="github"] .md h6 { font-size: 0.88em; }
+  body[data-md-style="github"] .md ul,
+  body[data-md-style="github"] .md ol { margin: 0 0 10px; padding-left: 22px; }
+  body[data-md-style="github"] .md li + li { margin-top: 3px; }
   body[data-md-style="github"] .md pre {
-    padding: 10px; border-radius: 6px;
-    border: 1px solid var(--vscode-panel-border);
+    margin: 10px 0; padding: 10px; border-radius: 6px;
+    background: var(--vac-md-code-bg);
+    border: 1px solid var(--vac-md-border);
   }
   body[data-md-style="github"] .md :not(pre) > code {
-    border: 1px solid var(--vscode-panel-border);
+    padding: 1px 4px; border-radius: 4px;
+    background: var(--vac-md-inline-code-bg);
+    color: var(--vac-md-inline-code-fg);
   }
-  body[data-md-style="github"] .md blockquote { padding-left: 12px; }
-  body[data-md-style="github"] .md th {
-    background: var(--vscode-textCodeBlock-background);
-    font-weight: 600;
+  body[data-md-style="github"] .md blockquote {
+    margin: 10px 0; padding: 2px 12px;
+    border-left: 3px solid var(--vac-md-quote-border);
+    color: var(--vac-md-quote-fg);
+  }
+  body[data-md-style="github"] .md a { color: var(--vac-md-link); }
+  body[data-md-style="github"] .md table { margin: 10px 0; }
+  body[data-md-style="github"] .md th,
+  body[data-md-style="github"] .md td {
+    border-color: var(--vac-md-border); padding: 4px 8px;
+  }
+  body[data-md-style="github"] .md th { background: var(--vac-md-th-bg); font-weight: 600; }
+  body[data-md-style="github"] .md hr {
+    border: 0; border-top: 1px solid var(--vac-md-border); margin: 14px 0;
   }
 
-  body[data-md-style="compact"] .md { font-size: 0.92em; line-height: 1.4; }
-  body[data-md-style="compact"] .md p { margin: 0 0 3px; }
-  body[data-md-style="compact"] .md h1, body[data-md-style="compact"] .md h2,
-  body[data-md-style="compact"] .md h3, body[data-md-style="compact"] .md h4,
-  body[data-md-style="compact"] .md h5, body[data-md-style="compact"] .md h6 {
-    margin: 5px 0 2px;
+  /* Obsidian：紫色强调 —— 链接 / 行内代码 / 引用条都用强调色，
+     引用带淡紫底，标题不加下边框（与 GitHub、Typora 一眼分开）。 */
+  body[data-md-style="obsidian"] {
+    --vac-md-fg: var(--vscode-foreground);
+    --vac-md-link: var(--vscode-textLink-foreground);
+    --vac-md-border: var(--vscode-panel-border);
+    --vac-md-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-inline-code-fg: var(--vscode-textLink-foreground);
+    --vac-md-inline-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-quote-fg: var(--vscode-descriptionForeground);
+    --vac-md-quote-border: var(--vscode-textLink-foreground);
+    --vac-md-quote-bg: transparent;
+    --vac-md-th-bg: var(--vscode-textCodeBlock-background);
   }
-  body[data-md-style="compact"] .md ul,
-  body[data-md-style="compact"] .md ol { margin: 2px 0; padding-left: 16px; }
-  body[data-md-style="compact"] .md pre { margin: 3px 0; padding: 5px; }
-  body[data-md-style="compact"] .md th,
-  body[data-md-style="compact"] .md td { padding: 1px 4px; }
+  body.vscode-light[data-md-style="obsidian"] {
+    --vac-md-fg: #222222;
+    --vac-md-link: #7852ee;
+    --vac-md-border: #dedede;
+    --vac-md-code-bg: #f7f5ff;
+    --vac-md-inline-code-fg: #6b46d6;
+    --vac-md-inline-code-bg: rgba(120, 82, 238, 0.10);
+    --vac-md-quote-fg: #5b5b66;
+    --vac-md-quote-border: #8a6df0;
+    --vac-md-quote-bg: rgba(120, 82, 238, 0.05);
+    --vac-md-th-bg: rgba(120, 82, 238, 0.08);
+  }
+  body.vscode-dark[data-md-style="obsidian"] {
+    --vac-md-fg: #dcddde;
+    --vac-md-link: #a88bfa;
+    --vac-md-border: #3a3a42;
+    --vac-md-code-bg: #23222b;
+    --vac-md-inline-code-fg: #c4a7ff;
+    --vac-md-inline-code-bg: rgba(168, 139, 250, 0.12);
+    --vac-md-quote-fg: #b3b3bd;
+    --vac-md-quote-border: #a88bfa;
+    --vac-md-quote-bg: rgba(168, 139, 250, 0.07);
+    --vac-md-th-bg: rgba(168, 139, 250, 0.10);
+  }
+  body[data-md-style="obsidian"] .md { color: var(--vac-md-fg); line-height: 1.6; }
+  body[data-md-style="obsidian"] .md p { margin: 0 0 8px; }
+  body[data-md-style="obsidian"] .md p:last-child { margin-bottom: 0; }
+  body[data-md-style="obsidian"] .md h1,
+  body[data-md-style="obsidian"] .md h2,
+  body[data-md-style="obsidian"] .md h3,
+  body[data-md-style="obsidian"] .md h4,
+  body[data-md-style="obsidian"] .md h5,
+  body[data-md-style="obsidian"] .md h6 { margin: 14px 0 6px; font-weight: 600; }
+  body[data-md-style="obsidian"] .md h1 { font-size: 1.5em; }
+  body[data-md-style="obsidian"] .md h2 { font-size: 1.3em; }
+  body[data-md-style="obsidian"] .md h3 { font-size: 1.15em; }
+  body[data-md-style="obsidian"] .md h4 { font-size: 1.05em; }
+  body[data-md-style="obsidian"] .md h5 { font-size: 1em; }
+  body[data-md-style="obsidian"] .md h6 { font-size: 0.92em; }
+  body[data-md-style="obsidian"] .md ul,
+  body[data-md-style="obsidian"] .md ol { margin: 4px 0; padding-left: 20px; }
+  body[data-md-style="obsidian"] .md li + li { margin-top: 2px; }
+  body[data-md-style="obsidian"] .md pre {
+    margin: 8px 0; padding: 10px; border-radius: 6px;
+    background: var(--vac-md-code-bg);
+    border: 1px solid var(--vac-md-border);
+  }
+  body[data-md-style="obsidian"] .md :not(pre) > code {
+    padding: 1px 5px; border-radius: 4px;
+    background: var(--vac-md-inline-code-bg);
+    color: var(--vac-md-inline-code-fg);
+  }
+  body[data-md-style="obsidian"] .md blockquote {
+    margin: 8px 0; padding: 6px 12px;
+    border-left: 3px solid var(--vac-md-quote-border);
+    border-radius: 0 6px 6px 0;
+    color: var(--vac-md-quote-fg);
+    background: var(--vac-md-quote-bg);
+  }
+  body[data-md-style="obsidian"] .md a { color: var(--vac-md-link); }
+  body[data-md-style="obsidian"] .md table { margin: 8px 0; }
+  body[data-md-style="obsidian"] .md th,
+  body[data-md-style="obsidian"] .md td {
+    border-color: var(--vac-md-border); padding: 3px 8px;
+  }
+  body[data-md-style="obsidian"] .md th { background: var(--vac-md-th-bg); font-weight: 600; }
+  body[data-md-style="obsidian"] .md hr {
+    border: 0; border-top: 1px solid var(--vac-md-border); margin: 12px 0;
+  }
 
-  body[data-md-style="reading"] .md { font-size: 1.04em; line-height: 1.75; }
-  body[data-md-style="reading"] .md p { margin: 0 0 11px; }
-  body[data-md-style="reading"] .md h1, body[data-md-style="reading"] .md h2,
-  body[data-md-style="reading"] .md h3, body[data-md-style="reading"] .md h4,
-  body[data-md-style="reading"] .md h5, body[data-md-style="reading"] .md h6 {
-    margin: 14px 0 6px;
+  /* Typora：文档观感 —— 大行距、大段落间距，h1/h2 带下边框，
+     行内代码用暖橙色（Typora 默认主题的标志色），代码块无描边、只留底色。 */
+  body[data-md-style="typora"] {
+    --vac-md-fg: var(--vscode-foreground);
+    --vac-md-link: var(--vscode-textLink-foreground);
+    --vac-md-border: var(--vscode-panel-border);
+    --vac-md-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-inline-code-fg: var(--vscode-textLink-foreground);
+    --vac-md-inline-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-quote-fg: var(--vscode-descriptionForeground);
+    --vac-md-quote-border: var(--vscode-panel-border);
+    --vac-md-quote-bg: transparent;
+    --vac-md-th-bg: var(--vscode-textCodeBlock-background);
   }
-  body[data-md-style="reading"] .md li { margin: 2px 0; }
+  body.vscode-light[data-md-style="typora"] {
+    --vac-md-fg: #333333;
+    --vac-md-link: #4183c4;
+    --vac-md-border: #dfe2e5;
+    --vac-md-code-bg: #f8f8f8;
+    --vac-md-inline-code-fg: #e96900;
+    --vac-md-inline-code-bg: #f8f8f8;
+    --vac-md-quote-fg: #777777;
+    --vac-md-quote-border: #dfe2e5;
+    --vac-md-th-bg: #f8f8f8;
+  }
+  body.vscode-dark[data-md-style="typora"] {
+    --vac-md-fg: #d6d6d6;
+    --vac-md-link: #66b2ff;
+    --vac-md-border: #3e3e3e;
+    --vac-md-code-bg: #2b2b2b;
+    --vac-md-inline-code-fg: #ffb86c;
+    --vac-md-inline-code-bg: #2b2b2b;
+    --vac-md-quote-fg: #9a9a9a;
+    --vac-md-quote-border: #3e3e3e;
+    --vac-md-th-bg: #2b2b2b;
+  }
+  body[data-md-style="typora"] .md { color: var(--vac-md-fg); line-height: 1.7; font-size: 1.02em; }
+  body[data-md-style="typora"] .md p { margin: 0 0 12px; }
+  body[data-md-style="typora"] .md p:last-child { margin-bottom: 0; }
+  body[data-md-style="typora"] .md h1,
+  body[data-md-style="typora"] .md h2 {
+    margin: 20px 0 10px; padding-bottom: 4px;
+    border-bottom: 1px solid var(--vac-md-border);
+  }
+  body[data-md-style="typora"] .md h3,
+  body[data-md-style="typora"] .md h4,
+  body[data-md-style="typora"] .md h5,
+  body[data-md-style="typora"] .md h6 { margin: 16px 0 8px; }
+  body[data-md-style="typora"] .md h1 { font-size: 1.7em; }
+  body[data-md-style="typora"] .md h2 { font-size: 1.4em; }
+  body[data-md-style="typora"] .md h3 { font-size: 1.2em; }
+  body[data-md-style="typora"] .md h4 { font-size: 1.08em; }
+  body[data-md-style="typora"] .md h5 { font-size: 1em; }
+  body[data-md-style="typora"] .md h6 { font-size: 0.92em; }
+  body[data-md-style="typora"] .md ul,
+  body[data-md-style="typora"] .md ol { margin: 4px 0 12px; padding-left: 24px; }
+  body[data-md-style="typora"] .md li + li { margin-top: 2px; }
+  body[data-md-style="typora"] .md pre {
+    margin: 10px 0; padding: 12px; border-radius: 3px;
+    background: var(--vac-md-code-bg);
+  }
+  body[data-md-style="typora"] .md :not(pre) > code {
+    padding: 1px 4px; border-radius: 3px;
+    background: var(--vac-md-inline-code-bg);
+    color: var(--vac-md-inline-code-fg);
+  }
+  body[data-md-style="typora"] .md blockquote {
+    margin: 10px 0; padding: 2px 14px;
+    border-left: 4px solid var(--vac-md-quote-border);
+    color: var(--vac-md-quote-fg);
+  }
+  body[data-md-style="typora"] .md a { color: var(--vac-md-link); }
+  body[data-md-style="typora"] .md table { margin: 10px 0; }
+  body[data-md-style="typora"] .md th,
+  body[data-md-style="typora"] .md td {
+    border-color: var(--vac-md-border); padding: 4px 10px;
+  }
+  body[data-md-style="typora"] .md th { background: var(--vac-md-th-bg); font-weight: 600; }
+  body[data-md-style="typora"] .md hr {
+    border: 0; border-top: 1px solid var(--vac-md-border); margin: 16px 0;
+  }
+
+  /* Atom：Obsidian「Atom」主题（One Dark 血统）—— 蓝灰底、蓝色强调、
+     行内代码与代码块用 1px 内描边代替边框，行距收紧。 */
+  body[data-md-style="atom"] {
+    --vac-md-fg: var(--vscode-foreground);
+    --vac-md-link: var(--vscode-textLink-foreground);
+    --vac-md-border: var(--vscode-panel-border);
+    --vac-md-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-inline-code-fg: var(--vscode-foreground);
+    --vac-md-inline-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-quote-fg: var(--vscode-descriptionForeground);
+    --vac-md-quote-border: var(--vscode-textLink-foreground);
+    --vac-md-quote-bg: transparent;
+    --vac-md-th-bg: var(--vscode-textCodeBlock-background);
+  }
+  body.vscode-light[data-md-style="atom"] {
+    --vac-md-fg: #383a42;
+    --vac-md-link: #1592ff;
+    --vac-md-border: #dbdbdc;
+    --vac-md-code-bg: #f7f7f8;
+    --vac-md-inline-code-fg: #383a42;
+    --vac-md-inline-code-bg: #f7f7f8;
+    --vac-md-quote-fg: #8e8e90;
+    --vac-md-quote-border: #1592ff;
+    --vac-md-th-bg: #f0f0f1;
+  }
+  body.vscode-dark[data-md-style="atom"] {
+    --vac-md-fg: #dcddde;
+    --vac-md-link: #61afef;
+    --vac-md-border: #424958;
+    --vac-md-code-bg: #20242b;
+    --vac-md-inline-code-fg: #dcddde;
+    --vac-md-inline-code-bg: #20242b;
+    --vac-md-quote-fg: #888888;
+    --vac-md-quote-border: #61afef;
+    --vac-md-th-bg: #20242b;
+  }
+  body[data-md-style="atom"] .md { color: var(--vac-md-fg); line-height: 1.5; }
+  body[data-md-style="atom"] .md p { margin: 0 0 8px; }
+  body[data-md-style="atom"] .md p:last-child { margin-bottom: 0; }
+  body[data-md-style="atom"] .md h1,
+  body[data-md-style="atom"] .md h2,
+  body[data-md-style="atom"] .md h3,
+  body[data-md-style="atom"] .md h4,
+  body[data-md-style="atom"] .md h5,
+  body[data-md-style="atom"] .md h6 { margin: 20px 0 8px; }
+  body[data-md-style="atom"] .md h1 { font-size: 1.6em; }
+  body[data-md-style="atom"] .md h2 { font-size: 1.4em; }
+  body[data-md-style="atom"] .md h3 { font-size: 1.2em; }
+  body[data-md-style="atom"] .md h4 { font-size: 1.05em; }
+  body[data-md-style="atom"] .md h5 { font-size: 0.95em; }
+  body[data-md-style="atom"] .md h6 { font-size: 0.88em; }
+  body[data-md-style="atom"] .md ul,
+  body[data-md-style="atom"] .md ol { margin: 4px 0; padding-left: 20px; }
+  body[data-md-style="atom"] .md li + li { margin-top: 2px; }
+  body[data-md-style="atom"] .md pre {
+    margin: 8px 0; padding: 10px; border-radius: 4px;
+    background: var(--vac-md-code-bg);
+    box-shadow: inset 0 0 0 1px var(--vac-md-border);
+  }
+  body[data-md-style="atom"] .md :not(pre) > code {
+    padding: 1px 5px; border-radius: 4px;
+    background: var(--vac-md-inline-code-bg);
+    color: var(--vac-md-inline-code-fg);
+    box-shadow: inset 0 0 0 1px var(--vac-md-border);
+  }
+  body[data-md-style="atom"] .md blockquote {
+    margin: 8px 0; padding: 2px 12px;
+    border-left: 2px solid var(--vac-md-quote-border);
+    color: var(--vac-md-quote-fg);
+  }
+  body[data-md-style="atom"] .md a { color: var(--vac-md-link); }
+  body[data-md-style="atom"] .md table { margin: 8px 0; }
+  body[data-md-style="atom"] .md th,
+  body[data-md-style="atom"] .md td {
+    border-color: var(--vac-md-border); padding: 3px 8px;
+  }
+  body[data-md-style="atom"] .md th { background: var(--vac-md-th-bg); font-weight: 600; }
+  body[data-md-style="atom"] .md hr {
+    border: 0; border-top: 1px solid var(--vac-md-border); margin: 14px 0;
+  }
+
+  /* Minimal：Obsidian「Minimal」主题 —— 标题刻意做小（h1 仅 1.125em）、
+     层级靠字重区分，h5/h6 小型大写；配色克制，引用只有 1px 细线。 */
+  body[data-md-style="minimal"] {
+    --vac-md-fg: var(--vscode-foreground);
+    --vac-md-link: var(--vscode-textLink-foreground);
+    --vac-md-border: var(--vscode-panel-border);
+    --vac-md-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-inline-code-fg: var(--vscode-foreground);
+    --vac-md-inline-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-quote-fg: var(--vscode-descriptionForeground);
+    --vac-md-quote-border: var(--vscode-panel-border);
+    --vac-md-quote-bg: transparent;
+    --vac-md-th-bg: transparent;
+  }
+  body.vscode-light[data-md-style="minimal"] {
+    --vac-md-fg: #2b2b2b;
+    --vac-md-link: #8a5cf5;
+    --vac-md-border: #e3e3e3;
+    --vac-md-code-bg: #f5f5f5;
+    --vac-md-inline-code-fg: #2b2b2b;
+    --vac-md-inline-code-bg: #ededed;
+    --vac-md-quote-fg: #6b6b6b;
+    --vac-md-quote-border: #d5d5d5;
+  }
+  body.vscode-dark[data-md-style="minimal"] {
+    --vac-md-fg: #dcddde;
+    --vac-md-link: #a68bfa;
+    --vac-md-border: #3a3a3a;
+    --vac-md-code-bg: #262626;
+    --vac-md-inline-code-fg: #dcddde;
+    --vac-md-inline-code-bg: #2d2d2d;
+    --vac-md-quote-fg: #9a9a9a;
+    --vac-md-quote-border: #4a4a4a;
+  }
+  body[data-md-style="minimal"] .md { color: var(--vac-md-fg); line-height: 1.5; }
+  body[data-md-style="minimal"] .md p { margin: 0 0 10px; }
+  body[data-md-style="minimal"] .md p:last-child { margin-bottom: 0; }
+  body[data-md-style="minimal"] .md h1,
+  body[data-md-style="minimal"] .md h2,
+  body[data-md-style="minimal"] .md h3,
+  body[data-md-style="minimal"] .md h4,
+  body[data-md-style="minimal"] .md h5,
+  body[data-md-style="minimal"] .md h6 { margin: 20px 0 6px; }
+  body[data-md-style="minimal"] .md h1 { font-size: 1.125em; font-weight: 600; }
+  body[data-md-style="minimal"] .md h2 { font-size: 1.05em; font-weight: 600; }
+  body[data-md-style="minimal"] .md h3 { font-size: 1em; font-weight: 500; }
+  body[data-md-style="minimal"] .md h4 { font-size: 0.9em; font-weight: 500; }
+  body[data-md-style="minimal"] .md h5 {
+    font-size: 0.85em; font-weight: 500; font-variant: small-caps; letter-spacing: 0.02em;
+  }
+  body[data-md-style="minimal"] .md h6 {
+    font-size: 0.85em; font-weight: 400; font-variant: small-caps; letter-spacing: 0.02em;
+    color: var(--vac-md-quote-fg);
+  }
+  body[data-md-style="minimal"] .md ul,
+  body[data-md-style="minimal"] .md ol { margin: 4px 0; padding-left: 2em; }
+  body[data-md-style="minimal"] .md li + li { margin-top: 2px; }
+  body[data-md-style="minimal"] .md pre {
+    margin: 8px 0; padding: 10px; border-radius: 4px;
+    background: var(--vac-md-code-bg);
+  }
+  body[data-md-style="minimal"] .md :not(pre) > code {
+    padding: 1px 4px; border-radius: 3px;
+    background: var(--vac-md-inline-code-bg);
+    color: var(--vac-md-inline-code-fg);
+  }
+  body[data-md-style="minimal"] .md blockquote {
+    margin: 10px 0; padding: 2px 12px;
+    border-left: 1px solid var(--vac-md-quote-border);
+    color: var(--vac-md-quote-fg);
+  }
+  body[data-md-style="minimal"] .md a { color: var(--vac-md-link); }
+  body[data-md-style="minimal"] .md table { margin: 10px 0; }
+  body[data-md-style="minimal"] .md th,
+  body[data-md-style="minimal"] .md td {
+    border-color: var(--vac-md-border); padding: 3px 8px;
+  }
+  body[data-md-style="minimal"] .md th { font-weight: 600; }
+  body[data-md-style="minimal"] .md hr {
+    border: 0; border-top: 1px solid var(--vac-md-border); margin: 16px 0;
+  }
+
+  /* Things：Obsidian「Things」主题 —— 蓝色强调、下划线链接，
+     h3/h4/h5 分别上蓝/黄/红，粗体与斜体用粉色，引用是绿松石色。 */
+  body[data-md-style="things"] {
+    --vac-md-fg: var(--vscode-foreground);
+    --vac-md-link: var(--vscode-textLink-foreground);
+    --vac-md-border: var(--vscode-panel-border);
+    --vac-md-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-inline-code-fg: var(--vscode-foreground);
+    --vac-md-inline-code-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-quote-fg: var(--vscode-charts-green, var(--vscode-descriptionForeground));
+    --vac-md-quote-border: var(--vscode-charts-green, var(--vscode-descriptionForeground));
+    --vac-md-quote-bg: transparent;
+    --vac-md-th-bg: var(--vscode-textCodeBlock-background);
+    --vac-md-h3: var(--vscode-textLink-foreground);
+    --vac-md-h4: var(--vscode-charts-yellow, var(--vscode-foreground));
+    --vac-md-h5: var(--vscode-charts-red, var(--vscode-foreground));
+    --vac-md-h6: var(--vscode-descriptionForeground);
+    --vac-md-strong: var(--vscode-charts-purple, var(--vscode-foreground));
+  }
+  body.vscode-light[data-md-style="things"] {
+    --vac-md-fg: #222222;
+    --vac-md-link: #4d8ce6;
+    --vac-md-border: #ebedf0;
+    --vac-md-code-bg: #f6f7f8;
+    --vac-md-inline-code-fg: #222222;
+    --vac-md-inline-code-bg: #f6f7f8;
+    --vac-md-quote-fg: #2f8f98;
+    --vac-md-quote-border: #3eb4bf;
+    --vac-md-th-bg: #f6f7f8;
+    --vac-md-h3: #2e80f2;
+    --vac-md-h4: #b07d28;
+    --vac-md-h5: #d43c3c;
+    --vac-md-h6: #6b7078;
+    --vac-md-strong: #d94f8a;
+  }
+  body.vscode-dark[data-md-style="things"] {
+    --vac-md-fg: #dcddde;
+    --vac-md-link: #79a9ec;
+    --vac-md-border: #35393e;
+    --vac-md-code-bg: #282c34;
+    --vac-md-inline-code-fg: #dcddde;
+    --vac-md-inline-code-bg: #282c34;
+    --vac-md-quote-fg: #3eb4bf;
+    --vac-md-quote-border: #3eb4bf;
+    --vac-md-th-bg: #282c34;
+    --vac-md-h3: #5b9bff;
+    --vac-md-h4: #e5b567;
+    --vac-md-h5: #ff6b6b;
+    --vac-md-h6: #9aa0a8;
+    --vac-md-strong: #ff82b2;
+  }
+  body[data-md-style="things"] .md { color: var(--vac-md-fg); line-height: 1.5; }
+  body[data-md-style="things"] .md p { margin: 0 0 10px; }
+  body[data-md-style="things"] .md p:last-child { margin-bottom: 0; }
+  body[data-md-style="things"] .md h1,
+  body[data-md-style="things"] .md h2,
+  body[data-md-style="things"] .md h3,
+  body[data-md-style="things"] .md h4,
+  body[data-md-style="things"] .md h5,
+  body[data-md-style="things"] .md h6 { margin: 18px 0 8px; }
+  body[data-md-style="things"] .md h1 { font-size: 1.7em; }
+  body[data-md-style="things"] .md h2 { font-size: 1.5em; }
+  body[data-md-style="things"] .md h3 { font-size: 1.2em; color: var(--vac-md-h3); }
+  body[data-md-style="things"] .md h4 { font-size: 1.1em; color: var(--vac-md-h4); }
+  body[data-md-style="things"] .md h5 { font-size: 1em; color: var(--vac-md-h5); }
+  body[data-md-style="things"] .md h6 { font-size: 0.9em; color: var(--vac-md-h6); }
+  body[data-md-style="things"] .md strong { color: var(--vac-md-strong); }
+  body[data-md-style="things"] .md em { color: var(--vac-md-strong); }
+  body[data-md-style="things"] .md ul,
+  body[data-md-style="things"] .md ol { margin: 4px 0; padding-left: 22px; }
+  body[data-md-style="things"] .md li + li { margin-top: 2px; }
+  body[data-md-style="things"] .md pre {
+    margin: 8px 0; padding: 8px; border-radius: 4px;
+    background: var(--vac-md-code-bg);
+  }
+  body[data-md-style="things"] .md :not(pre) > code {
+    padding: 1px 4px; border-radius: 4px;
+    background: var(--vac-md-inline-code-bg);
+    color: var(--vac-md-inline-code-fg);
+  }
+  body[data-md-style="things"] .md blockquote {
+    margin: 10px 0; padding: 2px 12px;
+    border-left: 3px solid var(--vac-md-quote-border);
+    color: var(--vac-md-quote-fg);
+  }
+  body[data-md-style="things"] .md a {
+    color: var(--vac-md-link);
+    text-decoration: underline; text-underline-offset: 2px;
+  }
+  body[data-md-style="things"] .md table { margin: 10px 0; }
+  body[data-md-style="things"] .md th,
+  body[data-md-style="things"] .md td {
+    border-color: var(--vac-md-border); padding: 3px 8px;
+  }
+  body[data-md-style="things"] .md th { background: var(--vac-md-th-bg); font-weight: 600; }
+  body[data-md-style="things"] .md hr {
+    border: 0; border-top: 1px solid var(--vac-md-border); margin: 16px 0;
+  }
   /* GFM 任务列表的勾选态（）：由宿主侧 markdown.ts 的 checkbox
      钩子渲染，白名单里因此不需要 INPUT。 */
   .task-box { font-family: var(--vscode-editor-font-family); opacity: .85; }

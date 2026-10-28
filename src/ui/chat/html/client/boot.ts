@@ -508,11 +508,12 @@ export const bootClient = `
   }
 
   /**
-   * [CUSTOM- Markdown 渲染预设（2026-10-27）：只给 body 打一个 data 属性，
-   * styles.ts 里按它套用排版覆盖。默认 'editor' = 完全沿用现有主题变量。
+   * [CUSTOM- Markdown 渲染预设（2026-10-27，2026-10-28 重做）：只给 body 打一个 data 属性，
+   * styles.ts 里按它套用排版与配色覆盖。默认 'editor' = 完全沿用现有主题变量。
    */
   function applyMarkdownStyle(style) {
-    var value = style === 'github' || style === 'compact' || style === 'reading' ? style : 'editor';
+    var value = style === 'github' || style === 'obsidian' || style === 'typora'
+      || style === 'atom' || style === 'minimal' || style === 'things' ? style : 'editor';
     if (document.body) { document.body.setAttribute('data-md-style', value); }
   }
 

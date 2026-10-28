@@ -3710,13 +3710,16 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       {
         key: 'panel.markdownStyle', group: 'appearance', type: 'select', scope: 'panel',
         label: 'Markdown style',
-        description: 'How rendered messages are typeset. “Follow editor” uses the current theme as-is.',
+        description: 'Typeface and accent colors for rendered messages. “Follow editor” uses the current theme as-is.',
         value: resolveMarkdownStyle(prefs.markdownStyle),
         options: [
           { value: 'editor', label: 'Follow editor' },
           { value: 'github', label: 'GitHub' },
-          { value: 'compact', label: 'Compact' },
-          { value: 'reading', label: 'Comfortable reading' },
+          { value: 'obsidian', label: 'Obsidian' },
+          { value: 'typora', label: 'Typora' },
+          { value: 'atom', label: 'Atom' },
+          { value: 'minimal', label: 'Minimal' },
+          { value: 'things', label: 'Things' },
         ],
       },
       {
@@ -4664,8 +4667,9 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 }
 
 /** [CUSTOM- Markdown 渲染预设的合法值（设置面板与 setUiPref 共用一处白名单）。 */
-export function resolveMarkdownStyle(value: unknown): 'editor' | 'github' | 'compact' | 'reading' {
-  return value === 'github' || value === 'compact' || value === 'reading' ? value : 'editor';
+export function resolveMarkdownStyle(value: unknown): 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things' {
+  return value === 'github' || value === 'obsidian' || value === 'typora'
+    || value === 'atom' || value === 'minimal' || value === 'things' ? value : 'editor';
 }
 
 /** agent → 默认模型 id 的小表（键/值都有长度上限，最多 20 条）。 */

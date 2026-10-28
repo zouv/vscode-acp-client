@@ -180,7 +180,7 @@ export interface UiPrefs {
   tailBySession?: Record<string, boolean>;
   tailDefault?: boolean;
   // [CUSTOM- Markdown 渲染预设。`editor` = 跟随编辑器（现有逻辑，默认）。
-  markdownStyle?: 'editor' | 'github' | 'compact' | 'reading';
+  markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things';
 }
 
 /** [CUSTOM- 设置面板的分组。左侧导航按这个顺序排；没有条目的分组不显示。 */
@@ -273,7 +273,7 @@ export type ExtToChat =
   // [CUSTOM- 大纲钉住/宽度偏好，随 boot 一起带回（跨窗口重载存活）。
   // [CUSTOM- 外加 tab 栏的手工顺序（同一条记录）。
   // [CUSTOM- 外加 Times 的按会话记录 + 默认值（同一条记录）。
-  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'compact' | 'reading' }
+  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things' }
   // [CUSTOM- 设置面板的数据（回复 getSettings，也在每次 setSetting 之后重发）。宿主是唯一写者。
   | { type: 'settings'; items: SettingItem[] }
   // [CUSTOM- 自定义模型变了（设置面板保存 / VS Code 设置里改）：输入卡的模型菜单要立刻换
@@ -359,7 +359,7 @@ export type ChatToExt =
   // 由宿主**合并**（重建会把对方那一半抹掉）。缺的字段 = 这一轮没改它。
   // [CUSTOM- Times 同样走这条（第三个写者）：timesBySession 整份发上来
   // （与 tabOrder 同一形态 —— 顺序与开关都是"一整张表"，逐条 delta 反而要宿主维护版本）。
-  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'compact' | 'reading' }
+  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things' }
   // [CUSTOM- 设置面板：宿主是唯一写者（配置项写 VS Code 设置，面板项写 UiPrefs）。
   | { type: 'getSettings' }
   | { type: 'setSetting'; key: string; value: unknown }
