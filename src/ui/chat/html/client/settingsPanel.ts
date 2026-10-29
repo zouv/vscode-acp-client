@@ -361,8 +361,21 @@ export const settingsPanelClient = `
       var label = item.actionLabel || 'Run';
       var button = NS.dom.el('button', 'settings-action', label);
       button.type = 'button';
-      button.addEventListener('click', function () {
-        NS.bridge.post({ type: 'settingAction', action: String(item.key).replace(/^action\\./, '') });
+      button.addEventListener('click', function (event) {
+        var send = function () {
+          NS.bridge.post({ type: 'settingAction', action: String(item.key).replace(/^action\\./, '') });
+        };
+        // [CUSTOM-20261029] 破坏性动作（清缓存 / 重置偏好）先问一句；问在面板内，
+        // 不用宿主 modal（它会挡住整个 IDE）。
+        if (item.confirm && NS.popover && NS.popover.confirm && NS.popover.confirm({
+          message: item.confirm,
+          confirmLabel: label,
+          danger: true,
+          anchor: button,
+          event: event,
+          onConfirm: send
+        })) { return; }
+        send();
       });
       wrap.appendChild(button);
       return wrap;

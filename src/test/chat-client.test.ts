@@ -51,6 +51,8 @@ import { bootClient } from '../ui/chat/html/client/boot';
 import { scrollClient } from '../ui/chat/html/client/scroll';
 // [CUSTOM- 右键菜单按上下文给项（含置顶悬浮卡那条路）。
 import { contextMenuClient } from '../ui/chat/html/client/contextMenu';
+// [CUSTOM- 面板内通用浮层（确认 / 输入）：替代宿主 modal / InputBox。
+import { popoverClient } from '../ui/chat/html/client/popover';
 // [CUSTOM- 圆点量测的读写分离。
 import { railClient } from '../ui/chat/html/client/rail';
 // [CUSTOM- 宿主侧构建指纹。
@@ -385,10 +387,43 @@ function loadClient(
   // [CUSTOM- `sessionMenu` joined the list for its own suite: unlike
   // boot, its IIFE runs nothing at load time (init() is called by boot, and here by
   // the test), so loading it costs the record-layer tests nothing.
-  for (const source of [domClient, iconsClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient]) {
+  for (const source of [domClient, iconsClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient]) {
     new Function('window', 'document', source)(win, doc);
   }
   return { NS, metrics, doc, docListeners, jumps, timers, win };
+}
+
+/** Mirrors the #popover subtree in body.ts — if that markup changes, follow it here. */
+function popoverElements(): {
+  root: StubNode; title: StubNode; message: StubNode; input: StubNode; actions: StubNode;
+} {
+  const root = new StubNode('div');
+  root.className = 'popover';
+  root.hidden = true;
+  const title = new StubNode('div');
+  title.className = 'popover-title';
+  title.hidden = true;
+  const message = new StubNode('div');
+  message.className = 'popover-message';
+  const inputWrap = new StubNode('div');
+  inputWrap.className = 'popover-input-wrap';
+  inputWrap.hidden = true;
+  const input = new StubNode('input');
+  input.className = 'popover-input';
+  inputWrap.appendChild(input);
+  const actions = new StubNode('div');
+  actions.className = 'popover-actions';
+  root.appendChild(title);
+  root.appendChild(message);
+  root.appendChild(inputWrap);
+  root.appendChild(actions);
+  return { root, title, message, input, actions };
+}
+
+/** The popover button for one action ('confirm' / 'cancel'), if rendered. */
+function popoverButton(root: StubNode, action: string): StubNode | undefined {
+  return root.querySelectorAll('[data-popover-action]')
+    .find(b => b.getAttribute('data-popover-action') === action);
 }
 
 /**
@@ -977,7 +1012,8 @@ suite('chat client logic: tab strip (stub DOM)', () => {
   // the per-tab × was its own tab stop (defeating the roving tabindex), and the header's
   // directory button stayed visible — and clickable — with nothing focused.
 
-  function tabStrip(): { NS: Record<string, any>; els: Record<string, StubNode>; doc: Record<string, any> } {
+  function tabStrip(): { NS: Record<string, any>; els: Record<string, StubNode>; doc: Record<string, any>; pop: ReturnType<typeof popoverElements> } {
+    const pop = popoverElements();
     const els: Record<string, StubNode> = {
       tabStrip: new StubNode('div'),
       tabs: new StubNode('div'),
@@ -986,13 +1022,15 @@ suite('chat client logic: tab strip (stub DOM)', () => {
       agentMenu: new StubNode('div'),
       cwdBtn: new StubNode('button'),
       newTab: new StubNode('button'),
+      popover: pop.root,
     };
     // [CUSTOM- 落点监听挂在条带上，所以桩里 #tabs 必须是它的子节点 ——
     // 否则 stripEl.querySelectorAll('.tab') 一个都找不到（桩的 dispatch 也不冒泡）。
     els.tabStrip.appendChild(els.tabs);
     const { NS, doc } = loadClient(els);
     NS.tabs.init();
-    return { NS, els, doc };
+    NS.popover.install();
+    return { NS, els, doc, pop };
   }
 
   const summary = (id: string) => ({
@@ -1374,6 +1412,38 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     assert.deepStrictEqual(posted, [{ type: 'closeSession', sessionId: 's1' }]);
   });
 
+  // [CUSTOM- 2026-10-29：运行中的会话关闭前要问一句。问在面板内（非模态浮层），
+  // 不是宿主 modal —— 后者会挡住整个 IDE、打断其它会话。
+  test('a RUNNING tab asks in a panel popover before closing', () => {
+    const { NS, els, pop } = tabStrip();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.tabs.setSessions([{ ...summary('s1'), running: true, title: 'alpha' }]);
+
+    const tab = els.tabs.querySelectorAll('.tab')[0];
+    tab.dispatch('auxclick', {
+      button: 1, target: tab, preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted, [], '先问，不直接关');
+    assert.strictEqual(pop.root.hidden, false, '面板内浮层出现');
+    assert.ok(pop.message.textContent.includes('alpha'), '说清关的是哪一条');
+    assert.ok(pop.message.textContent.includes('still working'), '说清会取消当前轮次');
+
+    popoverButton(pop.root, 'cancel')!.dispatch('click', {
+      preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted, [], '取消就什么都不做');
+
+    tab.dispatch('auxclick', {
+      button: 1, target: tab, preventDefault: () => {}, stopPropagation: () => {},
+    });
+    popoverButton(pop.root, 'confirm')!.dispatch('click', {
+      preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted, [{ type: 'closeSession', sessionId: 's1' }],
+      '确认后才真的关');
+  });
+
   test('middle-click on a draft drops it locally; on a restore tab it forgets it', () => {
     const { NS, els } = tabStrip();
     const posted: Array<Record<string, unknown>> = [];
@@ -1630,9 +1700,15 @@ suite('chat client logic: composer text ownership (stub DOM)', () => {
   // `stashDraft` did nothing while a draft was focused. Leaving a draft discarded what
   // you had typed; entering another draft showed the previous one's text.
 
-  function composerWithInput(): { NS: Record<string, any>; input: StubNode; stopConfirm: StubNode; sendBtn: StubNode } {
+  function composerWithInput(): {
+    NS: Record<string, any>; input: StubNode; stopConfirm: StubNode; sendBtn: StubNode;
+    slashPopup: StubNode; pickers: StubNode;
+    docListeners: Record<string, Array<(event: any) => void>>;
+  } {
     const input = new StubNode('textarea');
     const sendBtn = new StubNode('button');
+    const slashPopup = new StubNode('div');
+    const pickers = new StubNode('div');
     // [CUSTOM- 停止确认条（真面板里由 body.ts 提供，初始 hidden）。
     // 桩要连**两个按钮**一起建：客户端是靠 data-stop-confirm 认它们的。
     const stopConfirm = new StubNode('div');
@@ -1643,18 +1719,35 @@ suite('chat client logic: composer text ownership (stub DOM)', () => {
     stopNo.setAttribute('data-stop-confirm', 'keep');
     stopConfirm.appendChild(stopYes);
     stopConfirm.appendChild(stopNo);
-    const { NS } = loadClient({
+    const { NS, docListeners } = loadClient({
       promptInput: input,
       sendStopBtn: sendBtn,
       stopConfirm: stopConfirm,
-      slashPopup: new StubNode('div'),
+      slashPopup: slashPopup,
       attachments: new StubNode('div'),
-      configPickers: new StubNode('div'),
+      configPickers: pickers,
       // [CUSTOM- body.ts now always supplies it; the stub mirrors that.
       contextMeter: new StubNode('div'),
     });
     NS.composer.init();
-    return { NS, input, stopConfirm, sendBtn };
+    // [CUSTOM- 2026-10-29：停止的 Escape 已提升到 document（见 installGlobalEscape）；
+    // boot 在 init 末尾调用，测试里显式装。
+    NS.composer.installGlobalEscape();
+    return { NS, input, stopConfirm, sendBtn, slashPopup, pickers, docListeners };
+  }
+
+  /** Dispatch Escape through the document listeners (the real 2026-10-29 path). */
+  function pressEscapeDoc(
+    docListeners: Record<string, Array<(event: any) => void>>,
+    extra: Record<string, unknown> = {},
+  ): void {
+    const event = {
+      key: 'Escape', defaultPrevented: false,
+      preventDefault: () => { event.defaultPrevented = true; },
+      stopPropagation: () => {},
+      ...extra,
+    };
+    for (const fn of docListeners.keydown ?? []) { fn(event); }
   }
 
   const session = (id: string) => ({
@@ -1667,13 +1760,10 @@ suite('chat client logic: composer text ownership (stub DOM)', () => {
   // 核过事实：只有"停止"不可逆（关菜单/浮层都能重开，表单抽屉的 Escape 只收起且保留已打的字），
   // 所以只给停止加这一步。形态是面板内一条（不抢焦点、不遮住会话），不是宿主模态框。
   test('Escape asks before stopping, and only "Stop" actually cancels (183)', () => {
-    const { NS, input, stopConfirm } = composerWithInput();
+    const { NS, stopConfirm, docListeners } = composerWithInput();
     const posted: Array<Record<string, any>> = [];
     NS.bridge.post = (m: Record<string, any>) => { posted.push(m); };
-    const pressEscape = (): void => {
-      (input as unknown as { dispatch: (t: string, e: any) => void })
-        .dispatch('keydown', { key: 'Escape', preventDefault: () => {} });
-    };
+    const pressEscape = (): void => { pressEscapeDoc(docListeners); };
     const buttons = (): StubNode[] => stopConfirm.querySelectorAll('[data-stop-confirm]');
 
     NS.composer.setFocus({ ...session('s1'), running: true }, null);
@@ -1695,17 +1785,47 @@ suite('chat client logic: composer text ownership (stub DOM)', () => {
   });
 
   test('"Keep going" dismisses the question without stopping (183)', () => {
-    const { NS, input, stopConfirm } = composerWithInput();
+    const { NS, stopConfirm, docListeners } = composerWithInput();
     const posted: Array<Record<string, any>> = [];
     NS.bridge.post = (m: Record<string, any>) => { posted.push(m); };
     NS.composer.setFocus({ ...session('s1'), running: true }, null);
-    (input as unknown as { dispatch: (t: string, e: any) => void })
-      .dispatch('keydown', { key: 'Escape', preventDefault: () => {} });
+    pressEscapeDoc(docListeners);
     assert.strictEqual(stopConfirm.hidden, false);
 
     dispatchClick(stopConfirm.querySelectorAll('[data-stop-confirm]')[1], {});
     assert.deepStrictEqual(posted, [], 'Keep going 什么都不停');
     assert.strictEqual(stopConfirm.hidden, true);
+  });
+
+  test('Escape closes the slash list / picker menus before it can ask to stop', () => {
+    const { NS, stopConfirm, docListeners, slashPopup, pickers } = composerWithInput();
+    NS.composer.setFocus({ ...session('s1'), running: true }, null);
+
+    slashPopup.hidden = false;
+    pressEscapeDoc(docListeners);
+    assert.strictEqual(slashPopup.hidden, true, 'slash 列表先收');
+    assert.strictEqual(stopConfirm.hidden, true, '关列表时不弹停止确认');
+
+    const menu = new StubNode('div');
+    menu.className = 'picker-menu open';
+    pickers.appendChild(menu);
+    pressEscapeDoc(docListeners);
+    assert.ok(!menu.className.split(/\s+/).includes('open'), 'picker 菜单先收');
+    assert.strictEqual(stopConfirm.hidden, true, '关菜单时不弹停止确认');
+  });
+
+  test('Escape during IME composition never asks to stop', () => {
+    const { NS, stopConfirm, docListeners } = composerWithInput();
+    NS.composer.setFocus({ ...session('s1'), running: true }, null);
+    pressEscapeDoc(docListeners, { isComposing: true });
+    assert.strictEqual(stopConfirm.hidden, true, '输入法合成中的 Esc 交给 IME');
+  });
+
+  test('the host stopAsk path can force the bar when the client state is stale', () => {
+    const { NS, stopConfirm } = composerWithInput();
+    NS.composer.setFocus({ ...session('s1'), running: false }, null);
+    NS.composer.showStopAsk(true);
+    assert.strictEqual(stopConfirm.hidden, false, '宿主已确认在飞 ⇒ 以宿主为准');
   });
 
   test('the Stop button asks too, and the turn ending on its own clears the question (183)', () => {
@@ -2141,9 +2261,11 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
   function openedPicker(
     overrides: Record<string, unknown> = {},
     opts: { tabCwd?: string | null; uiState?: Record<string, unknown> } = {},
-  ): { NS: Record<string, any>; docListeners: Record<string, Array<(e: any) => void>>; tree: ReturnType<typeof historyDrawer>; posted: Array<Record<string, any>> } {
+  ): { NS: Record<string, any>; docListeners: Record<string, Array<(e: any) => void>>; tree: ReturnType<typeof historyDrawer>; posted: Array<Record<string, any>>; pop: ReturnType<typeof popoverElements> } {
     const tree = historyDrawer();
-    const { NS, docListeners } = loadClient(tree.elements);
+    const pop = popoverElements();
+    const { NS, docListeners } = loadClient({ ...tree.elements, popover: pop.root });
+    NS.popover.install();
     NS.tabs = { currentCwd: () => opts.tabCwd ?? null };
     if (opts.uiState) { NS.boot.recallUi = () => ({ ...opts.uiState }); }
     const posted: Array<Record<string, any>> = [];
@@ -2156,7 +2278,7 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
       sessions: SESSIONS, directories: DIRECTORIES,
       ...overrides,
     });
-    return { NS, docListeners, tree, posted };
+    return { NS, docListeners, tree, posted, pop };
   }
 
   function filterRows(menu: StubNode): StubNode[] {
@@ -2408,22 +2530,67 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     assert.strictEqual(tree.drawer.hidden, false, '列表就地更新，抽屉不关');
   });
 
-  test('点 Delete 带上这一行属于哪个 agent（真删除要连 agent 一起动）', () => {
-    const { docListeners, tree, posted } = openedPicker();
+  test('点 Delete 先在面板内确认，确认后才真删除（并带上这一行的 agent）', () => {
+    const { docListeners, tree, posted, pop } = openedPicker();
     const row = tree.list.querySelectorAll('.outline-item')[1];
     dispatchClick(actionBtnOf(row.parentNode as StubNode, 'delete'), docListeners);
+    assert.deepStrictEqual(posted.filter(m => m.type === 'deleteSession'), [],
+      '确认之前不发消息');
+    assert.strictEqual(pop.root.hidden, false, '面板内浮层出现，而不是宿主 modal');
+    assert.ok(pop.message.textContent.includes('alpha two'), '浮层说清删的是哪一条');
+    assert.ok(pop.message.textContent.includes('cannot be undone'), '不可逆要说出来');
+
+    dispatchClick(popoverButton(pop.root, 'confirm')!, docListeners);
     assert.deepStrictEqual(posted.filter(m => m.type === 'deleteSession'),
       [{ type: 'deleteSession', sessionId: 'a2', agentName: 'Claude Code' }]);
     assert.strictEqual(tree.list.querySelectorAll('.outline-item').length, 3,
       '回执之前列表不动（不做乐观更新）');
+    assert.strictEqual(pop.root.hidden, true, '确认后浮层收起');
   });
 
-  test('点 Rename 带上行上的当前标题（进输入框当初值）', () => {
-    const { docListeners, tree, posted } = openedPicker();
+  test('点 Delete 后取消：什么都不发，列表也不动', () => {
+    const { docListeners, tree, posted, pop } = openedPicker();
+    const row = tree.list.querySelectorAll('.outline-item')[1];
+    dispatchClick(actionBtnOf(row.parentNode as StubNode, 'delete'), docListeners);
+    dispatchClick(popoverButton(pop.root, 'cancel')!, docListeners);
+    assert.deepStrictEqual(posted.filter(m => m.type === 'deleteSession'), []);
+    assert.strictEqual(tree.list.querySelectorAll('.outline-item').length, 3);
+    assert.strictEqual(pop.root.hidden, true);
+  });
+
+  test('点 Rename 出面板内输入框，提交时才发新标题', () => {
+    const { docListeners, tree, posted, pop } = openedPicker();
     const row = tree.list.querySelectorAll('.outline-item')[1];
     dispatchClick(actionBtnOf(row.parentNode as StubNode, 'rename'), docListeners);
+    assert.deepStrictEqual(posted.filter(m => m.type === 'renameSession'), [],
+      '输入/提交之前不发消息');
+    assert.strictEqual(pop.root.hidden, false, '面板内输入浮层出现');
+    assert.strictEqual(pop.input.value, 'alpha two', '预填行上的当前标题');
+
+    pop.input.value = 'alpha two renamed';
+    pop.input.dispatch('keydown', {
+      key: 'Enter', preventDefault: () => {}, stopPropagation: () => {},
+    });
     assert.deepStrictEqual(posted.filter(m => m.type === 'renameSession'),
-      [{ type: 'renameSession', sessionId: 'a2', currentTitle: 'alpha two' }]);
+      [{ type: 'renameSession', sessionId: 'a2', title: 'alpha two renamed' }]);
+    assert.strictEqual(pop.root.hidden, true, '提交后浮层收起');
+  });
+
+  test('Rename 输入框里按 Esc / 点外面：不发消息', () => {
+    const { docListeners, tree, posted, pop } = openedPicker();
+    const row = tree.list.querySelectorAll('.outline-item')[1];
+    dispatchClick(actionBtnOf(row.parentNode as StubNode, 'rename'), docListeners);
+    pop.input.value = 'should not apply';
+    pop.input.dispatch('keydown', {
+      key: 'Escape', preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted.filter(m => m.type === 'renameSession'), []);
+    assert.strictEqual(pop.root.hidden, true);
+
+    dispatchClick(actionBtnOf(row.parentNode as StubNode, 'rename'), docListeners);
+    dispatchClick(new StubNode('div'), docListeners);   // click outside
+    assert.deepStrictEqual(posted.filter(m => m.type === 'renameSession'), []);
+    assert.strictEqual(pop.root.hidden, true, '点外面也收起');
   });
 
   test('applyAction：归档摘行、改名换标签，计数跟着重算，过滤不被重置', () => {
@@ -2778,6 +2945,34 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
     assert.ok(item, `the menu must offer "${label}"`);
     dispatchClick(item!, docListeners);
   }
+
+  test('mode picker is appended last so it sits right-aligned next to the context meter', () => {
+    const { NS, pickers } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+    NS.composer.setDraftOptions({
+      draftId: 'd1',
+      configOptions: [
+        {
+          id: 'model', name: 'Model', description: 'Model', category: 'model', type: 'select',
+          currentValue: 'm1', options: [{ value: 'm1', name: 'Model One' }],
+        },
+        {
+          id: 'mode', name: 'Mode', description: 'Session permission mode', category: 'mode', type: 'select',
+          currentValue: 'default', options: [{ value: 'default', name: 'Manual' }],
+        },
+        {
+          id: 'effort', name: 'Effort', description: 'Reasoning effort', category: 'thought_level', type: 'select',
+          currentValue: 'low', options: [{ value: 'low', name: 'Low' }],
+        },
+      ],
+      availableCommands: [],
+    });
+
+    const order = pickers.querySelectorAll('.picker')
+      .map(p => p.getAttribute('data-category'));
+    assert.deepStrictEqual(order, ['model', 'thought_level', 'mode'],
+      '非 mode 保持原相对顺序；mode 最后（CSS 用 margin-left:auto 把它推到最右）');
+  });
 
   test('entering a draft asks the host what the composer should show', () => {
     const { NS, posted } = draftComposer();
@@ -5170,17 +5365,24 @@ suite('build fingerprint: 宿主 / 标记 / 客户端三处自报身份 ()', () 
 // scroll 事件。用户 2026-10-03 报的"消息面板没到底（Jump 还在）、滚动条却已触底、鼠标滚不动"
 // 就是这一族：贴底的人被长高的浮层挤到后面，视口判定却停在旧值。修法是写入方喊一声 reflowNow()。
 suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', () => {
-  function mountScroll(paddingBottom = '0px', composerVar?: string): { NS: any; el: any; jump: any } {
+  function mountScroll(paddingBottom = '0px', composerVar?: string): {
+    NS: any; el: any; jump: any; docListeners: Record<string, Array<(event: any) => void>>;
+  } {
     const NS: Record<string, any> = {};
-    const listeners: Record<string, Array<() => void>> = {};
+    const listeners: Record<string, Array<(event?: any) => void>> = {};
+    const docListeners: Record<string, Array<(event: any) => void>> = {};
     const el: Record<string, any> = {
       scrollTop: 0,
       scrollHeight: 1000,
       clientHeight: 400,
-      addEventListener: (type: string, fn: () => void) => {
+      addEventListener: (type: string, fn: (event?: any) => void) => {
         (listeners[type] = listeners[type] ?? []).push(fn);
       },
-      fire: (type: string) => { for (const fn of listeners[type] ?? []) { fn(); } },
+      fire: (type: string, event?: any) => { for (const fn of listeners[type] ?? []) { fn(event); } },
+      // [CUSTOM- 2026-10-29] wheel 门控 / 中键判据要问"落点是否在 #messages 内"。
+      contains: (node: any) => node === el,
+      // pressLabel 会调 closest；桩里没有真实祖先链，返回 null 即可。
+      closest: () => null,
     };
     const jump: Record<string, any> = { hidden: true, addEventListener: () => {} };
     const win: Record<string, any> = {
@@ -5191,12 +5393,26 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
     };
     // [CUSTOM- 给 scroll.ts 的 bodyVar('--vac-composer-h') 喂一个可配置的值 ——
     // 自愈的「变量是否失真」门槛要拿它当参照；不给时 bodyVar 返回 '-'（parseFloat→0），保持旧行为。
-    const doc: Record<string, any> = composerVar === undefined
-      ? {}
-      : { body: { style: { getPropertyValue: () => composerVar } } };
+    // [CUSTOM- 2026-10-29] document 现在也要收 scroll.ts 的用户滚动意图监听
+    // （wheel 门控 / pointerdown 中键 / keydown），所以桩必须实现 addEventListener 并暴露出来。
+    const doc: Record<string, any> = {
+      addEventListener: (type: string, fn: (event: any) => void) => {
+        (docListeners[type] = docListeners[type] ?? []).push(fn);
+      },
+      ...(composerVar === undefined
+        ? {}
+        : { body: { style: { getPropertyValue: () => composerVar } } }),
+    };
     new Function('window', 'document', scrollClient)(win, doc);
     NS.scroll.init(el, jump);
-    return { NS, el, jump };
+    return { NS, el, jump, docListeners };
+  }
+
+  /** Fire a document-level listener (the real gate lives on document, not on #messages). */
+  function fireDoc(
+    listeners: Record<string, Array<(event: any) => void>>, type: string, event: any,
+  ): void {
+    for (const fn of listeners[type] ?? []) { fn(event); }
   }
 
   test('padding 算进"内容末尾"：贴着留白区仍然算贴底，但翻出去就不算', () => {
@@ -5274,7 +5490,7 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
   // 用户自己滚动（非程序写入的 scroll 事件）就地取消。pinned 仍然如实反映"是否贴底"
   // （大纲跳转 / 探针都读它），Tail 不许伪造它。
   test('Tail 关掉 ⇒ 绝不自动跟；打开且贴底才跟到底；用户一滚就取消', () => {
-    const { NS, el } = mountScroll();
+    const { NS, el, docListeners } = mountScroll();
     NS.dom = { schedule: (fn: () => void) => { fn(); } };
     el.scrollTop = 600;                      // max = 1000 − 400：贴底
     el.fire('scroll');
@@ -5283,16 +5499,70 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
     el.scrollHeight = 1200;                  // 内容长高（没有 scroll 事件）
     NS.scroll.follow();                      // 还没开 Tail
     assert.strictEqual(el.scrollTop, 600, 'Tail 关着时绝不替用户移动视口');
+    // [CUSTOM- 2026-10-29] Tail 关闭时也会重算 pinned：内容长高后这里已不是贴底态。
+    // 模拟用户回到当前底部（max = 1200 − 400 = 800），再打开 Tail。
+    el.scrollTop = 800;
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isPinned(), true);
 
     NS.scroll.setTail(true, false);
     NS.scroll.follow();
     assert.strictEqual(el.scrollTop, 1200, '打开后跟到内容末尾');
     assert.strictEqual(NS.scroll.isTail(), true);
 
+    // [CUSTOM- 2026-10-29] 只有**真实用户滚动**才取消 Tail：先过一遍 document wheel 门控
+    // 记下用户意图，再模拟位置变化与 scroll 事件。
+    fireDoc(docListeners, 'wheel', {
+      target: el, deltaY: -100, deltaX: 0, deltaMode: 0, cancelable: true,
+      ctrlKey: false, metaKey: false, preventDefault: () => {},
+    });
     el.scrollTop = 300;                      // 用户改了阅读进度
     el.fire('scroll');
     assert.strictEqual(NS.scroll.isTail(), false, 'Tail 就地取消');
     assert.strictEqual(NS.scroll.isPinned(), false, 'pinned 仍是如实的（不是被 Tail 伪造的）');
+  });
+
+  // [CUSTOM- 2026-10-29] 程序写入 / 浏览器自身的滚动不能取消 Tail。
+  test('程序写入（follow / restore / Jump）不会取消 Tail', () => {
+    const { NS, el } = mountScroll();
+    NS.dom = { schedule: (fn: () => void) => { fn(); } };
+    NS.scroll.setTail(true, false);
+    el.scrollHeight = 1200;
+    NS.scroll.follow();          // writeTop(1200)，会派发一次 scroll
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isTail(), true, '程序写入不是用户滚动');
+  });
+
+  test('无用户意图的 scroll（滚动锚定 / 内容夹紧）不取消 Tail', () => {
+    const { NS, el, jump } = mountScroll();
+    NS.scroll.setTail(true, false);
+    el.scrollTop = 300;          // 浏览器自己改的位置
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isTail(), true, '没有 wheel / pointer / keyboard 意图');
+    assert.strictEqual(NS.scroll.isPinned(), false);
+    assert.strictEqual(jump.hidden, false, 'pinned / Jump 仍如实更新');
+  });
+
+  test('中键自动滚动取消 Tail', () => {
+    const { NS, el, docListeners } = mountScroll();
+    NS.scroll.setTail(true, false);
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: el });
+    el.scrollTop = 300;
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isTail(), false, '中键滚动是用户滚动');
+  });
+
+  test('Tail 关闭 + 内容长高 ⇒ Jump 自动出现（不必等用户滚一下）', () => {
+    const { NS, el, jump } = mountScroll();
+    NS.dom = { schedule: (fn: () => void) => { fn(); } };
+    el.scrollTop = 600;
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isPinned(), true);
+    NS.scroll.setTail(false, false);
+    el.scrollHeight = 1600;      // 内容长高，但没有 scroll 事件
+    NS.scroll.follow();          // Tail 关着
+    assert.strictEqual(NS.scroll.isPinned(), false);
+    assert.strictEqual(jump.hidden, false, 'Jump 必须自己出现');
   });
 
   // [CUSTOM- 「到底了、尾巴却还压在输入卡后面」的**按结果自愈**。
@@ -5402,6 +5672,7 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
     inner: StubNode;
     docListeners: Record<string, Array<(event: any) => void>>;
     observers: Array<(records: any[]) => void>;
+    win: Record<string, any>;
   }
 
   function mountPanel(opts: { live?: boolean } = {}): Panel {
@@ -5434,6 +5705,8 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
       }),
       setTimeout: () => 0,
       addEventListener: () => {},
+      // 默认没有选区；"框选文本不取消聚焦"的用例会覆盖它。
+      getSelection: () => null,
       MutationObserver: FakeMutationObserver,
     };
     const doc: Record<string, any> = {
@@ -5447,7 +5720,7 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
     NS.dom = { schedule: (fn: () => void) => { fn(); } };
     NS.boot = { recallUi: () => ({}), persistUi: () => {} };
     NS.scroll.init(messages, { hidden: true, addEventListener: () => {} });
-    return { NS, messages, card, inner, docListeners, observers };
+    return { NS, messages, card, inner, docListeners, observers, win };
   }
 
   function fireDoc(
@@ -5468,11 +5741,47 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
   }
 
   test('滚轮落在**未聚焦**的卡片上 ⇒ 滚的是整个面板，卡片自己的滚动区不动', () => {
-    const { messages, inner, docListeners } = mountPanel();
+    const { NS, messages, inner, docListeners } = mountPanel();
+    NS.scroll.setTail(true, false);
     const event = wheel(docListeners, inner, 100);
     assert.strictEqual(event.defaultPrevented, true, '卡片吃滚轮这条默认行为必须被拦下');
     assert.strictEqual(messages.scrollTop, 100, '滚动量交给面板');
     assert.strictEqual(inner.scrollTop, 0, '未聚焦的卡片不许抢滚轮');
+    // [CUSTOM- 2026-10-29] 门控滚面板走的是 writeTop（程序写入口），但用户确实在滚，
+    // 必须显式取消 Tail —— 否则按钮还亮着，与"一滚就关"不一致。
+    assert.strictEqual(NS.scroll.isTail(), false, '用户滚轮滚了面板 ⇒ Tail 关闭');
+  });
+
+  // [CUSTOM- 2026-10-29 用户报：卡片内没有滚动条时，滚轮被卡片截获，面板滚不动。
+  test('卡片内没有纵向滚动区 ⇒ 滚轮不拦截，面板照常滚', () => {
+    const { messages, docListeners } = mountPanel();
+    const plain = box('div', 'tool');
+    const pre = box('pre', 'bubble-pre', 203, 200);
+    pre.style.overflowY = 'auto';
+    plain.appendChild(pre);
+    messages.appendChild(plain);
+
+    fireDoc(docListeners, 'pointerdown', { target: pre });
+    assert.ok(!String(pre.className).split(' ').includes('scroll-active'),
+      '没有可滚内容的卡片不该拿到焦点环');
+
+    const event = wheel(docListeners, pre, 100);
+    assert.strictEqual(event.defaultPrevented, false,
+      '横向滚动条造成的 scrollHeight 假象不算纵向可滚 ⇒ 交给浏览器滚面板');
+  });
+
+  test('INNER_SCROLL_SELECTOR 里的元素只有横向滚动条 ⇒ 也不算纵向可滚', () => {
+    const { messages, docListeners } = mountPanel();
+    const card = box('div', 'tool');
+    const hbar = box('div', 'tool-seg-out', 215, 200);
+    hbar.offsetHeight = 215;    // 横向滚动条 15px（offsetHeight - clientHeight）
+    hbar.style.overflowY = 'auto';
+    card.appendChild(hbar);
+    messages.appendChild(card);
+
+    const event = wheel(docListeners, hbar, 100);
+    assert.strictEqual(event.defaultPrevented, false,
+      'scrollHeight 多出的 15px 只是横向滚动条，不是纵向内容');
   });
 
   test('点进卡片之后滚轮才滚这张卡片；滚到它自己的末尾就停，面板原地不动', () => {
@@ -5508,6 +5817,59 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
     wheel(docListeners, inner, 100);
     assert.strictEqual(inner.scrollTop, 0);
     assert.strictEqual(messages.scrollTop, 100);
+  });
+
+  // [CUSTOM- 2026-10-29] 聚焦只认左键；再次左键点击同一张卡片取消聚焦，
+  // 但框选文本 / 拖动 / 点交互控件不算。
+  test('右键 / 中键不触发卡片聚焦，只有左键会', () => {
+    const { inner, card, docListeners } = mountPanel();
+    const active = () => String(inner.className).split(' ').includes('scroll-active');
+
+    fireDoc(docListeners, 'pointerdown', { button: 2, target: card });
+    assert.strictEqual(active(), false, '右键（上下文菜单）不聚焦');
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: card });
+    assert.strictEqual(active(), false, '中键（自动滚动）不聚焦');
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: card });
+    assert.strictEqual(active(), true, '左键聚焦');
+  });
+
+  test('再次左键点击同一张卡片取消聚焦；拖动 / 框选文本 / 点控件时不取消', () => {
+    const activeOf = (inner: StubNode) => String(inner.className).split(' ').includes('scroll-active');
+    const click = (
+      panel: ReturnType<typeof mountPanel>, target: StubNode,
+      downX: number, downY: number, upX = downX, upY = downY,
+    ) => {
+      fireDoc(panel.docListeners, 'pointerdown', {
+        button: 0, target, clientX: downX, clientY: downY, pointerId: 1,
+      });
+      fireDoc(panel.docListeners, 'pointerup', {
+        button: 0, target, clientX: upX, clientY: upY, pointerId: 1,
+      });
+    };
+
+    const p1 = mountPanel();
+    click(p1, p1.card, 10, 10);
+    assert.strictEqual(activeOf(p1.inner), true, '第一次点击聚焦');
+    click(p1, p1.card, 10, 10);
+    assert.strictEqual(activeOf(p1.inner), false, '第二次原地点击取消聚焦');
+
+    const p2 = mountPanel();
+    click(p2, p2.card, 10, 10);
+    click(p2, p2.card, 10, 10, 30, 10);        // 移动 20px = 拖动 / 框选
+    assert.strictEqual(activeOf(p2.inner), true, '拖动（框选文本）不取消聚焦');
+
+    const p3 = mountPanel();
+    click(p3, p3.card, 10, 10);
+    p3.win.getSelection = () => ({ isCollapsed: false });
+    click(p3, p3.card, 10, 10);
+    assert.strictEqual(activeOf(p3.inner), true, '确实选中了文本 ⇒ 不取消聚焦');
+
+    const p4 = mountPanel();
+    click(p4, p4.card, 10, 10);
+    const btn = new StubNode('button');
+    p4.card.appendChild(btn);
+    click(p4, btn, 10, 10);
+    assert.strictEqual(activeOf(p4.inner), true, '点在卡片里的交互控件上 ⇒ 不取消聚焦（控件自己处理）');
   });
 
   test('横向滚动（Shift+滚轮 / 触控板横滑）不拦，留给代码块与宽表格', () => {
@@ -5679,6 +6041,27 @@ suite('chat client logic: file links in prose (stub DOM)', () => {
     ]);
   });
 
+  // [CUSTOM- 2026-10-29：引用标签带行区间时，openFile 要把 endLine 一起带上；
+  // 没有 endLine 的消息形状必须保持原样（不能多一个 undefined 键）。
+  test('a data-end-line link asks for the whole range', () => {
+    const harness = loadClient();
+    const root = new StubNode('div');
+    const target = new StubNode('button');
+    target.setAttribute('data-path', 'GOAL.md');
+    target.setAttribute('data-line', '12');
+    target.setAttribute('data-end-line', '40');
+    root.appendChild(target);
+    harness.NS.links.installDelegatedHandlers(root);
+
+    const sent: Array<Record<string, unknown>> = [];
+    harness.NS.bridge.post = (msg: Record<string, unknown>) => { sent.push(msg); };
+    harness.NS.bridge.postForSession = (msg: Record<string, unknown>) => { sent.push(msg); };
+    dispatchClick(target, harness.docListeners);
+    assert.deepStrictEqual(sent, [
+      { type: 'openFile', path: 'GOAL.md', line: 12, endLine: 40 },
+    ]);
+  });
+
   test('a data-href link still takes the external channel', () => {
     assert.deepStrictEqual(clickOnAttr('data-href', 'https://example.com'), [
       { type: 'openLink', href: 'https://example.com' },
@@ -5699,15 +6082,17 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
 
   function withEntry() {
     const messages = new StubNode('div');
-    const harness = loadClient({ messages });
+    const pop = popoverElements();
+    const harness = loadClient({ messages, popover: pop.root });
     const { NS } = harness;
+    NS.popover.install();
     const posted: Array<Record<string, unknown>> = [];
     NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
     // 记录的正文要**真的进过转录**（entry(id) 才解析得到）—— 这是 067 那条老路
     // 「entryTextOf → transcriptView.entry」的前提，桩里同样要走一遍。
     NS.transcriptView.init(messages);
     NS.transcriptView.append({ id: 'u1', kind: 'user', at: 1, text }, undefined);
-    return { NS, posted };
+    return { NS, posted, pop };
   }
 
   function labels(items: Array<{ label: string }>): string {
@@ -5812,7 +6197,7 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
   });
 
   test('会话 tab：同目录新建 / 复制会话 / Close / Rename / Copy Session ID；草稿 tab 只给 Close', () => {
-    const { NS, posted } = withEntry();
+    const { NS, posted, pop } = withEntry();
     // 这两条是会话作用域消息（宿主按 sessionId 校验后处理），桩里也要接住。
     NS.bridge.postForSession = (message: Record<string, unknown>) => { posted.push(message); };
     const tab = new StubNode('button');
@@ -5833,8 +6218,16 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     assert.deepStrictEqual(posted[1], { type: 'duplicateSession', sessionId: 's1' },
       '复制会话走 session/fork（保留上下文与消息记录）');
     items[3].run();
-    assert.deepStrictEqual(posted[2], { type: 'renameSession', sessionId: 's1', currentTitle: 'alpha one' },
-      '改名的初值就是标签上看得见的标题（与用户看到的一致）');
+    assert.deepStrictEqual(posted.filter(m => m.type === 'renameSession'), [],
+      '改名先出面板内输入浮层，提交前不发消息');
+    assert.strictEqual(pop.input.value, 'alpha one',
+      '初值就是标签上看得见的标题（与用户看到的一致）');
+    pop.input.value = 'renamed';
+    pop.input.dispatch('keydown', {
+      key: 'Enter', preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted[2], { type: 'renameSession', sessionId: 's1', title: 'renamed' },
+      '提交时才把新标题发给宿主');
     items[4].run();
     assert.deepStrictEqual(posted[3], { type: 'copy', text: 's1' }, '复制的是数据上的 sessionId，不是标签文字');
 
@@ -5846,7 +6239,7 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
   });
 
   test('历史列表行：右键也给 Archive / Delete / Rename（键盘用户的入口）', () => {
-    const { NS, posted } = withEntry();
+    const { NS, posted, pop } = withEntry();
     const row = new StubNode('button');
     row.className = 'outline-item';
     row.setAttribute('data-open-session', 'a1');
@@ -5857,12 +6250,24 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     assert.strictEqual(labels(items), 'Archive / Delete / Rename');
     items[0].run();
     items[1].run();
+    assert.deepStrictEqual(posted.filter(m => m.type === 'deleteSession'), [],
+      '右键 Delete 也先出面板内确认');
+    popoverButton(pop.root, 'confirm')!.dispatch('click', {
+      preventDefault: () => {}, stopPropagation: () => {},
+    });
     items[2].run();
+    assert.deepStrictEqual(posted.filter(m => m.type === 'renameSession'), [],
+      '右键 Rename 同样先出输入浮层');
+    assert.strictEqual(pop.input.value, 'alpha one');
+    pop.input.value = 'renamed';
+    pop.input.dispatch('keydown', {
+      key: 'Enter', preventDefault: () => {}, stopPropagation: () => {},
+    });
     assert.deepStrictEqual(posted, [
       { type: 'archiveSession', sessionId: 'a1' },
       // 删除要连 agent 一起动，所以带上这一行属于哪个 agent（行上的 data-open-agent）。
       { type: 'deleteSession', sessionId: 'a1', agentName: 'Claude Code' },
-      { type: 'renameSession', sessionId: 'a1', currentTitle: 'alpha one' },
+      { type: 'renameSession', sessionId: 'a1', title: 'renamed' },
     ]);
   });
 });
@@ -6021,6 +6426,9 @@ suite('chat client logic: 引用栏的当前文件格（stub DOM, ）', () => {
     const h = refBar();
     h.NS.composer.setActiveFile({ ...FILE, lineStart: 12, lineEnd: 40 });
     assert.strictEqual(labelOf(h.attachments), 'DemoFile.cs:12-40');
+    const tag = h.attachments.querySelector('.ref-tag')!;
+    assert.strictEqual(tag.getAttribute('data-line'), '12', '点击跳转要带上起始行');
+    assert.strictEqual(tag.getAttribute('data-end-line'), '40', '以及结束行（宿主据此框选）');
     dispatchClick(toggleOf(h.attachments), {});
     const post = h.sent.find(m => m.type === 'attachPath') as Record<string, any>;
     assert.ok(post, '会话页走 attachPath');
@@ -6031,17 +6439,44 @@ suite('chat client logic: 引用栏的当前文件格（stub DOM, ）', () => {
 
   test('宿主回了附件列表 ⇒ 引用栏那格消失（不在两处显示同一条），移除走附件 chip 的 ×', () => {
     const h = refBar();
-    h.NS.composer.setActiveFile(FILE);
+    h.NS.composer.setActiveFile({ ...FILE, lineStart: 12, lineEnd: 40 });
     assert.ok(chipOf(h.attachments), '先有预选格');
-    h.NS.composer.setAttachments([{ path: FILE.path, name: FILE.name, kind: 'file' }]);
+    h.NS.composer.setAttachments([
+      { path: FILE.path, name: FILE.name, kind: 'file', lineStart: 12, lineEnd: 40 },
+    ]);
     assert.strictEqual(chipOf(h.attachments), null,
       '已引用 ⇒ 引用栏那格整个消失（214：两处都摆就是用户报的"重复 tag"）');
     const chip = h.attachments.querySelector('.attachment')!;
     assert.ok(chip.querySelector('.chip-icon'), '附件 chip 左侧也带 `</>` 图标（214）');
+    assert.strictEqual(chip.getAttribute('data-path'), FILE.path, '已添加的引用也可点击跳转');
+    assert.strictEqual(chip.getAttribute('data-line'), '12');
+    assert.strictEqual(chip.getAttribute('data-end-line'), '40');
     h.sent.length = 0;
     dispatchClick(chip.querySelector('.attachment-x')!, {});
     const post = h.sent.find(m => m.type === 'detachFile') as Record<string, any>;
     assert.strictEqual(post.path, FILE.path);
+  });
+
+  // [CUSTOM- 2026-10-29：已添加的引用 chip 点击要跳转并框选；'×' 只能删除，不能顺带打开。
+  test('点击已添加的文件引用 chip ⇒ openFile 带行区间；点 × 只删除', () => {
+    const h = refBar();
+    h.NS.links.installDelegatedHandlers(h.attachments);
+    h.NS.composer.setAttachments([
+      { path: FILE.path, name: FILE.name, kind: 'file', lineStart: 12, lineEnd: 40 },
+    ]);
+    const chip = h.attachments.querySelector('.attachment')!;
+
+    h.sent.length = 0;
+    dispatchClick(chip.querySelector('.attachment-name')!, {});
+    assert.deepStrictEqual(h.sent, [
+      { type: 'openFile', path: FILE.path, line: 12, endLine: 40 },
+    ]);
+
+    h.sent.length = 0;
+    dispatchClick(chip.querySelector('.attachment-x')!, {});
+    assert.deepStrictEqual(h.sent.filter(m => m.type === 'openFile'), [],
+      '× 只删除，不能顺带打开文件');
+    assert.strictEqual(h.sent.filter(m => m.type === 'detachFile').length, 1);
   });
 
   test('草稿页：`+` 先攒在本地（草稿没有会话，attachPath 会被宿主丢掉）', () => {
@@ -6412,6 +6847,7 @@ suite('chat client logic: auto-expand new output (stub DOM)', () => {
 // [CUSTOM- 设置面板（2026-10-21）：左侧分组导航 + 右侧行；改动回传宿主，宿主重发整张表。
 suite('chat client logic: settings panel (stub DOM)', () => {
   function panel() {
+    const pop = popoverElements();
     const els: Record<string, StubNode> = {
       settingsBtn: new StubNode('button'),
       settingsOverlay: new StubNode('div'),
@@ -6423,6 +6859,7 @@ suite('chat client logic: settings panel (stub DOM)', () => {
       settingsSubTitle: new StubNode('span'),
       settingsSubBody: new StubNode('div'),
       settingsSubClose: new StubNode('button'),
+      popover: pop.root,
     };
     (els.settingsOverlay as any).hidden = true;
     (els.settingsSubOverlay as any).hidden = true;
@@ -6430,7 +6867,8 @@ suite('chat client logic: settings panel (stub DOM)', () => {
     const posted: Array<Record<string, unknown>> = [];
     NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
     NS.settingsPanel.init();
-    return { NS, els, posted, docListeners };
+    NS.popover.install();
+    return { NS, els, posted, docListeners, pop };
   }
 
   const items = [
@@ -6478,6 +6916,33 @@ suite('chat client logic: settings panel (stub DOM)', () => {
     const action = els.settingsBody.querySelector('.settings-action') as StubNode;
     action.dispatch('click', {});
     assert.deepStrictEqual(posted[1], { type: 'settingAction', action: 'openLog' });
+  });
+
+  test('a destructive action asks in the panel popover before posting', () => {
+    const { NS, els, posted, pop } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems([
+      {
+        key: 'action.clearAgentCache', group: 'advanced', label: 'Clear agent runtime cache',
+        type: 'action', actionLabel: 'Clear',
+        confirm: 'Delete the local agent runtime cache?',
+      },
+    ]);
+    posted.length = 0;
+
+    (els.settingsBody.querySelector('.settings-action') as StubNode).dispatch('click', {});
+    assert.deepStrictEqual(posted, [], '确认之前不发 settingAction');
+    assert.strictEqual(pop.root.hidden, false, '面板内浮层出现');
+    assert.ok(pop.message.textContent.includes('Delete the local agent runtime cache?'));
+
+    popoverButton(pop.root, 'cancel')!.dispatch('click', {});
+    assert.deepStrictEqual(posted, [], '取消就什么都不做');
+    assert.strictEqual(pop.root.hidden, true);
+
+    (els.settingsBody.querySelector('.settings-action') as StubNode).dispatch('click', {});
+    popoverButton(pop.root, 'confirm')!.dispatch('click', {});
+    assert.deepStrictEqual(posted, [{ type: 'settingAction', action: 'clearAgentCache' }],
+      '确认后才把动作发给宿主');
   });
 
   test('the custom-model editor opens in a sub-panel and round-trips a list', () => {

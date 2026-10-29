@@ -2424,8 +2424,12 @@ export function styles(): string {
     box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
   }
   .composer-bar { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-  .config-pickers { display: flex; flex-wrap: wrap; gap: 4px; margin-right: auto; }
+  /* [CUSTOM- 2026-10-29：容器吃掉剩余宽度（原来用 margin-right:auto 吃在容器外），
+     这样容器内部的 mode picker 才能用 margin-left:auto 落到最右缘 = 上下文进度左侧。 */
+  .config-pickers { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 1 auto; min-width: 0; }
   .picker { position: relative; }
+  /* [CUSTOM- mode 独占容器内剩余空间，靠右；模型/Effort 仍在左侧。 */
+  .picker[data-category="mode"] { margin-left: auto; }
   .picker-btn {
     display: inline-flex; align-items: center; gap: 4px;
     background: var(--vscode-dropdown-background);
@@ -2447,6 +2451,8 @@ export function styles(): string {
     padding: 2px 0; display: none;
   }
   .picker-menu.open { display: block; }
+  /* [CUSTOM- 右缘的 mode picker：菜单向左展开，否则 240–380px 的菜单会冲出面板右边。 */
+  .picker[data-category="mode"] .picker-menu { left: auto; right: 0; }
   .picker-title { padding: 5px 8px 3px; font-size: 0.82em; color: var(--vscode-descriptionForeground); }
   .picker-group { padding: 3px 8px 1px; font-size: 0.82em; color: var(--vscode-descriptionForeground); }
   /* [CUSTOM- 选项行是「名称 + 说明」两行（2026-10-27，参考 Claude Code 的 Modes / Model 菜单）：
@@ -2626,6 +2632,52 @@ export function styles(): string {
   }
   /* 禁用态是有意义的："Copy" 在没有选区时禁用，而不是点了什么都不发生。 */
   .ctx-item:disabled { opacity: 0.5; cursor: default; }
+
+  /* [CUSTOM- 通用浮层（确认 / 输入）：非模态，没有背景遮罩。
+     z-index 95 高于设置面板（80 / 子面板 85）与图片放大（90），低于任何未来的系统级提示。
+     定位由 client/popover.ts 按锚点算；这里只负责长相。 */
+  .popover {
+    position: fixed; z-index: 95;
+    min-width: 210px; max-width: min(360px, calc(100vw - 16px));
+    padding: 10px 12px;
+    background: var(--vscode-menu-background, var(--vscode-dropdown-background));
+    color: var(--vscode-menu-foreground, var(--vscode-dropdown-foreground));
+    border: 1px solid var(--vscode-menu-border, var(--vscode-dropdown-border));
+    border-radius: 6px;
+    box-shadow: 0 4px 16px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.35));
+  }
+  .popover-title {
+    margin-bottom: 4px; font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .popover-message {
+    font-size: 0.92em; line-height: 1.45; white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .popover-input-wrap { margin-top: 8px; }
+  .popover-input {
+    width: 100%; box-sizing: border-box;
+    padding: 4px 6px; border-radius: 3px; font-family: inherit; font-size: inherit;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+    outline: none;
+  }
+  .popover-input:focus { border-color: var(--vscode-focusBorder); }
+  .popover-actions {
+    display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px;
+  }
+  .popover-btn {
+    padding: 3px 10px; border-radius: 3px; cursor: pointer; font-family: inherit;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid var(--vscode-panel-border);
+  }
+  .popover-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  .popover-btn.danger {
+    background: var(--vscode-inputValidation-errorBorder, var(--vscode-button-background, #0e639c));
+    color: var(--vscode-button-foreground);
+    border-color: transparent;
+  }
 
   /* Load overlay */
   /* [CUSTOM- Scoped to the message area (its parent is

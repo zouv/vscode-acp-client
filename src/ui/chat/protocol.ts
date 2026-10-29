@@ -207,6 +207,12 @@ export interface SettingItem {
   warning?: string;
   /** `action` 行的按钮文案（缺省 = "Run"）。 */
   actionLabel?: string;
+  /**
+   * [CUSTOM-20261029] `action` 行的二次确认文案（有值时客户端先弹面板内浮层，
+   * 确认后才发 `settingAction`）。破坏性动作（清缓存 / 重置偏好）用它，
+   * 避免直接把不可逆操作挂在一次点击上。
+   */
+  confirm?: string;
   /** 子项：卡片类型复选框缩进显示在主开关下面。 */
   indent?: boolean;
   /** [CUSTOM- number 行的输入范围（缺省沿用各调用点原来的 0/2000 与 160/480 规则）。 */
@@ -266,6 +272,9 @@ export type ExtToChat =
   | { type: 'boot'; focused: SessionSummary | null; sessions: SessionSummary[]; snapshot: TranscriptSnapshotWire | null; meta: SessionMeta | null; agentConnected?: boolean; autoConnect?: boolean; defaultCwd?: string; recoverable?: RecoverableSession[]; restorePref?: RestoreChoice }
   | { type: 'focus'; summary: SessionSummary | null; snapshot: TranscriptSnapshotWire | null; meta: SessionMeta | null; agentConnected?: boolean }
   | { type: 'sessionsChanged'; sessions: SessionSummary[]; agentConnected?: boolean }
+  // [CUSTOM- 2026-10-29：宿主请求弹出"停止本轮"确认条（侧边栏标题栏 Stop / 命令面板）。
+  // 客户端只负责显示；真正的 cancelTurn 仍由用户在 #stopConfirm 上点 Stop 后发出。
+  | { type: 'stopAsk'; sessionId: string }
   // [CUSTOM- 编辑器里**当前打开的文件**（含多行选区的行区间），喂给输入框的引用栏：
   // 那条 chip 上有个 `+`（还没引用）/`x`（已引用），点一下就把路径加进这条消息的引用。
   // **非会话作用域**（面板空着时也要显示），而且两个面都要（各自有自己的输入框）。
@@ -445,7 +454,9 @@ export type ChatToExt =
   // 所以与 archiveSession 同区：**必须在 `verifySession` 守卫之前处理**。
   // `agentName` 来自行上的 `data-open-agent`（列表可能横跨多个 agent）。
   | { type: 'deleteSession'; sessionId: string; agentName?: string }
-  | { type: 'renameSession'; sessionId: string; currentTitle?: string }
+  // [CUSTOM- 2026-10-29：`title` 由客户端浮层输入框带上（面板内改名，不再弹宿主 InputBox）。
+  // 缺省时宿主保留原生输入框兜底（其它调用方 / 旧客户端）。
+  | { type: 'renameSession'; sessionId: string; currentTitle?: string; title?: string }
   | { type: 'focusSession'; sessionId: string }
   // [CUSTOM- 从某条助手消息处 fork 出新会话（`session/fork` + 适配器的消息级 `_meta`）。
   // **会话作用域**（走 `verifySession` 守卫之后）。`entryId` 是面板记录 id —— 宿主据它取回
@@ -474,7 +485,9 @@ export type ChatToExt =
   | { type: 'setConfigOption'; sessionId: string; configId: string; value: string }
   | { type: 'renderMarkdown'; items: Array<{ entryId: string; sessionId: string; text: string; key?: string }> }
   | { type: 'openLink'; href: string }
-  | { type: 'openFile'; sessionId: string; path: string; line?: number }
+  // [CUSTOM- 2026-10-29：引用标签的跳转。`endLine` 有值时宿主框选整段行区间；
+  // `sessionId` 可选 —— 草稿页还没有会话，点引用标签也要能打开文件（相对路径回退工作区）。
+  | { type: 'openFile'; sessionId?: string; path: string; line?: number; endLine?: number }
   | { type: 'openTerminal'; sessionId: string; terminalId: string }
   | { type: 'copy'; text: string }
   // webview 控制台 → 扩展侧输出通道的日志桥。

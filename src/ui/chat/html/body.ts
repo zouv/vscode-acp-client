@@ -286,6 +286,18 @@ export function body(surface: SurfaceKey = 'view'): string {
   <!-- [CUSTOM- 自定义右键菜单；项由 JS 按上下文生成（见 client/contextMenu.ts）。 -->
   <div id="ctxMenu" class="ctx-menu" hidden><div class="ctx-items"></div></div>
 
+  <!-- [CUSTOM- 通用浮层（2026-10-29）：确认 / 输入。非模态、不铺遮罩 ——
+       宿主 modal 会挡住整个窗口、打断其它会话；这里只盖住面板内一小块，点外面 / Esc 即取消。
+       内容由 client/popover.ts 生成。 -->
+  <div id="popover" class="popover" hidden role="dialog" aria-label="Confirm">
+    <div class="popover-title" hidden></div>
+    <div class="popover-message"></div>
+    <div class="popover-input-wrap" hidden>
+      <input class="popover-input" type="text">
+    </div>
+    <div class="popover-actions"></div>
+  </div>
+
   <!-- [CUSTOM- 图片放大查看的覆盖层。点背景 / 点 ✕ / 按 Escape 关闭。 -->
   <div id="imageLightbox" class="image-lightbox" hidden>
     <button class="image-lightbox-close" title="Close" aria-label="Close">&#x2715;</button>

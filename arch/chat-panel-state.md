@@ -332,8 +332,8 @@ Tab 栏：`#settingsBtn` 用 `margin-left: auto` 固定在条带最右；`#newTa
 
 | 机制 | 规则 |
 |---|---|
-| 聚焦（`setActive` / `activeScroller` / `activeCard`） | `pointerdown`（document，capture）落在卡片上 ⇒ 该卡片**离落点最近**的纵向滚动容器（落点在标题栏这类"不在滚动区里"的地方时取卡片里第一个）拿到 `.scroll-active`。点面板空白 / 输入卡 / 标签栏即交还。切会话（`restore`）也交还。 |
-| 滚轮门控（document `wheel`，`capture` + `passive:false`） | 按**指针位置**分流，两边互不牵连：指针在**已聚焦**卡片内 ⇒ 只滚它自己的滚动区，**到边界就停、面板原地不动**（`scrollInner` 自己夹紧，**不**把余量交给面板 —— 交还过一版，手感就是"卡片和面板一起滚"）；指针在**未聚焦**卡片内且有内层滚动区 ⇒ `preventDefault` + `writeTop(面板 + delta)`；指针离开卡片 ⇒ 不拦截，浏览器默认滚面板。**横向** delta（Shift+滚轮 / 触控板横滑）与 Ctrl/Cmd+滚轮（IDE 缩放）一律放行。内层滚动区另有一道 CSS 保险：`overscroll-behavior: contain`（`.thought-body` / `.tool-body` / `.tool-seg-out`）——浏览器把某串滚轮判成不可取消时，滚动链也不会从卡片传到面板。 |
+| 聚焦（`setActive` / `activeScroller` / `activeCard`） | `pointerdown`（document，capture）**只认左键**（`button === 0`；合成事件缺 `button` 时按左键）落在卡片上 ⇒ 该卡片**离落点最近**的纵向滚动容器（落点在标题栏这类"不在滚动区里"的地方时取卡片里第一个）拿到 `.scroll-active`。**再次左键原地点击同一张卡片**（未拖动 >4px、未框选文本、没点在按钮/链接/折叠头/文件 chip 等交互控件上）⇒ `setActive(null)` 取消聚焦。右键（上下文菜单）与中键（自动滚动）都不改变焦点。点面板空白 / 输入卡 / 标签栏即交还。切会话（`restore`）也交还。 |
+| 滚轮门控（document `wheel`，`capture` + `passive:false`） | 按**指针位置**分流，两边互不牵连：指针在**已聚焦**卡片内 ⇒ 只滚它自己的滚动区，**到边界就停、面板原地不动**（`scrollInner` 自己夹紧，**不**把余量交给面板 —— 交还过一版，手感就是"卡片和面板一起滚"）；指针在**未聚焦**卡片内且有内层滚动区 ⇒ `preventDefault` + `writeTop(面板 + delta)`；指针离开卡片 ⇒ 不拦截，浏览器默认滚面板。**横向** delta（Shift+滚轮 / 触控板横滑）与 Ctrl/Cmd+滚轮（IDE 缩放）一律放行。内层滚动区另有一道 CSS 保险：`overscroll-behavior: contain`（`.thought-body` / `.tool-body` / `.tool-seg-out`）——浏览器把某串滚轮判成不可取消时，滚动链也不会从卡片传到面板。**2026-10-29**：候选纵向滚动区**只认 `INNER_SCROLL_SELECTOR`**（`.thought-body` / `.tool-body` / `.tool-seg-out` / `.diff-body` / `.elic-preview`）；`.bubble pre` / `.table-wrap` 这类 `overflow-x:auto` 的元素计算出的 `overflowY` 也是 `auto`，横向滚动条还会让 `scrollHeight` 大一圈，不能当纵向滚动区。`isVertScrollable` 另扣掉 `offsetHeight - clientHeight`（边框 + 横向滚动条）再比较。 |
 | 一张卡一条滚动条 | 自动展开时外层 `.tool-body` 是视口，里层 `.tool-seg-out`（510）/`.diff-body`（340）**不再各自限高**（`styles.ts` 里 `.tool.auto-expanded .tool-body .tool-seg-out` 与 `.tool-body .tool-seg-out .diff-body` 的 `max-height: none`）。不这么做就是"滚动条套滚动条"，用户 2026-10-28 报的"卡边多层嵌套"就是它。 |
 | 自动追尾（`flushTails`） | `MutationObserver`（`childList`+`characterData`，subtree）收"变了哪一块"，布局读取与写入推迟到 `NS.dom.schedule` 那一帧。一个容器要同时满足：仍纵向可滚 / `innerPinned` 不是 false（用户没在里面往上滚过）/ 所属卡片 `isLiveCard`（`.thought-spin`、`.tool-status.tc-in_progress`、`.subagent-state[data-state="running"]`）才跟到 `scrollHeight`。 |
 | 样式 | `.messages .scroll-active { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }` —— 用 outline 不用 border，聚焦瞬间不产生 1px 布局位移。 |
@@ -351,7 +351,7 @@ Tab 栏：`#settingsBtn` 用 `margin-left: auto` 固定在条带最右；`#newTa
 **诊断**：`focus:<容器类>`（聚焦变化，强制记）、`wheel-card:<容器类>` / `wheel-gate:<容器类>`
 （只在**换了卡片**时记一条，避免每 700ms 一条把日志桥的共享配额吃光，见 §5.46 的配额规矩）。
 
-**验收**：桩 DOM 7 条（`src/test/chat-client.test.ts` 的「scroll: 内层滚动卡片的焦点门控与自动追尾」）。
+**验收**：桩 DOM 9 条（`src/test/chat-client.test.ts` 的「scroll: 内层滚动卡片的焦点门控与自动追尾」）。
 真机验收见 `docs/03-验收清单.md`。
 
 ### 5.54 Tail（消息面板自动追尾）与会话级开关的「落定」（2026-10-28）
@@ -365,7 +365,10 @@ Outline 都是会话级**——在一个会话里拨它只影响这个会话，�
 |---|---|
 | 数据 | `UiPrefs.tailBySession`（会话 → 布尔）+ `tailDefault`。宿主存 `globalState`，两个面同一份。**默认 `tailDefault` = true** —— 不开按钮时也照旧"贴底跟随"，那是改动前就有的行为，按钮只是把它显式化。 |
 | 运行时 | `scroll.ts` 的 `tail` 旗标：`setTail(on, immediate)`；`follow()` 的判据是 **`pinned && tail`** —— **Tail 关掉 ⇒ 绝不自动滚**（"别动我的视口"），开着时才跟到底。`pinned` 仍然如实反映"贴底"，Tail **不许伪造它**（大纲跳转、探针、`reflow` 都读它）。`immediate` 只在**用户点按钮**时为真（换会话由 `restore` 决定落点）。 |
-| 退出路径 | ① 用户用滚轮 / 拖动滚动条改变了阅读进度（`.messages` 上**非程序写入**的 scroll 事件）→ `cancelTail('scroll')`；② 大纲跳到某条记录（`jumpTo`，也是用户主动离开底部）；③ 切会话时恢复到一个用户自己选的中间位置（`restore` 里 `saved.pinned === false`）→ `cancelTail('restore')`。**都只改这个会话那一条记录，不动默认值** —— 滚动不是"拨偏好"。 |
+| 退出路径 | ① **真实用户滚动**改变了阅读进度 → `cancelTail('scroll')`。判据不是“非程序写入”本身（浏览器 scroll anchoring / 内容折叠后的夹紧 / 布局重排也会改 scrollTop），而是**用户意图**：wheel（document 门控）、拖 `#messages` 滚动条（pointerdown 落在 messages-bar）、中键自动滚动（button 1，持续到 pointerup）、键盘翻页（PageUp/PageDown/Home/End/方向键），窗口 800ms；② 大纲跳到某条记录（`jumpTo`）；③ 切会话恢复到用户自己选的中间位置（`restore`）。都只改这个会话那一条记录，不动默认值。 |
+| 滚轮门控与 Tail | 指针在**未聚焦**卡片的内层滚动区时，门控用 `writeTop(panel + delta)` 滚面板；它走的是程序写入口，所以该分支**显式** `cancelTail('scroll')`。滚**已聚焦**卡片的内部不关 Tail（面板没动，滚轮意图撤回）。 |
+| Tail 关闭时的 Jump | `follow()` 在 `!pinned || !tail` 时每帧最多调度一次 `recompute()`（只读几何、更新 pinned/Jump，**不写 scrollTop**）。没有它，Tail 关闭后内容长高但无 scroll 事件，Jump 会一直不出现（真机日志出现过 `pin=1 dist=13327`）。 |
+| 诊断 | `scroll#` 行带 `tail=0|1`；`setTail` / `cancelTail` 真正翻转时强制记 `tail:on` / `tail:off <scroll|restore>`；scroll 来源分 `user-scroll` / `layout-scroll` / `scroll-after-program`。 |
 
 **「落定」（`seedKnown`，四个模块同一件事）**：光有"按会话 + 默认值"还不够 —— 一个没有记录的
 **已开启**会话会跟着默认值走，于是"A 里拨开关，切到 B 发现它也变了"。所以 `noteSessions`（boot 在

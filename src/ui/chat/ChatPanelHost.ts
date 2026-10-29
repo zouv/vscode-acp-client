@@ -372,6 +372,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // object knows whether a surface is on screen and which session is focused.
     this.permissionBridge?.setPresenter(this);
     this.elicitationBridge?.setPresenter(this);
+    // [CUSTOM-20261029] Sub-agent traffic arrives under the child's own session id,
+    // which is not a registered session. Resolve it to the parent so a permission/form
+    // request is drawn in the parent's transcript instead of falling through to the
+    // window-level QuickPick (the user's screenshot). Unknown ids stay as-is.
+    const resolvePanelSession = (sessionId: string) => this.subagentParents.get(sessionId) ?? sessionId;
+    this.permissionBridge?.setSessionResolver(resolvePanelSession);
+    this.elicitationBridge?.setSessionResolver(resolvePanelSession);
     // [CUSTOM- One frame of coalescing for order-coupled messages.
     this.outbox = new Outbox({
       send: message => this.postNow(message),
@@ -433,6 +440,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // baseline could only ever suppress the first notice of a new session.
       this.choices.delete(sessionId);
       this.sessionTitles.delete(sessionId);
+      // [CUSTOM-20261029] The child→parent aliases only exist to route sub-agent
+      // prompts; a closed parent can never render them again.
+      for (const [child, parent] of Array.from(this.subagentParents.entries())) {
+        if (parent === sessionId) { this.subagentParents.delete(child); }
+      }
       // [CUSTOM- Its notification keys can never fire again.
       this.notifier.forget(sessionId);
       this.turnSeq.delete(sessionId);
@@ -609,6 +621,27 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   /**
+   * [CUSTOM-20261029] Ask the visible panel to show `#stopConfirm` instead of
+   * cancelling directly. Used by the view-title Stop button and the command
+   * palette (both used to call `SessionManager.cancelTurn` straight away).
+   *
+   * Returns false when no surface is showing this session — the caller then
+   * falls back to a non-modal native warning. Returns true when there is
+   * nothing to stop (the turn already ended), so the caller does nothing.
+   */
+  requestStop(sessionId: string): boolean {
+    if (!this.sessionManager.isTurnInFlight(sessionId)) { return true; }
+    let sent = false;
+    for (const surface of this.surfaces.values()) {
+      if (!this.isSurfaceShowing(surface, sessionId)) { continue; }
+      // Targeted + immediate: a confirmation bar must not wait for the outbox frame.
+      this.post({ type: 'stopAsk', sessionId }, surface.key);
+      sent = true;
+    }
+    return sent;
+  }
+
+  /**
    * [CUSTOM- Add attachments to a session's pending list.
    *
    * Extracted from `attachFile` so the drag-and-drop path can share it — that
@@ -772,7 +805,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         const id = (msg as { sessionId?: unknown }).sessionId;
         if (typeof id !== 'string' || !id) { return; }
         const current = (msg as { currentTitle?: unknown }).currentTitle;
-        void this.handleRenameSession(id, typeof current === 'string' ? current : '');
+        const title = (msg as { title?: unknown }).title;
+        void this.handleRenameSession(
+          id,
+          typeof current === 'string' ? current : '',
+          typeof title === 'string' ? title : undefined,
+        );
         return;
       }
       // [CUSTOM- 真删除一条会话（历史列表行）。与 archiveSession 同区：**在 verifySession 守卫
@@ -1024,6 +1062,23 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       case 'openLink':
         void this.handleOpenLink((msg as { href?: string }).href ?? '');
         return;
+      // [CUSTOM-20261029] 引用标签在草稿页也能点（还没有会话），所以放在守卫之前。
+      // 带 sessionId 的消息仍按旧语义校验：会话已不存在就丢弃，避免按错目录解析相对路径。
+      case 'openFile': {
+        const requested = (msg as { sessionId?: unknown }).sessionId;
+        const requestedSession = typeof requested === 'string' && requested ? requested : undefined;
+        if (requestedSession && !sessionOf(this.sessionManager, requestedSession)) {
+          log(`${LOG_PREFIX}: dropped openFile for unknown session ${requestedSession}`);
+          return;
+        }
+        void this.handleOpenFile(
+          requestedSession,
+          (msg as { path?: string }).path ?? '',
+          (msg as { line?: number }).line,
+          (msg as { endLine?: number }).endLine,
+        );
+        return;
+      }
       case 'executeCommand':
         log(`${LOG_PREFIX}: ignoring webview executeCommand (no allowlist yet)`);
         return;
@@ -1050,9 +1105,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       case 'closeSession': {
         const agentName = sessionOf(this.sessionManager, sessionId)?.agentName;
         if (!agentName) { return; }
-        // [CUSTOM- 运行中的会话先问一句（2026-10-21）。放在宿主而不是客户端：
-        // ×、Delete、右键 Close、中键四条关入口都会走到这里，一次覆盖全部。
-        void this.closeSessionWithConfirm(agentName, sessionId);
+        // [CUSTOM- 运行中会话的确认在客户端（见 closeSession 的注释）：×、Delete、
+        // 右键 Close、中键四条入口都汇到客户端的 closeModel，一次覆盖全部。
+        void this.closeSession(agentName, sessionId);
         return;
       }
       // [CUSTOM- 取消一个 sub-agent 子会话（子会话 id 走 `subagentSessionId`，不是 sessionId）。
@@ -1193,13 +1248,6 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         );
         return;
       }
-      case 'openFile':
-        void this.handleOpenFile(
-          sessionId,
-          (msg as { path?: string }).path ?? '',
-          (msg as { line?: number }).line,
-        );
-        return;
       case 'openTerminal':
         this.handleOpenTerminal(sessionId, (msg as { terminalId?: string }).terminalId ?? '');
         return;
@@ -2150,22 +2198,48 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     await vscode.env.openExternal(parsed);
   }
 
-  private async handleOpenFile(sessionId: string, rawPath: string, line?: number): Promise<void> {
+  private async handleOpenFile(
+    sessionId: string | undefined,
+    rawPath: string,
+    line?: number,
+    endLine?: number,
+  ): Promise<void> {
     if (!rawPath) { return; }
     // [CUSTOM- Resolve relative paths against the session that OWNS
     // the chip rather than whatever happens to be focused. The `verifySession`
     // guard already validated this id, so there is one source of truth for the
     // working directory (previously this read `this.focused.sessionId`, which
     // was equivalent only because the client filters by the focused session).
-    const session = sessionOf(this.sessionManager, sessionId);
+    // [CUSTOM-20261029] `sessionId` may be absent on the draft page; `fileUri`
+    // then falls back to the first workspace folder.
+    const session = sessionId ? sessionOf(this.sessionManager, sessionId) : undefined;
     const uri = fileUri(rawPath, session?.cwd);
     try {
       const doc = await vscode.workspace.openTextDocument(uri);
       const editor = await vscode.window.showTextDocument(doc, { preview: true });
       if (line && line > 0) {
-        const position = new vscode.Position(Math.max(0, line - 1), 0);
-        editor.selection = new vscode.Selection(position, position);
-        editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+        const lastRow = Math.max(0, doc.lineCount - 1);
+        const startRow = Math.min(Math.max(0, line - 1), lastRow);
+        if (endLine && endLine > 0) {
+          // [CUSTOM-20261029] Reference chips carry an inclusive 1-based range:
+          // select the whole range, ending at the end of the last line (not at
+          // the start of the next one, so the trailing newline is not included).
+          const endRow = Math.min(Math.max(startRow, endLine - 1), lastRow);
+          const end = doc.lineAt(endRow).range.end;
+          const start = new vscode.Position(startRow, 0);
+          editor.selection = new vscode.Selection(start, end);
+          editor.revealRange(
+            new vscode.Range(start, end),
+            vscode.TextEditorRevealType.InCenterIfOutsideViewport,
+          );
+        } else {
+          const position = new vscode.Position(startRow, 0);
+          editor.selection = new vscode.Selection(position, position);
+          editor.revealRange(
+            new vscode.Range(position, position),
+            vscode.TextEditorRevealType.InCenterIfOutsideViewport,
+          );
+        }
       }
     } catch (e: any) {
       void vscode.window.showWarningMessage(`Could not open ${rawPath}: ${e?.message ?? e}`);
@@ -2364,21 +2438,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   /**
-   * [CUSTOM- 关闭运行中的会话前弹一次原生模态确认（与 Delete Session 同一个先例）。
-   * 确认后仍走 `SessionManager.closeSession`：它会在 `session/close` 之前先 `cancelTurn`，
-   * 并保证待决的权限/表单请求被回答（ACP 契约）。
+   * [CUSTOM- 关闭一个会话。2026-10-29：运行中会话的二次确认改由客户端负责
+   * （`html/client/tabs.ts` 的 closeModel → NS.popover.confirm）——触发点是面板里的
+   * ×/中键/右键/Delete，不需要宿主 modal 挡住整个窗口。这里仍走 closeSession：
+   * 它在 `session/close` 之前先 `cancelTurn`，并保证待决的权限/表单请求被回答（ACP 契约）。
    */
-  private async closeSessionWithConfirm(agentName: string, sessionId: string): Promise<void> {
-    if (this.isSessionRunning(sessionId)) {
-      const title = this.sessionTitles.get(sessionId)
-        ?? this.sessionManager.getSession(sessionId)?.title
-        ?? sessionId;
-      const answer = await vscode.window.showWarningMessage(
-        `Close "${title}"? The agent is still working — closing cancels the current turn.`,
-        { modal: true }, 'Close',
-      );
-      if (answer !== 'Close') { return; }
-    }
+  private async closeSession(agentName: string, sessionId: string): Promise<void> {
     try {
       await this.sessionManager.closeSession(agentName, sessionId);
     } catch (e) {
@@ -2830,14 +2895,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   /**
    * 真删除一条会话（历史列表行的 Delete）。比 Archive 重：Archive 只是本地收起，这一步
-   * 会向 agent 发 `session/delete` 并清掉本地缓存，**不可撤销** —— 所以先用原生弹框问一句。
+   * 会向 agent 发 `session/delete` 并清掉本地缓存，**不可撤销**。
+   *
+   * 2026-10-29：二次确认改由客户端负责（`html/client/popover.ts` 的非模态浮层）——
+   * 触发点就在历史列表里，不必用宿主 modal 挡住整个 IDE。宿主收到这条消息时用户已经确认过。
    * 做完回一条 `sessionAction {action:'delete'}`，列表据此摘掉那行（与 Archive 同一对账路径）。
    */
   private async handleDeleteSession(agentName: string, sessionId: string): Promise<void> {
-    const confirm = await vscode.window.showWarningMessage(
-      `Delete session "${sessionId}"? This cannot be undone.`,
-      { modal: true }, 'Delete');
-    if (confirm !== 'Delete') { return; }
     try {
       await this.sessionManager.deleteSession(agentName, sessionId);
       this.post({ type: 'sessionAction', action: 'delete', sessionId });
@@ -2847,18 +2911,22 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   /**
-   * 改名：原生输入框（webview 里没有等价控件），做完回一条 `sessionAction`。
+   * 改名：客户端带 `title` 时直接应用（2026-10-29：面板内输入浮层，不再弹宿主
+   * InputBox）；缺省时保留原生输入框兜底。做完回一条 `sessionAction`。
    * 清空 / 取消都当"没改"——清空意味着"回到原始标题"，而那需要知道这条行的底层标题
    * （agent 的 / 缓存的 / 磁盘的都可能），列表这边拿不到它。宁可不动，也不猜。
    */
-  private async handleRenameSession(sessionId: string, currentTitle: string): Promise<void> {
-    const title = await vscode.window.showInputBox({
-      title: 'Rename Session',
-      prompt: 'New name for this session',
-      value: currentTitle,
-    });
-    if (title === undefined || title.trim() === '') { return; }
-    const clean = title.trim();
+  private async handleRenameSession(sessionId: string, currentTitle: string, title?: string): Promise<void> {
+    let next = title;
+    if (next === undefined) {
+      next = await vscode.window.showInputBox({
+        title: 'Rename Session',
+        prompt: 'New name for this session',
+        value: currentTitle,
+      });
+    }
+    if (next === undefined || next.trim() === '') { return; }
+    const clean = next.trim();
     await this.updateSessionLabel(sessionId, { title: clean });
     this.post({ type: 'sessionAction', action: 'rename', sessionId, title: clean });
     // 开着这条会话的 tab / 树也要换名字：toSummary 的 title 链已插了覆盖，推一把让
@@ -3797,11 +3865,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         key: 'action.clearAgentCache', group: 'advanced', type: 'action', actionLabel: 'Clear',
         label: 'Clear agent runtime cache',
         description: 'Deletes the local agent install; the next start re-creates it with npm.',
+        confirm: 'Delete the local agent runtime cache? The next start will re-create it with npm.',
       },
       {
         key: 'action.resetPanelPrefs', group: 'advanced', type: 'action', actionLabel: 'Reset',
         label: 'Reset panel preferences',
         description: 'Restore the panel UI defaults (outline, Times, auto-expand, composer size).',
+        confirm: 'Reset the panel UI preferences to their defaults?',
       },
       {
         key: 'action.openLog', group: 'advanced', type: 'action', actionLabel: 'Open',

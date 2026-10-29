@@ -65,8 +65,13 @@ export const lightboxClient = `
       if (event.target === overlay) { close(); }
     });
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') { close(); }
-    });
+      // [CUSTOM- 2026-10-29：capture + 标记已处理，保证它先于 composer 的
+      // document Escape（停止确认）—— Esc 只关图，不该同时弹停止条。
+      if (event.key !== 'Escape' || !overlay || overlay.hidden) { return; }
+      if (event.preventDefault) { event.preventDefault(); }
+      if (event.stopPropagation) { event.stopPropagation(); }
+      close();
+    }, true);
     document.body.addEventListener('click', function (event) {
       var hit = zoomTarget(event.target);
       if (hit && hit.src) {

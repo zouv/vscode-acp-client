@@ -111,10 +111,12 @@ export const contextMenuClient = `
     if (tab) {
       var tabItems = [{
         label: 'Close',
-        run: function () { if (NS.tabs && NS.tabs.closeTabNode) { NS.tabs.closeTabNode(tab); } }
+        run: function (event) {
+          if (NS.tabs && NS.tabs.closeTabNode) { NS.tabs.closeTabNode(tab, event); }
+        }
       }];
       // Rename / 复制类动作只对**真会话** tab 有意义（草稿/待恢复的还没有会话，× 已是它们的语义）。
-      // 初值取行上**看得见**的标签（与用户看到的一致，155 的同源原则）；宿主弹原生输入框。
+      // 初值取行上**看得见**的标签（与用户看到的一致，155 的同源原则）；改名走面板内输入浮层。
       if (tab.getAttribute('data-session-id')) {
         // [CUSTOM- 会话 tab 右键：在这个会话的目录里再开一个新会话（目录与额外根目录
         // 都由宿主从源会话取，客户端不猜）。会话作用域 ⇒ 走 postForSession（守卫按 sessionId 校验）。
@@ -133,7 +135,8 @@ export const contextMenuClient = `
         });
         tabItems.push({
           label: 'Rename',
-          run: function () {
+          run: function (event) {
+            if (NS.tabs && NS.tabs.startRename && NS.tabs.startRename(tab, event)) { return; }
             var tabLabelEl = tab.querySelector ? tab.querySelector('.tab-label') : null;
             NS.bridge.post({
               type: 'renameSession',
@@ -160,17 +163,30 @@ export const contextMenuClient = `
         { label: 'Archive', run: function () { NS.bridge.post({ type: 'archiveSession', sessionId: historyId }); } },
         {
           label: 'Delete',
-          // 与行上那颗悬停按钮同一个出口（真删除；宿主会先弹二次确认）。
-          run: function () {
-            NS.bridge.post({
-              type: 'deleteSession', sessionId: historyId,
-              agentName: historyRow.getAttribute('data-open-agent') || ''
-            });
+          // 与行上那颗悬停按钮同一个出口（真删除；确认在面板内，见 client/popover.ts）。
+          run: function (event) {
+            var remove = function () {
+              NS.bridge.post({
+                type: 'deleteSession', sessionId: historyId,
+                agentName: historyRow.getAttribute('data-open-agent') || ''
+              });
+            };
+            if (NS.popover && NS.popover.confirm && NS.popover.confirm({
+              message: 'Delete session "' + (historyTitle || historyId) + '"? This cannot be undone.',
+              confirmLabel: 'Delete',
+              danger: true,
+              anchor: historyRow,
+              event: event,
+              onConfirm: remove
+            })) { return; }
+            remove();
           }
         },
         {
           label: 'Rename',
-          run: function () {
+          run: function (event) {
+            if (NS.sessionMenu && NS.sessionMenu.startRename
+              && NS.sessionMenu.startRename(historyRow, event)) { return; }
             NS.bridge.post({ type: 'renameSession', sessionId: historyId, currentTitle: historyTitle });
           }
         }
@@ -232,7 +248,9 @@ export const contextMenuClient = `
             event.preventDefault();
             event.stopPropagation();
             close();
-            item.run();
+            // 带上事件：浮层用它认出"打开自己的这一下"，否则同一次 click 冒泡到 document
+            // 会被浮层的"点外面关闭"判据当成外部点击，刚开就关。
+            item.run(event);
           });
         }
         itemsEl.appendChild(btn);

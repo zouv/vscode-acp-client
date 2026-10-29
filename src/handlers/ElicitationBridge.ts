@@ -109,11 +109,15 @@ interface Pending {
   owner: 'panel' | 'dialog';
   shown: boolean;
   resolved: boolean;
+  /** [CUSTOM-20261029] Registered session the panel anchors this form to (see PermissionBridge). */
+  panelSessionId: string;
 }
 
 export class ElicitationBridge {
   private presenter: ElicitationPresenter | null = null;
   private lookup: ((sessionId: string) => SessionLabel | undefined) | null = null;
+  /** [CUSTOM-20261029] Sub-agent id → the registered session the panel can draw on. */
+  private resolveSession: (sessionId: string) => string = id => id;
   private readonly pending: Map<string, Pending> = new Map();
   private readonly queue: Pending[] = [];
   private draining = false;
@@ -145,14 +149,23 @@ export class ElicitationBridge {
     this.lookup = lookup;
   }
 
+  /** [CUSTOM-20261029] Same contract as `PermissionBridge.setSessionResolver`. */
+  setSessionResolver(resolve: (sessionId: string) => string): void {
+    this.resolveSession = resolve;
+  }
+
   /** ACP entry point. Never rejects: every path resolves to a valid response. */
   request(params: CreateElicitationRequest, fallback: ElicitationFallback): Promise<CreateElicitationResponse> {
     const prompt = this.buildPrompt(params);
+    const panelSessionId = this.resolveSession(prompt.sessionId);
     return new Promise<CreateElicitationResponse>(resolve => {
-      const item: Pending = { prompt, params, fallback, resolve, owner: 'dialog', shown: false, resolved: false };
+      const item: Pending = {
+        prompt, params, fallback, resolve,
+        owner: 'dialog', shown: false, resolved: false, panelSessionId,
+      };
       this.pending.set(prompt.promptId, item);
 
-      if (this.presenter?.canPresent(prompt.sessionId)) {
+      if (this.presenter?.canPresent(panelSessionId)) {
         item.owner = 'panel';
         item.shown = true;
         this.presenter.show(this.stateOf(item, 'pending'));
@@ -191,7 +204,9 @@ export class ElicitationBridge {
   cancelSession(sessionId: string): void {
     let cancelled = 0;
     for (const item of this.pending.values()) {
-      if (item.prompt.sessionId !== sessionId || item.resolved) { continue; }
+      // [CUSTOM-20261029] Match both ids (see PermissionBridge.cancelSession).
+      if (item.resolved) { continue; }
+      if (item.prompt.sessionId !== sessionId && item.panelSessionId !== sessionId) { continue; }
       this.settle(item, 'cancel');
       cancelled++;
     }
@@ -208,6 +223,7 @@ export class ElicitationBridge {
     this.cancelAll();
     this.presenter = null;
     this.lookup = null;
+    this.resolveSession = id => id;
     this.queue.length = 0;
   }
 
@@ -218,7 +234,8 @@ export class ElicitationBridge {
    */
   hasPendingFor(sessionId: string): boolean {
     for (const item of this.pending.values()) {
-      if (!item.resolved && item.prompt.sessionId === sessionId) { return true; }
+      if (item.resolved) { continue; }
+      if (item.prompt.sessionId === sessionId || item.panelSessionId === sessionId) { return true; }
     }
     return false;
   }
@@ -247,7 +264,8 @@ export class ElicitationBridge {
     summary?: string,
     answers?: ElicitationContent,
   ): ElicitationState {
-    return { ...item.prompt, status, summary, answers };
+    // [CUSTOM-20261029] Anchor to the registered (parent) session; see PermissionBridge.stateOf.
+    return { ...item.prompt, sessionId: item.panelSessionId, status, summary, answers };
   }
 
   private labelFor(sessionId: string): string {
@@ -272,7 +290,7 @@ export class ElicitationBridge {
         if (item.resolved) { continue; }
         let response: CreateElicitationResponse;
         try {
-          response = await item.fallback(item.params, this.labelFor(item.prompt.sessionId));
+          response = await item.fallback(item.params, this.labelFor(item.panelSessionId));
         } catch (e) {
           log(`${LOG_PREFIX}: dialog failed for ${item.prompt.promptId}: ${String(e)}`);
           response = { action: 'cancel' };

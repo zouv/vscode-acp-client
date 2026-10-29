@@ -60,6 +60,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.host.attachFile(uri);
   }
 
+  /**
+   * [CUSTOM-20261029] Route a stop request to the visible panel's `#stopConfirm`.
+   * Returns false when no surface shows the session (caller falls back).
+   */
+  requestStop(sessionId: string): boolean {
+    return this.host.requestStop(sessionId);
+  }
+
   openEditorChat(): void {
     // [CUSTOM- 编辑区是第二种 surface：从命令/标签栏打开时同样先预热（见 prewarm）。
     this.host.prewarm();

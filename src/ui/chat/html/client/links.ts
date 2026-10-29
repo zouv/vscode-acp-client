@@ -172,11 +172,16 @@ export const linksClient = `
       if (pathNode) {
         event.preventDefault();
         var line = pathNode.getAttribute('data-line');
-        NS.bridge.postForSession({
+        var endLine = pathNode.getAttribute('data-end-line');
+        var message = {
           type: 'openFile',
           path: pathNode.getAttribute('data-path'),
           line: line ? parseInt(line, 10) : undefined
-        });
+        };
+        // [CUSTOM- 2026-10-29：只在真的带区间时才加字段 —— 现有断言要求
+        // 无区间的消息形状保持不变（没有 endLine: undefined 这个键）。
+        if (endLine) { message.endLine = parseInt(endLine, 10); }
+        NS.bridge.postForSession(message);
         return;
       }
 

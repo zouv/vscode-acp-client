@@ -27,6 +27,8 @@ import { railClient } from './rail';
 import { tabsClient } from './tabs';
 import { composerClient } from './composer';
 import { contextMenuClient } from './contextMenu';
+// [CUSTOM- 通用浮层（确认 / 输入）：非模态，替代面板内触发的宿主 modal 与 InputBox。
+import { popoverClient } from './popover';
 import { lightboxClient } from './lightbox';
 import { stickyUserClient } from './stickyUser';
 // [CUSTOM- 记录区「Times」开关的状态机（按会话记 + 一个默认值）。与 stateCard 同类：
@@ -71,6 +73,8 @@ const MODULES: ReadonlyArray<string> = [
   composerClient,
   // [CUSTOM- Takes the context menu over from Chromium's native one.
   contextMenuClient,
+  // [CUSTOM- 通用浮层：必须在任何会调用 NS.popover 的模块之前注册（运行时引用，顺序只为清楚）。
+  popoverClient,
   // [CUSTOM- 图片点击放大（lightbox），独立模块、boot 里 install。
   lightboxClient,
   // [CUSTOM- 最近一条已滚出视口的用户消息，克隆到消息区顶部。

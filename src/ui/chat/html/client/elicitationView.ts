@@ -1102,7 +1102,12 @@ export const elicitationViewClient = `
     if (event.key !== 'Escape') { return; }
     // Escape COLLAPSES the drawer; it must never cancel. 'Cancel' aborts the agent's tool call,
     // and that is not something a stray keypress may do.
-    if (drawer && !drawer.hidden && !collapsed) { setCollapsed(true); }
+    // [CUSTOM- 2026-10-29：capture 阶段消费 Escape（与 popover/outline 同族），
+    // 保证收起表单抽屉时不会顺带弹出 composer 的停止确认。
+    if (!drawer || drawer.hidden || collapsed) { return; }
+    if (event.preventDefault) { event.preventDefault(); }
+    if (event.stopPropagation) { event.stopPropagation(); }
+    setCollapsed(true);
   }
 
   /**
@@ -1146,7 +1151,7 @@ export const elicitationViewClient = `
     drawer.addEventListener('change', onDrawerChange);
     drawer.addEventListener('input', onDrawerChange);
     document.addEventListener('click', onDocumentClick);
-    document.addEventListener('keydown', onDocumentKeyDown);
+    document.addEventListener('keydown', onDocumentKeyDown, true);
     watchHeight();
   }
 

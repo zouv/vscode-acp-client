@@ -28,7 +28,7 @@
 
 | 关注点 | 规则 |
 |---|---|
-| 谁能弹 | `canPresent` 与权限卡**共用同一套判据**（会话还在 + 至少一个可用的 surface，对该会话聚焦且面不可见则 `reveal` 不抢焦点，见 §5.8） |
+| 谁能弹 | `canPresent` 与权限卡**共用同一套判据**（会话还在 + 至少一个可用的 surface，对该会话聚焦且面不可见则 `reveal` 不抢焦点，见 §5.8）。**2026-10-29**：`sessionId` 先经 `ElicitationBridge.setSessionResolver` 解析——sub-agent 子会话 id 会被 `ChatPanelHost.subagentParents` 映射回父会话，否则未注册的子会话会被判成"无处可画"而落到原生 QuickPick |
 | 通道 | `AcpClientImpl.unstable_createElicitation` → `ElicitationHandler`（策略+弹框兜底）→ `ElicitationBridge`（**与 `PermissionBridge` 同构**：FIFO / `resolved` 幂等位 / `settleWith` 单点 resolve / `cancelSession`·`cancelAll`·`onPresenterLost`） |
 | 三态 | `accept`（带 content）/ `decline`（**跳过**：空答案，轮次继续）/ `cancel`（中止工具调用）。adapter 的 `applyAskElicitationResponse` 就是这么解释的；**轮次被取消时回 cancel 而不是 decline**——空答案会骗到 agent |
 | 作用域 | **只支持 `sessionId`**：ACP 还允许把表单挂在 `requestId` 上（与任何会话无关），那种没有会话可归属 ⇒ 直接 `cancel`，并记日志说明 |
@@ -145,6 +145,7 @@
 | 两个抽屉可以同时存在 | 同一会话先来表单又来权限是真实组合。**各有各的容器与高度变量**（`--vac-elic-h` / `--vac-perm-h`），`.perm-drawer` 的 `bottom` = `composer-h + elic-h` ⇒ 权限**贴在表单上面**，不相交、不需要 JS 协调。权限抽屉单独的 `max-height: min(50vh, 320px)`（权限提示天然短；两个 70vh 叠起来会淹没面板） |
 | 为什么另起容器而不是并进 `#elicDrawer` | 后者由 `elicitationView` 端到端拥有（forms / dismissed / tabs / collapsed / ResizeObserver）。塞两种 state 进去要引入"谁拥有 body"的协调器 + 跨类型 tab/收起语义，收益只是一个 CSS 变量 |
 | 显示 = 记录驱动 | `permissionDrawer.sync()` 从转录算 pending（按聚焦会话过滤），由 boot 的**唯一入口 `syncDrawers()`** 在六处（boot/focus/sessionClosed/append/revise/resetTranscript）对账。宿主不知道有抽屉这回事 |
+| 子会话归属（2026-10-29） | `PermissionBridge.setSessionResolver` 把 sub-agent 子会话 id 解析到父会话：`Pending` 保留原始 id（`cancelSubagent` 用）与 `panelSessionId`（记录锚点），`cancelSession` / `hasPendingFor` 双匹配。这样父会话的抽屉能作答，而 `cancelTurn(parent)` 也能把子会话的待决请求答成 cancelled |
 | 没有"收起" | 与表单刻意不同：权限请求是阻塞的，收起它没有意义；记录行的 `Review` 是唯一的主动打开入口。Escape 不接管 |
 | 回答路径唯一 | 发送与"发送中"守卫都在 `permissionView.answer(host, promptId, optionId)`（`links.ts` 只把按钮解析到宿主：`.perm` **或** `.perm-drawer`，与表单的写法一致）。按钮在两个宿主里都存在，两处各自发送就是两份知识；发送中禁用**全文档**同 promptId 的按钮 |
 | 高度让位 | 消息区 `padding-bottom` 与 `#jumpToLatest` 的 `bottom` 都把两个变量**相加**（`composer-h + elic-h + perm-h`）。观察器 + 显式 poke 两条腿（pitfall #27：ResizeObserver 回调按帧投递，不是每个宿主都送达） |
@@ -182,14 +183,27 @@
 
 | 动作 | 可逆吗 | 处理 |
 |---|---|---|
-| **停止本轮**（输入框有焦点、轮次在跑） | **不可逆**（工具调用被掐断、agent 正在做的事丢了） | **加二次确认**（本条） |
+| **停止本轮**（webview 有焦点、轮次在跑） | **不可逆**（工具调用被掐断、agent 正在做的事丢了） | **加二次确认**（本条） |
 | 关菜单 / 图片浮层 / 历史列表 | 可逆（都能重开、不丢内容） | 保持一键 |
 | 表单抽屉收起 | 可逆（**只收起**，打过的字全在；152 起就绝不 cancel） | 保持一键 |
 
 **做法**：`#stopConfirm`（`body.ts`）是输入卡上方的一条（同宽同中线，观感沿用抽屉那一套），默认隐藏。
-两条触发路径都走它：**Escape**（输入框内）与 **Stop 按钮**。条上两个按钮（`data-stop-confirm="stop" | "keep"`）：
-点了 `Stop` 才真的发 `cancelTurn`；`Keep going`（或**再按一次 Escape**）只是收起这一问。
-轮次自己结束（`setRunning(false)`）或换会话（`setFocus` 且 changed）时这一问自动收起。
+**三条触发路径都走它**：
+
+- **webview 内的 Escape**：composer 的 document 级 keydown（**bubble**，`event.defaultPrevented`
+  守卫，IME `isComposing` 跳过）。浮层/菜单在 capture 阶段先消费（popover / outline / contextMenu /
+  directoryMenu / sessionMenu / settingsPanel / elicitation / lightbox），没人消费的 Escape 才显示这一问。
+- **输入卡 Stop 按钮**：`showStopAsk()`。
+- **侧边栏标题栏 Stop / 命令面板**（2026-10-29）：`vac.cancelTurn` 先 `chat.requestStop(id)` →
+  宿主向可见 surface 发 `stopAsk` → `showStopAsk(true)`（force：客户端 `state.running` 可能晚一拍）；
+  无可见 surface 时才用非模态 warning 兜底。
+
+条上两个按钮（`data-stop-confirm="stop" | "keep"`）：点了 `Stop` 才真的发 `cancelTurn`；
+`Keep going`（或**再按一次 Escape**）只是收起这一问。轮次自己结束（`setRunning(false)`）或换会话
+（`setFocus` 且 changed）时这一问自动收起。
+
+⚠️ **Escape 不再有 workbench keybinding**（2026-10-29 删除）：旧键位直接执行 `vac.cancelTurn`，
+绕过了这条确认。不要把它加回去；否则「按 Esc 关浮层」也会变成停止。
 
 ⚠️ 两个实现要点（都踩过）：
 - **它必须放在 `.composer-inner` 里**：`.composer-main` 是 flex **行**（`justify-content:center`），

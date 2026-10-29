@@ -61,7 +61,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | Dashboard 用量统计 / 指标 | `src/dashboard/**`（数据层在 `usage/`） | 聊天面板 | §2.9 |
 | 打包 / 发布 | `scripts/build.mjs`、`.vscodeignore`、`package.json(scripts)` | 全部业务代码 | §6 |
 | 图标 / 品牌资源（侧边栏、插件徽标、编辑区标签页） | `scripts/make-icon.mjs`（唯一几何源）+ `resources/` + `package.json(icon, viewsContainers)` + `ui/chat/ChatEditorPanel.ts(iconPath)` | 全部业务代码 | §6 |
-| 记录区滚轮被卡片内的滚动条打断 / 流式卡片不跟到最后一行 | `html/client/scroll.ts` 的 `setActive`（焦点门控）+ document `wheel`（capture / 非 passive）+ `flushTails` / `isLiveCard`（自动追尾）；样式 `.messages .scroll-active`（`styles.ts`） | core、协议 | §2.5 → `arch/chat-panel-state.md` §5.53 |
+| 记录区滚轮被卡片内的滚动条打断 / 流式卡片不跟到最后一行 | `html/client/scroll.ts` 的 `setActive`（焦点门控，**只认左键**；再次左键原地点击取消、框选文本除外）+ `nearestVertScroller`（**只认 `INNER_SCROLL_SELECTOR`**）+ `isVertScrollable`（扣掉横向滚动条高度）+ document `wheel`（capture / 非 passive）+ `flushTails` / `isLiveCard`（自动追尾）；样式 `.messages .scroll-active`（`styles.ts`） | core、协议 | §2.5 → `arch/chat-panel-state.md` §5.53 |
 | **记录区布局 / 观感**（折叠形状、占几行、有没有重复内容） | `scripts/preview-records.mjs`（真 Chromium 无头截图，**自己看，别推理**）＋ `html/styles.ts` | core、tree、协议代码 | §5 |
 
 > 定位优先级：**函数名 grep > 本表**。表过期时以代码为准并顺手订正本表。
@@ -185,17 +185,19 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 从记录 fork 会话 | `ChatPanelHost` 的 `forkFromMessage` 分支 + `html/client/contextMenu.ts` | 面板只报 entryId，宿主查该条 ACP `messageId` → `SessionManager.forkSession` |
 | sub-agent 子会话卡 | `html/client/transcriptView.ts` 的 `buildSubagent` / `patchSubagent`（记录类型 `subagent`） | 状态/标题走 `revise` 就地补丁；Cancel 发 `cancelSubagent` |
 | 编辑区标签栏右侧入口 | `package.json(menus.editor/title)` → `vac.openChatFromEditorTab`（动作同 `vac.openChatInEditor`） | 图标用 `resources/icon-editor-color.svg`（全彩徽标）—— 路径图标按**图片**渲染，颜色按 SVG 自己的来；Chat 面板已在编辑区激活时隐藏 |
-| 历史列表行的悬停动作 | `html/client/sessionMenu.ts` 的 `buildRowActions` + `applyAction` | Archive 只写本地标签；**Delete 走 `deleteSession`（真删除，宿主先弹确认）**，两条同走 `sessionAction` 回执对账 |
-| 会话 tab 右键菜单 | `html/client/contextMenu.ts` 的 `itemsFor`（`.tab` 分支） | **New Session in This Folder**（沿用该会话 cwd + 额外根目录，`newSessionInDirectory`）/ **Duplicate Session**（`session/fork` 不带 messageId，保留上下文与消息记录）/ Close / Rename / **Copy Session ID**；草稿与待恢复 tab 没有 `data-session-id`，只有 Close |
+| 历史列表行的悬停动作 | `html/client/sessionMenu.ts` 的 `buildRowActions` / `startRename` + `applyAction` | Archive 只写本地标签；**Delete 先弹面板内确认**（`NS.popover.confirm`）、**Rename 先弹输入浮层**（`NS.popover.prompt`），确认/提交后才发 `deleteSession` / `renameSession`；两条同走 `sessionAction` 回执对账 |
+| 会话 tab 右键菜单 | `html/client/contextMenu.ts` 的 `itemsFor`（`.tab` 分支） | **New Session in This Folder**（沿用该会话 cwd + 额外根目录，`newSessionInDirectory`）/ **Duplicate Session**（`session/fork` 不带 messageId，保留上下文与消息记录）/ Close / Rename / **Copy Session ID**；草稿与待恢复 tab 没有 `data-session-id`，只有 Close。Close / Rename 都转到 `tabs.ts` 的 `closeModel` / `startRename`（运行中会话先弹面板内确认） |
+| **面板内通用浮层**（确认 / 输入） | `html/client/popover.ts` 的 `NS.popover.confirm` / `prompt` + `body.ts` 的 `#popover` + `styles.ts` 的 `.popover` | **非模态**（不铺遮罩、不挡其它会话），z-index 95 高于设置面板与图片浮层；危险操作默认焦点在 Cancel；点外面 / Esc 取消。删除会话、关闭运行中会话、会话重命名、设置破坏性动作共用 |
 | 会话 tab 中键关闭 | `html/client/tabs.ts` `renderTabs`（`mousedown` button==1 + `auxclick`） | 与 × / Delete / 右键 Close 汇入 `closeModel`；运行中会话的确认在宿主 `closeSessionWithConfirm`（原生模态） |
-| 设置面板 | `html/client/settingsPanel.ts`（渲染）+ `ChatPanelHost.settingsItems` / `handleSetSetting` / `handleSettingAction` | 左侧分组导航、右侧行；宿主是唯一写者（`vac.*` 按 `resolveSetting` 写当前生效层，`panel.*` 写 UiPrefs）。每行带 `scope`/`source`：客户端画 `All IDEs / This IDE / Workspace / Default` 胶囊，点开 Inspect 可看各层值、打开文件、移除覆盖、提升为跨 IDE 全局。**每个 agent 的默认模型 / 默认推理强度**（`panel.defaultModel.<agent>` / `panel.defaultEffort.<agent>`）在 `session-created('new')` 由 `applyRememberedModel` → `applyRememberedEffort` 依次落地（草稿页的显式选择排在其后）。自定义模型是结构化列表编辑器，Agent 配置是 JSON 编辑器，二者都在**子面板**里打开（主面板只显示摘要 + Edit…）；操作项含打开/清除运行时缓存与重置面板偏好 |
-| 输入卡选择器（模式 / 模型 / Effort） | `html/client/composer.ts` 的 `buildPicker` / `renderMenu` / `menuItem` | 按钮图标来自 `icons.ts`（`mode` / `model` / `effort`；Effort = 三根递增信号条，14px），菜单项是**名称 + 说明两行**、选中项打勾；说明优先取 agent/自定义模型的 `description`。Effort 按 `category === 'thought_level'` 识别 |
+| 设置面板 | `html/client/settingsPanel.ts`（渲染）+ `ChatPanelHost.settingsItems` / `handleSetSetting` / `handleSettingAction` | 左侧分组导航、右侧行；宿主是唯一写者（`vac.*` 按 `resolveSetting` 写当前生效层，`panel.*` 写 UiPrefs）。每行带 `scope`/`source`：客户端画 `All IDEs / This IDE / Workspace / Default` 胶囊，点开 Inspect 可看各层值、打开文件、移除覆盖、提升为跨 IDE 全局。**每个 agent 的默认模型 / 默认推理强度**（`panel.defaultModel.<agent>` / `panel.defaultEffort.<agent>`）在 `session-created('new')` 由 `applyRememberedModel` → `applyRememberedEffort` 依次落地（草稿页的显式选择排在其后）。自定义模型是结构化列表编辑器，Agent 配置是 JSON 编辑器，二者都在**子面板**里打开（主面板只显示摘要 + Edit…）；操作项含打开/清除运行时缓存与重置面板偏好；**清缓存 / 重置偏好带 `confirm` 文案，客户端先弹 `NS.popover.confirm` 再发 `settingAction`** |
+| 输入卡选择器（模式 / 模型 / Effort） | `html/client/composer.ts` 的 `buildPicker` / `renderPickers` / `renderMenu` / `menuItem` | 按钮图标来自 `icons.ts`（`mode` / `model` / `effort`；Effort = 三根递增信号条，14px），菜单项是**名称 + 说明两行**、选中项打勾；说明优先取 agent/自定义模型的 `description`。Effort 按 `category === 'thought_level'` 识别。**2026-10-29**：`buildPicker` 把 `category` 写到 `data-category`；`renderPickers` 把 mode 最后 append，CSS 用 `.picker[data-category="mode"] { margin-left:auto }` 让它靠右、紧挨上下文进度，菜单 `right:0` 向左展开 |
+| 引用标签点击跳转 | `html/client/composer.ts` 的 `activeFileChip` / `renderAttachments` + `links.ts` 的 `[data-path]` 委托 + `ChatPanelHost.handleOpenFile` | `.ref-tag` 与非图片 `.attachment` 带 `data-path` / `data-line` / `data-end-line`；`openFile` 透传 `endLine`，宿主打开文件并框选整段行区间（`doc.lineAt(end).range.end`）。`.attachment` 的 `×` 必须 `stopPropagation`，否则删除会顺带打开 |
 | 输入卡 Send 灰置 / 命令面板收起 | `composer.ts` 的 `refreshSendState` / `hasSendableContent` / `openSlash` / `hideSlash` + document click 监听 | 空或纯空白（含换行）且无附件时 Send 灰置；Stop 态始终可点。点弹层与输入框之外的空白处收起 `/` 命令面板（Esc 仍可用） |
 | Agent 选择器 | `html/client/tabs.ts` 的 `renderAgentBar` / `renderAgentMenu` | 从原生 `<select>` 改为与输入卡同一套 `.picker` 控件（图标 + 名称 + 说明 + 勾选）；说明来自 `SessionSummary.agentKind`（`ChatPanelHost.toSummary` 填），只在**多个 agent 都有会话**时显示 |
 | 会话 tab / 目录图标悬停提示 | `html/client/tabs.ts` 的 `showTip` / `hideTip` | 自绘 `.tab-tip` 浮层（原生 `title` 不能分段着色）：tab = 标题 + 灰色 SessionId；目录图标 = 路径（无 `Dir:` 前缀）+ 灰色 State |
 | Markdown 渲染预设 | `UiPrefs.markdownStyle` + `boot.ts` 的 `applyMarkdownStyle` + `styles.ts` 的 `body[data-md-style]` 规则 | `editor`（默认，跟随主题）/ `github` / `obsidian` / `typora` / `atom` / `minimal` / `things`；每套预设都带排版 + 明暗两套配色（变量 `--vac-md-*`，高对比度主题回落 token），不改渲染链路 |
 | 新输出自动展开 | `html/client/autoExpand.ts`（状态 + 地址栏按钮）+ `transcriptView.setAutoExpand` / `expandEntry` | 按会话（`autoExpandBySession` + 默认值）与全局卡片类型（`autoExpandKinds`：tool / thought / diff）；只作用于 live append/patch/updateTool，hydrate 不碰 |
-| 消息面板自动追尾（Tail 按钮） | `html/client/tail.ts`（状态 + 地址栏按钮）+ `scroll.setTail` / `follow` / `cancelTail` | 与 Times 同一形态：`tailBySession` + `tailDefault`（默认 true）；用户滚动或恢复中间位置即取消（只改会话那条）；§5.54 |
+| 消息面板自动追尾（Tail 按钮） | `html/client/tail.ts`（状态 + 地址栏按钮）+ `scroll.setTail` / `follow` / `cancelTail` / `scheduleRecompute` | 与 Times 同一形态：`tailBySession` + `tailDefault`（默认 true）；**只有真实用户滚动**（wheel / 拖滚动条 / 中键自动滚动 / 键盘翻页）才取消，浏览器自身 scroll（anchoring / 夹紧 / 布局变化）不取消；Tail 关闭时 `follow()` 每帧重算 pinned/Jump；§5.54 |
 | 目录抽屉「Recently used」删一条 / 同路径重复 | `html/client/directoryMenu.ts` 的 `makeRow(..., removable)` / `removeRecent` + 宿主 `handleRemoveRecentDirectory` + `SessionHistoryStore.dismissRecentDirectory` + `historyDirs.recentDirectoryList` | 列表是派生的 ⇒ 记 `vac.recentCwdDismissed.v1` 并在合并时过滤；**去重按 `directoryKey`**（`F:/x` 与 `f:/x` 是同一条）；同目录再建会话即恢复 |
 | 首屏连接预热 / 连接耗时 | `ChatPanelHost.prewarm`（由 `ChatViewProvider.resolveWebviewView` / `openEditorChat` 调用） | 只预热 `ensureConnected`、不建会话；日志里有 `prewarm connected in Nms` 与 `initialized in Nms` / `session ready in Nms` |
 | webview 样式 | `html/styles.ts` | 按 §5 的锚点搜 |
@@ -208,7 +210,9 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 写文件 | `FileSystemHandler.writeTextFile` | 写完以 preview 打开 |
 | 终端创建/输出/结束 | `TerminalHandler.createTerminal` / `readOutput` / `waitForTerminalExit` | `readOutput` 不抛异常，供面板调用 |
 | 权限自动批准 | `PermissionHandler.requestPermission` | 读 `vac.autoApprovePermissions` |
-| 权限面板/弹框分流 | `PermissionBridge.request` / `canPresent` | presenter 只对「屏幕上的会话」返回 true |
+| 权限面板/弹框分流 | `PermissionBridge.request` / `canPresent` / `setSessionResolver`；`ElicitationBridge` 同构 | presenter 只对「屏幕上的会话」返回 true；**子会话 id 经 `ChatPanelHost.subagentParents` 解析到父会话**后才判归属，否则请求会落到窗口顶部 QuickPick |
+| 权限/表单归属（子会话） | `PermissionBridge.setSessionResolver` / `ElicitationBridge.setSessionResolver` + `ChatPanelHost` 构造器注册 | `Pending` 同时保留原始 id（撤销/取消用）与 `panelSessionId`（记录锚点）；`cancelSession` / `hasPendingFor` 双匹配 |
+| 面板内确认/输入浮层 | `html/client/popover.ts` 的 `NS.popover.confirm` / `prompt` | 非模态；删除/关闭运行中/重命名/设置破坏性动作共用；`settingAction` 的 `confirm` 文案由宿主 `SettingItem` 提供 |
 | 表单字段扁平化 | `ElicitationBridge.fieldsOf` / `optionOf` | JSON Schema → 五种字段；选项的 description 与 preview 都保留 |
 | sub-agent 子会话 / 取消子会话 | `ChatPanelHost.onSessionUpdate` 的 `subagent_update` 分支 + `subagentParents`（别名回父会话）、`SessionManager.cancelSubagent` | draft 能力；卡片由 `TranscriptStore.upsertSubagent` 建 |
 
@@ -265,17 +269,23 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 - **关键坑**：面板不可见（被编辑器挡住 / 视图未打开）时若仍判给面板，请求会永久挂着。
 - **正确实现**：`PermissionBridge.request` 用 `presenter.canPresent(sessionId)` 决定归属；
   `canPresent` 必须同时满足「有可见 surface」+「该 surface 正在显示这个会话」；
-  会话取消/关闭时 `cancelSession` 把待决项答成 cancelled。
+  **子会话 id 先经 `setSessionResolver` 解析到父会话**（`ChatPanelHost.subagentParents`），
+  否则未注册的子会话会被判成"无处可画"而弹到窗口顶部 QuickPick；
+  会话取消/关闭时 `cancelSession` 把待决项答成 cancelled（原始 id 与父 id 双匹配）。
 - **调用链**：`ConnectionManager` → `AcpClientImpl.requestPermission` → `PermissionHandler` → `PermissionBridge` → `ChatPanelHost` 或 QuickPick。
 
 ### 3.3 轮次状态与 `vac.turnInProgress`
 
-- **需求语义**：Esc 取消、标题栏 Stop 按钮只在**有轮次在跑**时可用。
+- **需求语义**：Esc 与标题栏 Stop 只在**有轮次在跑**时可用，且都必须先出 `#stopConfirm`（停止不可逆）。
 - **关键坑**：这个上下文键历史上从未被 `setContext`，导致键位是死绑定。
 - **正确实现**：`sendPrompt` 进出分别 emit `turn-state-changed`；
-  `extension.ts:updateTurnContext` 据此 `setContext('vac.turnInProgress', …)`；
-  Escape 键位的 `when` 收敛在聊天界面内（`focusedView == 'vac-chat'` 或编辑区面板）。
-- **调用链**：`sendPrompt` → `turn-state-changed` → `updateTurnContext` → `setContext`。
+  `extension.ts:updateTurnContext` 据此 `setContext('vac.turnInProgress', …)`（现在主要驱动标题栏菜单）。
+  **2026-10-29 起 Escape 不再走 workbench keybinding**：webview 的 document 级 Escape（bubble、
+  `defaultPrevented` 守卫、IME `isComposing` 跳过）先让浮层/菜单消费，剩下的才显示 `#stopConfirm`。
+  标题栏 Stop 与命令面板的 `vac.cancelTurn` 先 `chat.requestStop(id)` → 宿主发 `stopAsk`；
+  无可见 surface 时才用非模态通知兜底。只有确认条上的 `data-stop-confirm="stop"` 才发 `cancelTurn`。
+- **调用链**：`sendPrompt` → `turn-state-changed` → `updateTurnContext` → `setContext`；
+  取消：Esc/Stop → `#stopConfirm` → `cancelTurn` 消息 → `SessionManager.cancelTurn`。
 
 ---
 
@@ -369,7 +379,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 - **取消会话前必须先回答挂起请求**，否则 agent 永久挂起（ACP 契约）。
 - **会话早到的通知要缓冲**：`session/new` 响应解析与通知派发之间存在微任务竞态（`PendingSessionState`）。
 - **换行符一律 LF**：`.gitattributes` 已钉住；写入 CRLF 会让整文件产生伪差异。
-- **`vac.turnInProgress` 必须与 `isTurnInFlight` 同步**，否则 Escape 要么失效要么常亮。
+- **`vac.turnInProgress` 必须与 `isTurnInFlight` 同步**，否则标题栏 Stop 要么失效要么常亮。
 - **webview 的字号/布局改动要先确认预览基准，再谈结论**：`preview-records.mjs` 的预览主题
   缺 `--vscode-font-size` 这类**非配色** token 时，页内 `em` 的解析基准会静默跑偏
   （实测放大 ~1.79×），真机的问题在截图里复现不出来、"看着挺好"是假绿。

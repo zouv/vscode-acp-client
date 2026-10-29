@@ -243,6 +243,8 @@ export const bootClient = `
     // [CUSTOM- 图片放大浮层里是**上一个会话**的图：切走就收起来
     // （154 的规矩：浮层属于它打开时那个会话）。
     if (NS.lightbox && NS.lightbox.close) { NS.lightbox.close(); }
+    // [CUSTOM- 确认浮层属于它打开时的会话/行：切走就收起（同 lightbox 的规矩）。
+    if (NS.popover && NS.popover.close) { NS.popover.close(); }
     // [CUSTOM- The directory drawer belonged to the previous
     // session/draft too.
     NS.directoryMenu.reset();
@@ -629,6 +631,14 @@ export const bootClient = `
         applyFocus(message.summary, message.snapshot, message.meta);
         // [CUSTOM- 另一个会话的表单不该跟着你走，也不该被丢掉：重新对账。
         syncDrawers();
+        break;
+
+      // [CUSTOM- 2026-10-29：宿主请求"停止确认"（侧边栏标题栏 Stop / 命令面板）。
+      // 只认当前会话；真正的取消仍由 #stopConfirm 的 Stop 按钮发 cancelTurn。
+      case 'stopAsk':
+        if (message.sessionId === currentSessionId && NS.composer && NS.composer.showStopAsk) {
+          NS.composer.showStopAsk(true);
+        }
         break;
 
       case 'sessionClosed':
@@ -1053,6 +1063,8 @@ export const bootClient = `
     NS.links.installDelegatedHandlers(document.body);
     // [CUSTOM- Menu with context-appropriate items (no Cut/Paste).
     NS.contextMenu.install();
+    // [CUSTOM- 通用浮层（确认 / 输入）：非模态，面板内会话操作与设置确认共用。
+    if (NS.popover) { NS.popover.install(); }
     // [CUSTOM- 图片点击放大（lightbox）。
     if (NS.lightbox) { NS.lightbox.install(); }
     // [CUSTOM- 最近一条用户消息悬浮置顶。
@@ -1105,6 +1117,10 @@ export const bootClient = `
     if (NS.autoExpand) { NS.autoExpand.init(); }
     // [CUSTOM- 设置面板：Tab 栏右侧齿轮 + 遮罩/导航/行渲染。
     if (NS.settingsPanel) { NS.settingsPanel.init(); }
+    // [CUSTOM- 2026-10-29：document 级 Escape 放在 init 末尾。浮层（popover/outline/
+    // contextMenu/sessionMenu/settingsPanel/elicitation/lightbox）都在 capture 阶段或
+    // 用 preventDefault 先消费；composer 只处理"没人消费的 Escape"。
+    if (NS.composer) { NS.composer.installGlobalEscape(); }
 
     window.addEventListener('message', onMessage);
     NS.bridge.post({ type: 'ready' });

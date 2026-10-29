@@ -94,11 +94,23 @@ interface Pending {
   /** Whether `presenter.show` was actually called for this prompt. */
   shown: boolean;
   resolved: boolean;
+  /**
+   * [CUSTOM-20261029 The session the PANEL should anchor this prompt to.
+   *
+   * Usually the same as `prompt.sessionId`, but a sub-agent's traffic is routed
+   * under the child's own id — a session that was never registered — so the
+   * panel would see `canPresent=false` and the prompt would fall through to the
+   * window-level QuickPick. `ChatPanelHost` supplies a resolver that maps the
+   * child to its parent; lifecycle operations (cancel/close) still match BOTH ids.
+   */
+  panelSessionId: string;
 }
 
 export class PermissionBridge {
   private presenter: PermissionPresenter | null = null;
   private lookup: ((sessionId: string) => SessionLabel | undefined) | null = null;
+  /** [CUSTOM-20261029] Sub-agent id → the registered session the panel can draw on. */
+  private resolveSession: (sessionId: string) => string = id => id;
   private readonly pending: Map<string, Pending> = new Map();
   private readonly queue: Pending[] = [];
   private draining = false;
@@ -135,14 +147,28 @@ export class PermissionBridge {
     this.lookup = lookup;
   }
 
+  /**
+   * [CUSTOM-20261029] Resolve a wire session id to the session the panel should
+   * anchor a prompt to. `ChatPanelHost` maps sub-agent child ids back to their
+   * parent (see `subagentParents`); the default identity keeps the bridges usable
+   * in tests and for ordinary sessions.
+   */
+  setSessionResolver(resolve: (sessionId: string) => string): void {
+    this.resolveSession = resolve;
+  }
+
   /** ACP entry point. Never rejects: every path resolves to a valid outcome. */
   request(params: RequestPermissionRequest, fallback: PermissionFallback): Promise<RequestPermissionResponse> {
     const prompt = this.buildPrompt(params);
+    const panelSessionId = this.resolveSession(prompt.sessionId);
     return new Promise<RequestPermissionResponse>(resolve => {
-      const item: Pending = { prompt, params, fallback, resolve, owner: 'dialog', shown: false, resolved: false };
+      const item: Pending = {
+        prompt, params, fallback, resolve,
+        owner: 'dialog', shown: false, resolved: false, panelSessionId,
+      };
       this.pending.set(prompt.promptId, item);
 
-      if (this.presenter?.canPresent(prompt.sessionId)) {
+      if (this.presenter?.canPresent(panelSessionId)) {
         item.owner = 'panel';
         item.shown = true;
         // Multiple panel prompts may coexist: they are anchored in their own
@@ -185,7 +211,10 @@ export class PermissionBridge {
   cancelSession(sessionId: string): void {
     let cancelled = 0;
     for (const item of this.pending.values()) {
-      if (item.prompt.sessionId !== sessionId || item.resolved) { continue; }
+      // [CUSTOM-20261029] Match BOTH ids: cancelTurn(parent) must retire a
+      // child's prompt, and cancelSubagent(child) must still find it by its own id.
+      if (item.resolved) { continue; }
+      if (item.prompt.sessionId !== sessionId && item.panelSessionId !== sessionId) { continue; }
       this.settle(item, undefined);
       cancelled++;
     }
@@ -202,6 +231,7 @@ export class PermissionBridge {
     this.cancelAll();
     this.presenter = null;
     this.lookup = null;
+    this.resolveSession = id => id;
     this.queue.length = 0;
   }
 
@@ -216,7 +246,8 @@ export class PermissionBridge {
    */
   hasPendingFor(sessionId: string): boolean {
     for (const item of this.pending.values()) {
-      if (!item.resolved && item.prompt.sessionId === sessionId) { return true; }
+      if (item.resolved) { continue; }
+      if (item.prompt.sessionId === sessionId || item.panelSessionId === sessionId) { return true; }
     }
     return false;
   }
@@ -243,7 +274,11 @@ export class PermissionBridge {
   }
 
   private stateOf(item: Pending, status: PermissionStatus, selectedOptionId?: string): PermissionState {
-    return { ...item.prompt, status, selectedOptionId };
+    // [CUSTOM-20261029] The panel owns the prompt under `panelSessionId` (the
+    // sub-agent's parent), while `item.prompt.sessionId` keeps the wire id for
+    // lifecycle matching. The client filters records by this field, so it must
+    // be the registered session.
+    return { ...item.prompt, sessionId: item.panelSessionId, status, selectedOptionId };
   }
 
   private labelFor(sessionId: string): string {
@@ -272,7 +307,7 @@ export class PermissionBridge {
         if (item.resolved) { continue; }
         let response: RequestPermissionResponse;
         try {
-          response = await item.fallback(item.params, this.labelFor(item.prompt.sessionId));
+          response = await item.fallback(item.params, this.labelFor(item.panelSessionId));
         } catch (e) {
           log(`${LOG_PREFIX}: dialog failed for ${item.prompt.promptId}: ${String(e)}`);
           response = { outcome: { outcome: 'cancelled' } };

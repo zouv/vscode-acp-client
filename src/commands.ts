@@ -85,9 +85,11 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
         title: 'Log Out of Agent',
       });
       if (!agentName) { return; }
+      // [CUSTOM-20261029] 非模态警告通知（去掉 { modal: true }）：命令/树触发的确认
+      // 也不该挡住整个窗口、打断其它会话。点按钮才继续，行为与原来一致。
       const confirm = await vscode.window.showWarningMessage(
         `Log out of ${agentName}? Its stored credentials are cleared; the next request asks you to sign in again.`,
-        { modal: true }, 'Log Out');
+        'Log Out');
       if (confirm !== 'Log Out') { return; }
       try {
         await withProgress(`Logging out of ${agentName}...`, () => sessions.logout(agentName));
@@ -108,7 +110,14 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
 
     'vac.cancelTurn': async () => {
       const id = sessions.getActiveSessionId();
-      if (!id) { return; }
+      if (!id || !sessions.isTurnInFlight(id)) { return; }
+      // [CUSTOM-20261029] 有可见面板时，先让面板出 #stopConfirm（与输入卡 Stop 同一条路）；
+      // 没有面板才用非模态通知兜底。真正的取消仍由用户确认后发出 —— 标题栏 Stop 与
+      // 命令面板不再绕过二次确认。
+      if (chat.requestStop(id)) { return; }
+      const choice = await vscode.window.showWarningMessage(
+        'Stop this turn? The agent will abort what it is doing.', 'Stop', 'Keep going');
+      if (choice !== 'Stop' || !sessions.isTurnInFlight(id)) { return; }
       try {
         await sessions.cancelTurn(id);
       } catch (e) {
@@ -200,7 +209,7 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
       if (!arg?.agentName || !arg.sessionId) { return; }
       const confirm = await vscode.window.showWarningMessage(
         `Delete session "${arg.sessionId}"? This cannot be undone.`,
-        { modal: true }, 'Delete');
+        'Delete');
       if (confirm !== 'Delete') { return; }
       try {
         await sessions.deleteSession(arg.agentName, arg.sessionId);
@@ -236,7 +245,7 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
         title: 'Remove ACP Agent',
       });
       if (!name) { return; }
-      const confirm = await vscode.window.showWarningMessage(`Remove agent "${name}"?`, { modal: true }, 'Remove');
+      const confirm = await vscode.window.showWarningMessage(`Remove agent "${name}"?`, 'Remove');
       if (confirm !== 'Remove') { return; }
       if (sessions.isAgentConnected(name)) { await sessions.disconnectAgent(name); }
       delete agents[name];

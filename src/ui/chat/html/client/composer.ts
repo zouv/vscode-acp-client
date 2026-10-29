@@ -17,6 +17,8 @@ export const composerClient = `
   var sendBtn = null;
   // [CUSTOM- 停止确认条（#stopConfirm）。
   var stopConfirmEl = null;
+  // [CUSTOM- 2026-10-29：document 级 Escape 只装一次（boot 末尾调用 installGlobalEscape）。
+  var globalEscapeInstalled = false;
   // [CUSTOM- "这个 agent 吃不了轮次中的补充消息"那条说明（#steerHint）。
   var steerHintEl = null;
   var slashPopup = null;
@@ -400,8 +402,10 @@ export const composerClient = `
    * 不遮住你要停的那个会话，而且它的高度会经 composer 的观察器进 --vac-composer-h，
    * 消息区照常让位（176 的重算也在）。
    */
-  function showStopAsk() {
-    if (!state.running || !stopConfirmEl || !stopConfirmEl.hidden) { return; }
+  function showStopAsk(force) {
+    // force：宿主 stopAsk（标题栏 Stop / 命令面板）路径。客户端的 state.running
+    // 可能比宿主晚一拍；宿主已经确认在飞，就以宿主的判断为准。
+    if ((!state.running && !force) || !stopConfirmEl || !stopConfirmEl.hidden) { return; }
     stopConfirmEl.hidden = false;
   }
 
@@ -429,6 +433,9 @@ export const composerClient = `
   }
 
   function onKeyDown(event) {
+    // [CUSTOM- 2026-10-29：输入法合成期间（isComposing）的按键交给 IME，
+    // 尤其是中文输入法里 Esc 取消候选 / Enter 确认候选，不能被当成停止/发送。
+    if (event.isComposing) { return; }
     if (slashPopup && !slashPopup.hidden) {
       if (event.key === 'ArrowDown') { event.preventDefault(); moveSlash(1); return; }
       if (event.key === 'ArrowUp') { event.preventDefault(); moveSlash(-1); return; }
@@ -456,11 +463,45 @@ export const composerClient = `
       send();
       return;
     }
-    if (event.key === 'Escape' && state.running) {
+  }
+
+  /**
+   * [CUSTOM- 2026-10-29：Escape 的停止确认从"输入框 keydown"提升到 document。
+   *
+   * 之前只有 #promptInput 有焦点时才会出 #stopConfirm；而 VS Code 的 escape keybinding
+   * 会直接执行 vac.cancelTurn（绕过确认）。keybinding 已删除，这里统一处理：
+   * 先让浮层/菜单吃掉 Escape，剩下的才是"停止这一轮"。
+   *
+   * 必须是 **bubble** 阶段 + defaultPrevented 守卫：设置面板在同一个 document 节点上
+   * 先注册并 preventDefault；capture 阶段则会抢在所有浮层前面，反而关不掉它们。
+   * 调用点固定在 boot.init() 末尾（settingsPanel.init 之后）。
+   */
+  function installGlobalEscape() {
+    if (globalEscapeInstalled || !document.addEventListener) { return; }
+    globalEscapeInstalled = true;
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) { return; }
+      // 1) 斜杠命令弹层：与输入框里的 Escape 同一语义。
+      if (slashPopup && !slashPopup.hidden) {
+        event.preventDefault();
+        hideSlash();
+        return;
+      }
+      // 2) 任意 picker 菜单 / '+' 菜单：先关它们，绝不在关菜单时弹停止确认。
+      var openMenus = pickersEl && pickersEl.querySelectorAll
+        ? pickersEl.querySelectorAll('.picker-menu.open') : [];
+      var addOpen = !!(addMenu && addMenu.className.indexOf('open') !== -1);
+      if ((openMenus && openMenus.length > 0) || addOpen) {
+        event.preventDefault();
+        closeMenus();
+        closeAddMenu();
+        return;
+      }
+      // 3) 只有轮次在跑时才问"要不要停"；再按一次收起（不停止）。
+      if (!state.running) { return; }
       event.preventDefault();
-      // [CUSTOM- 再按一次 Escape = 收起这一问（不停止）；要点"停止"才真停。
       if (stopConfirmEl && !stopConfirmEl.hidden) { hideStopAsk(); } else { showStopAsk(); }
-    }
+    });
   }
 
   /** Grow the textarea with its content, between sane bounds. */
@@ -791,15 +832,22 @@ export const composerClient = `
   function renderPickers() {
     NS.dom.clear(pickersEl);
     var options = state.configOptions || [];
+    var mode = null;
     for (var i = 0; i < options.length; i++) {
       var option = options[i];
       if (option.type !== 'select' && option.type !== 'boolean') { continue; }
+      // [CUSTOM- 2026-10-29：mode 放到最后 append —— 视觉上靠右（紧挨上下文进度），
+      // DOM 顺序与视觉/Tab 顺序一致。模型/Effort 保持 agent 给的顺序留在左侧。
+      if (option.category === 'mode') { mode = option; continue; }
       pickersEl.appendChild(buildPicker(option));
     }
+    if (mode) { pickersEl.appendChild(buildPicker(mode)); }
   }
 
   function buildPicker(option) {
     var wrap = NS.dom.el('div', 'picker');
+    // 标记位给 styles.ts 用：mode picker 靠右对齐、菜单向左展开。
+    wrap.setAttribute('data-category', String(option.category || ''));
     var btn = NS.dom.el('button', 'picker-btn');
     btn.type = 'button';
     // [CUSTOM- 草稿页的选择器不是"现有会话的设置"，而是"这条消息将要创建的那个
@@ -1005,6 +1053,17 @@ export const composerClient = `
     for (var i = 0; i < state.attachments.length; i++) {
       (function (attachment) {
         var chip = NS.dom.el('span', 'attachment');
+        // [CUSTOM- 2026-10-29：文件引用 chip 可点击跳转 —— links.ts 的全局委托按
+        // data-path 打开；带行区间时一并带上，宿主会框选。图片不加（不用 openTextDocument
+        // 打开二进制）。'×' 会 stopPropagation，避免删除时顺带打开。
+        if (attachment.kind !== 'image' && attachment.path) {
+          chip.setAttribute('data-path', attachment.path);
+          if (attachment.lineStart) {
+            chip.setAttribute('data-line', String(attachment.lineStart));
+            chip.setAttribute('data-end-line', String(attachment.lineEnd || attachment.lineStart));
+          }
+          chip.title = 'Open ' + attachment.path;
+        }
         // [CUSTOM- 图片附件：缩略图优先（本地缓存，无则回退成相框图标）。
         if (attachment.kind === 'image') {
           var thumb = imageThumbs[attachment.path];
@@ -1025,7 +1084,10 @@ export const composerClient = `
         chip.appendChild(NS.dom.el('span', 'attachment-name', attachment.name));
         var remove = NS.dom.el('button', 'attachment-x', '\\u00d7');
         remove.title = 'Remove attachment';
-        remove.addEventListener('click', function () {
+        remove.addEventListener('click', function (event) {
+          // [CUSTOM- 2026-10-29：删除按钮不能冒泡到 chip 的 data-path 委托，
+          // 否则会一边删除一边打开文件。
+          if (event && event.stopPropagation) { event.stopPropagation(); }
           // [CUSTOM- 草稿上没有会话可 detach（那条消息是会话作用域的，发出去
           // 也只会被宿主丢掉）⇒ 就地删掉本地那一份。
           if (state.draft) {
@@ -1094,6 +1156,12 @@ export const composerClient = `
     var tag = NS.dom.el('button', 'ref-tag');
     tag.type = 'button';
     tag.setAttribute('data-path', file.path);
+    // [CUSTOM- 2026-10-29：行区间随标签一起带上 —— 点击时 links.ts 发给宿主，
+    // 宿主打开文件并框选对应行（此前只到第 1 行）。
+    if (file.lineStart) {
+      tag.setAttribute('data-line', String(file.lineStart));
+      tag.setAttribute('data-end-line', String(file.lineEnd || file.lineStart));
+    }
     tag.title = file.path + (file.lineStart
       ? ' (lines ' + file.lineStart + '-' + (file.lineEnd || file.lineStart) + ')' : '');
     var icon = NS.icons.icon('file', 'chip-icon');
@@ -1530,7 +1598,11 @@ export const composerClient = `
     // [CUSTOM- 重测底栏高度并重写 --vac-composer-h（观测器可能哑火，见
     // watchHeight 里的说明）。滚动侧的「尾巴被压住」自愈会调它 —— 判据在那边（用户看得见的
     // 结果），唯一的写者仍然是这里。
-    refreshHeight: function () { if (applyHeight) { applyHeight(); } }
+    refreshHeight: function () { if (applyHeight) { applyHeight(); } },
+    // [CUSTOM- 宿主 stopAsk（标题栏 Stop / 命令面板）落到同一根确认条。
+    showStopAsk: showStopAsk,
+    // [CUSTOM- document 级 Escape：必须在 boot.init 末尾（settingsPanel.init 之后）安装。
+    installGlobalEscape: installGlobalEscape
   };
 })(window.__vac = window.__vac || {});
 `;

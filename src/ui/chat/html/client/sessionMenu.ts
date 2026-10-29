@@ -410,6 +410,32 @@ export const sessionMenuClient = `
   }
 
   /**
+   * [CUSTOM- 2026-10-29：历史行改名走面板内输入浮层（与 tab 的 startRename 同形），
+   * 不再弹宿主 InputBox。'rowEl' 是带 'data-open-session' / 'data-open-title' 的行按钮。
+   * 提交后由宿主应用并回 'sessionAction {action:rename}'，列表就地更新。
+   */
+  function startRename(rowEl, event) {
+    if (!rowEl || !rowEl.getAttribute || !NS.popover || !NS.popover.prompt) { return false; }
+    var sessionId = rowEl.getAttribute('data-open-session');
+    if (!sessionId) { return false; }
+    var current = rowEl.getAttribute('data-open-title') || '';
+    return NS.popover.prompt({
+      title: 'Rename Session',
+      message: 'New name for this session',
+      value: current,
+      confirmLabel: 'Rename',
+      anchor: rowEl,
+      event: event,
+      onSubmit: function (value) {
+        var title = String(value === undefined || value === null ? '' : value).trim();
+        // 清空 / 没改都当"没改"（与宿主原来的 InputBox 语义一致）。
+        if (!title || title === current) { return; }
+        NS.bridge.post({ type: 'renameSession', sessionId: sessionId, title: title });
+      }
+    });
+  }
+
+  /**
    * [CUSTOM- 宿主做完归档/改名后的对账（boot 转发的 sessionAction 消息）。
    * 就地改 lastMessage.sessions 再走一遍 renderList —— 计数行/过滤都跟着重算，而且
    * **不重置用户手动选的目录过滤**（重发一次 listHistory 会重置它：setHistory 用 askedCwd
@@ -522,11 +548,15 @@ export const sessionMenuClient = `
         if (actionKind === 'rename') {
           var rowWrap = actionBtn.closest ? actionBtn.closest('.session-row') : null;
           var rowBtn = rowWrap && rowWrap.querySelector ? rowWrap.querySelector('[data-open-title]') : null;
-          NS.bridge.post({
-            type: 'renameSession',
-            sessionId: actionId,
-            currentTitle: rowBtn ? (rowBtn.getAttribute('data-open-title') || '') : ''
-          });
+          if (rowBtn && startRename(rowBtn, event)) {
+            // 浮层已打开，等它提交。
+          } else {
+            NS.bridge.post({
+              type: 'renameSession',
+              sessionId: actionId,
+              currentTitle: rowBtn ? (rowBtn.getAttribute('data-open-title') || '') : ''
+            });
+          }
         } else if (actionKind === 'archive') {
           NS.bridge.post({ type: 'archiveSession', sessionId: actionId });
         } else if (actionKind === 'delete') {
@@ -534,11 +564,26 @@ export const sessionMenuClient = `
           // 与 rename 取标题同一取法：动作按钮与行是**兄弟**，从最近的 .session-row 里找）。
           var delWrap = actionBtn.closest ? actionBtn.closest('.session-row') : null;
           var delRow = delWrap && delWrap.querySelector ? delWrap.querySelector('[data-open-session]') : null;
-          NS.bridge.post({
-            type: 'deleteSession',
-            sessionId: actionId,
-            agentName: delRow ? (delRow.getAttribute('data-open-agent') || '') : ''
-          });
+          var delTitle = delRow && delRow.getAttribute ? (delRow.getAttribute('data-open-title') || '') : '';
+          var delAgent = delRow ? (delRow.getAttribute('data-open-agent') || '') : '';
+          var remove = function () {
+            NS.bridge.post({
+              type: 'deleteSession',
+              sessionId: actionId,
+              agentName: delAgent
+            });
+          };
+          // [CUSTOM- 2026-10-29：确认从宿主 modal 搬到面板内（非模态浮层）——
+          // 触发点就在这一行上，没必要挡住整个 IDE、打断别的会话。
+          var opened = NS.popover && NS.popover.confirm ? NS.popover.confirm({
+            message: 'Delete session "' + (delTitle || actionId) + '"? This cannot be undone.',
+            confirmLabel: 'Delete',
+            danger: true,
+            anchor: actionBtn,
+            event: event,
+            onConfirm: remove
+          }) : false;
+          if (!opened) { remove(); }
         }
       }
       return;
@@ -676,7 +721,9 @@ export const sessionMenuClient = `
     setHistory: setHistory,
     applySupplement: applySupplement,
     // [CUSTOM- 宿主做完归档/改名后的对账（boot 转发 sessionAction）。
-    applyAction: applyAction
+    applyAction: applyAction,
+    // [CUSTOM- 行右键菜单 / 悬停 Rename 的面板内输入入口。
+    startRename: startRename
   };
 })(window.__vac = window.__vac || {});
 `;

@@ -3631,6 +3631,57 @@ suite('chat panel: background prompts notify instead of interrupting ()', () => 
     assert.deepStrictEqual(dialogCalls, ['dialog'], 'onPresenterLost keeps its meaning: no surface ⇒ dialog');
   });
 
+  // [CUSTOM-20261029] Sub-agent traffic is routed under the child's own session id,
+  // which is not a registered session. Without the child→parent resolver the panel
+  // said canPresent=false and the prompt fell through to the window-level QuickPick
+  // (the user's screenshot: a raw session id in the placeholder).
+  test('a sub-agent permission prompt is drawn in its parent session, not the QuickPick', async () => {
+    const permission = new PermissionBridge();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), { permission });
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 's-1',
+      update: {
+        sessionUpdate: 'subagent_update', sessionId: 'child-1', title: 'Child',
+        state: { state: 'running' }, capabilities: { cancel: true },
+      },
+    } as never);
+
+    const dialogCalls = requestPermission(permission, 'child-1', 'cd /repo && npm test');
+    assert.deepStrictEqual(dialogCalls, [], 'the child id resolves to the parent — no window dialog');
+    await waitFor(() => !!permissionRecord(harness, 's-1'), 'the record anchored to the parent');
+    assert.strictEqual(permission.hasPendingFor('s-1'), true, 'the parent tab shows waiting');
+    assert.strictEqual(permission.hasPendingFor('child-1'), true, 'the child id still matches cancelSubagent');
+
+    // Stopping the parent turn must retire the child's prompt too — the ACP contract
+    // is "exactly one answer", and cancelTurn only knows the parent id.
+    permission.cancelSession('s-1');
+    await waitFor(() => permissionStatus(harness, 's-1') === 'cancelled', 'the prompt settled');
+  });
+
+  test('a sub-agent form is drawn in its parent session too', async () => {
+    const elicitation = new ElicitationBridge();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), { elicitation });
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 's-1',
+      update: {
+        sessionUpdate: 'subagent_update', sessionId: 'child-2', title: 'Child',
+        state: { state: 'running' }, capabilities: { cancel: true },
+      },
+    } as never);
+
+    const dialogCalls: string[] = [];
+    void elicitation.request(askRequest('child-2'), async () => {
+      dialogCalls.push('dialog');
+      return { action: 'cancel' };
+    });
+    assert.deepStrictEqual(dialogCalls, [], 'the form resolves to the parent — no per-field QuickPick');
+    assert.strictEqual(elicitation.hasPendingFor('s-1'), true, 'the parent tab shows waiting');
+    elicitation.cancelSession('s-1');
+  });
+
+
   test('a background form notifies with its question', () => {
     const elicitation = new ElicitationBridge();
     const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), { elicitation });
@@ -3713,6 +3764,76 @@ suite('chat panel: background prompts notify instead of interrupting ()', () => 
       },
     } as unknown as CreateElicitationRequest;
   }
+});
+
+// [CUSTOM-20261029] 面板内改名：客户端把 title 一并带来，宿主不再弹 InputBox。
+// InputBox 在真实宿主测试里会直接把用例挂住 —— 所以"能跑完"本身就是断言的一部分。
+suite('chat panel: rename from the panel popover', () => {
+  test('a client-provided title is applied without the host InputBox', async () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {},
+      memento as unknown as vscode.Memento);
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'renameSession', sessionId: 's-1', title: 'renamed' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const action = harness.surface.sent.find(
+      m => (m as { type?: string }).type === 'sessionAction') as
+      { action?: string; sessionId?: string; title?: string } | undefined;
+    assert.ok(action, 'the host replied with sessionAction');
+    assert.strictEqual(action.action, 'rename');
+    assert.strictEqual(action.sessionId, 's-1');
+    assert.strictEqual(action.title, 'renamed');
+    assert.strictEqual(
+      memento.get<Record<string, { title?: string }>>('vac.sessionLabels.v1')?.['s-1']?.title,
+      'renamed',
+      'the label override is persisted',
+    );
+  });
+});
+
+// [CUSTOM-20261029] 标题栏 Stop / 命令面板不再直接取消：有可见面板时请求它出
+// #stopConfirm；没有 surface 时返回 false，让 commands 走非模态通知兜底。
+suite('chat panel: stop requests go through the panel confirmation', () => {
+  class BusyManager extends SessionManager {
+    private readonly busy = new Set<string>();
+    markBusy(sessionId: string): void { this.busy.add(sessionId); }
+    override isTurnInFlight(sessionId: string): boolean { return this.busy.has(sessionId); }
+  }
+
+  function busyHarness(): { harness: Harness; manager: BusyManager } {
+    let manager!: BusyManager;
+    const harness = makeHarness('s-1', 'Claude Code', handler => {
+      manager = new BusyManager(new AgentManager(), new ConnectionManager(handler), handler);
+      return manager;
+    });
+    manager.markBusy('s-1');
+    harness.surface.sent.length = 0;
+    return { harness, manager };
+  }
+
+  test('a visible surface showing the session receives stopAsk', () => {
+    const { harness } = busyHarness();
+    assert.strictEqual(harness.host.requestStop('s-1'), true);
+    assert.deepStrictEqual(
+      harness.surface.sent.filter(m => (m as { type?: string }).type === 'stopAsk'),
+      [{ type: 'stopAsk', sessionId: 's-1' }],
+    );
+  });
+
+  test('no visible surface ⇒ false (the command falls back to a notice)', () => {
+    const { harness } = busyHarness();
+    harness.host.detachSurface('view');
+    assert.strictEqual(harness.host.requestStop('s-1'), false);
+  });
+
+  test('nothing in flight ⇒ true and no message (there is nothing to ask)', () => {
+    const harness = makeHarness('s-1');
+    harness.surface.sent.length = 0;
+    assert.strictEqual(harness.host.requestStop('s-1'), true);
+    assert.deepStrictEqual(
+      harness.surface.sent.filter(m => (m as { type?: string }).type === 'stopAsk'), []);
+  });
 });
 
 suite('chat panel: turn outcome wording ()', () => {

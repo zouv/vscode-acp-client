@@ -111,7 +111,7 @@ export const tabsClient = `
     }
   }
 
-  function closeModel(model) {
+  function closeModel(model, anchor, event) {
     if (model.kind === 'draft') {
       if (NS.draft) { NS.draft.drop(model.id); }
       return;
@@ -123,7 +123,23 @@ export const tabsClient = `
       NS.bridge.post({ type: 'forgetRestorable', sessionId: model.id });
       return;
     }
-    NS.bridge.post({ type: 'closeSession', sessionId: model.id });
+    var close = function () { NS.bridge.post({ type: 'closeSession', sessionId: model.id }); };
+    // [CUSTOM- 2026-10-29：运行中的会话先问一句，但问在面板内（非模态浮层），
+    // 不再用宿主 modal 挡住整个 IDE。summary.running 与宿主 isSessionRunning 同源
+    // （轮次在飞或后台任务未结束），四个关闭入口都汇到这里，一次覆盖全部。
+    var running = !!(model.summary && model.summary.running);
+    if (running && NS.popover && NS.popover.confirm) {
+      var title = model.summary && model.summary.title ? model.summary.title : model.id;
+      if (NS.popover.confirm({
+        message: 'Close "' + title + '"? The agent is still working — closing cancels the current turn.',
+        confirmLabel: 'Close',
+        danger: true,
+        anchor: anchor,
+        event: event,
+        onConfirm: close
+      })) { return; }
+    }
+    close();
   }
 
   // 会话 tab 右键菜单的入口（见 contextMenu.itemsFor）。
@@ -141,9 +157,36 @@ export const tabsClient = `
   }
 
   /** 菜单 Close：与 tab 上的 × 同一条路（closeModel 按 kind 分派）。 */
-  function closeTabNode(node) {
+  function closeTabNode(node, event) {
     var model = modelOfNode(node);
-    if (model) { closeModel(model); }
+    if (model) { closeModel(model, node, event); }
+  }
+
+  /**
+   * [CUSTOM- 2026-10-29：改名改成面板内输入浮层（原来弹宿主 InputBox，抢焦点、
+   * 盖住窗口顶部）。tab 右键菜单与历史行共用同一形态；提交后由宿主应用并回
+   * 'sessionAction'，tab 名靠 'sessionsChanged' 同步。
+   */
+  function startRename(tabEl, event) {
+    if (!tabEl || !tabEl.getAttribute || !NS.popover || !NS.popover.prompt) { return false; }
+    var sessionId = tabEl.getAttribute('data-session-id');
+    if (!sessionId) { return false; }
+    var labelEl = tabEl.querySelector ? tabEl.querySelector('.tab-label') : null;
+    var current = labelEl ? String(labelEl.textContent || '') : '';
+    return NS.popover.prompt({
+      title: 'Rename Session',
+      message: 'New name for this session',
+      value: current,
+      confirmLabel: 'Rename',
+      anchor: tabEl,
+      event: event,
+      onSubmit: function (value) {
+        var title = String(value === undefined || value === null ? '' : value).trim();
+        // 清空 / 没改都当"没改"（与宿主原来的 InputBox 语义一致）。
+        if (!title || title === current) { return; }
+        NS.bridge.post({ type: 'renameSession', sessionId: sessionId, title: title });
+      }
+    });
   }
 
   function init() {
@@ -216,7 +259,7 @@ export const tabsClient = `
       }
       if (event.key === 'Delete') {
         event.preventDefault();
-        closeModel(models[index]);
+        closeModel(models[index], event.target, event);
       }
     });
 
@@ -588,7 +631,7 @@ export const tabsClient = `
         close.tabIndex = -1;
         close.addEventListener('click', function (event) {
           event.stopPropagation();
-          closeModel(model);
+          closeModel(model, close, event);
         });
         tab.appendChild(close);
 
@@ -605,7 +648,7 @@ export const tabsClient = `
           if (event.button !== 1) { return; }
           if (event.preventDefault) { event.preventDefault(); }
           if (event.stopPropagation) { event.stopPropagation(); }
-          closeModel(model);
+          closeModel(model, tab, event);
         });
         // [CUSTOM- 手工排序。只有会话 tab 能排：草稿的 id 是本地的临时号，
         // 排它没有意义（它连会话都不是）。
@@ -899,7 +942,9 @@ export const tabsClient = `
     // [CUSTOM- 待恢复的会话（本地 tab）：由 boot 的 restoreChoice 喂。
     setRestoring: setRestoring,
     // [CUSTOM- 会话 tab 右键菜单的 Close 入口（见 contextMenu.itemsFor）。
-    closeTabNode: closeTabNode
+    closeTabNode: closeTabNode,
+    // [CUSTOM- 会话 tab 右键菜单的 Rename 入口（面板内输入浮层）。
+    startRename: startRename
   };
 })(window.__vac = window.__vac || {});
 `;
