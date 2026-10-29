@@ -573,6 +573,15 @@ export const tabsClient = `
         tab.type = 'button';
         tab.setAttribute('role', 'tab');
         tab.setAttribute(idAttr, model.id);
+        // [CUSTOM- 2026-10-29] 右键菜单 "Copy working directory" 用；草稿/待恢复没有真正的会话目录。
+        if (!isDraft && !isRestore && model.summary && model.summary.cwd) {
+          tab.setAttribute('data-cwd', model.summary.cwd);
+        }
+        // [CUSTOM- 2026-10-29] 未读标记也写到 tab 上：即使 running 的优先级让圆点暂时是蓝色，
+        // 右键菜单仍能知道"已经标记过未读"并置灰。
+        if (!isDraft && !isRestore && model.summary && model.summary.unread) {
+          tab.setAttribute('data-unread', '');
+        }
         tab.setAttribute('aria-selected', active ? 'true' : 'false');
         tab.tabIndex = active || (!activeSeen && index === 0) ? 0 : -1;
         // [CUSTOM- 自绘悬停提示（2026-10-27）：标签名正常色，会话 id 灰色。

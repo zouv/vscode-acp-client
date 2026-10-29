@@ -181,16 +181,17 @@ export function styles(): string {
   }
   .tab-label { overflow: hidden; text-overflow: ellipsis; }
   /* [CUSTOM- 圆点有**两个独立的信号**（用户指定）：
-       · 颜色说"这个会话处在什么状态"；
+       · 背景色说"这个会话处在什么状态"；
        · 外面的圈说"它正在做事"。
-     两者必须独立——卡在权限提示上的轮次两件事同时为真。颜色走 color 而不是直接写
-     background，外圈才能用同一个 currentColor 画出来（颜色只有一个来源）。
+     两者必须独立——卡在权限提示上的轮次两件事同时为真。状态色只写 background-color；
+     外圈单独读 --tab-dot-state（background-color 不能给 currentColor 用）。
      **它只是提示**：不弹窗、不抢焦点——与"不做后台权限卡"的决定不冲突。 */
-  /* [CUSTOM- 目录标识：dot 放大成方形并写目录缩写，两色设计。
-     ⚠️ 226 修订（用户报"完成状态就看不到图标了"）：**状态色只给 background，文字色固定**。
-     首版把状态色写在 color 上 —— 而 background: currentColor 会把 color 当背景用，
-     于是完成态（无状态类）时 color 是 descriptionForeground（灰）、背景灰、文字近黑 ⇒ 看不见。
-     现在的分工：状态色 → background（外圈跟它走），文字色 → color（固定在 editor-background）。
+  /* [CUSTOM- 目录标识：dot 放大成方形并写目录缩写。
+     ⚠️ 226：状态色只给 background，文字色固定在 color（否则完成状态看不见）。
+     ⚠️ 2026-10-29：用户要求**固定配色**（不再跟随主题的 charts.* / progressBar）：
+       橙 #e8912d（等回答）/ 蓝 #3b82f6（在跑）/ 蓝灰 #7d8fa8（载入）/
+       浅绿 #7bc96f（未读）/ 浅灰 #b8c0cc（空闲）。
+       文字固定 #1f2328；running 的蓝底另用白字（深色对比不足）。
      方形不是矩形：宽高都 16px（226 从 18 缩到 16，用户报"可以稍微小一些"）。
      2x2 布局（227）：4 个字母排两行两列 —— flex-wrap + 行高 1 让两行正好占满。
      228 把 227 的"字号压到半格"换成了**按字母数分档**（见下面三条 [data-len]），
@@ -207,12 +208,11 @@ export function styles(): string {
        大字号下不再长大。7px 是两行档的上限（两行的行盒 2×7=14px，方块里还剩 2px 余量）。
        6px 圆角是四档的共同上限：2x2 的角格有字，再圆就削到笔画。 */
     font-size: min(0.54em, 7px); font-weight: 700; line-height: 1; letter-spacing: 0;
-    /* 文字色：固定、不随状态变（否则完成态背景灰+文字深灰就看不清了）。
-       取**面板底色**：字母是状态色底上的"挖空"字形；侧边栏面与编辑区面各自匹配自己的底
-       （见 .surface-editor 的覆盖），否则字色与它周围那片底色会差一档。 */
-    color: var(--vscode-sideBar-background);
-    /* 背景色：默认空闲态的灰；下面的状态类**只覆盖这一个属性**。 */
-    background-color: var(--vscode-descriptionForeground);
+    /* 文字色：固定深色（2026-10-29 起不再取面板底色）——固定浅色底上要保证可读；
+       running 的蓝底另用白字（见下面 .tab-dot.running）。 */
+    color: #1f2328;
+    /* 背景色：固定空闲浅灰；下面的状态类**只覆盖这一个属性**。 */
+    background-color: #b8c0cc;
     padding: 0;
     overflow: hidden;
   }
@@ -239,27 +239,29 @@ export function styles(): string {
   /* [CUSTOM- 每个字母一个 span。宽度随字形走：3 个字母跨两列靠它居中，2x2 靠网格列宽贴紧。 */
   .tab-dot .dir-letter { text-align: center; }
   /* 优先级：等人回答 > 轮次在跑 > 载入历史 > 后台有新输出 > 平常。
-     每条只改 background-color —— color 不动，文字永远保持对比色。 */
-  .tab-dot.waiting { background-color: var(--vscode-charts-orange, var(--vscode-charts-yellow)); }
-  .tab-dot.running { background-color: var(--vscode-progressBar-background); }
-  .tab-dot.loading { background-color: var(--vscode-charts-yellow); }
+     每条只改 background-color —— color 不动（running 例外：蓝底需要白字）。
+     2026-10-29：固定配色，不再读主题变量。 */
+  .tab-dot.waiting { background-color: #e8912d; }   /* 等人回答：橙 */
+  .tab-dot.running { background-color: #3b82f6; color: #ffffff; }   /* 轮次在跑：蓝 */
+  .tab-dot.loading { background-color: #7d8fa8; }   /* 载入历史：蓝灰 */
   /* [CUSTOM- 后台会话在你离开后有了新输出 —— 由宿主侧的 unread 集合驱动。 */
-  .tab-dot.attention { background-color: var(--vscode-charts-blue); }
+  .tab-dot.attention { background-color: #7bc96f; }   /* 未读：浅绿 */
   /* 外圈：一圈向外扩散的涟漪，只在"正在做事"（轮次在跑 / 正在载入）时出现。
      早先把 running 做成圆点自身的脉动，那样两个信号就挤在同一个像素上了。
      [CUSTOM- 外圈要跟随**背景色**（状态色），而 background-color 不能给
      currentColor 用 —— 所以外圈单独读 background-color。 */
   .tab-dot.busy::after {
     content: ''; position: absolute; inset: -1px; border-radius: 50%;
-    /* 226：外圈跟随背景色（状态色），不是文字色 —— 文字色现在是固定的对比色。 */
-    border: 1px solid var(--tab-dot-state, var(--vscode-descriptionForeground));
+    /* 226：外圈跟随背景色（状态色），不是文字色 —— 文字色现在是固定的对比色。
+       2026-10-29：状态色固定成同一套 hex。 */
+    border: 1px solid var(--tab-dot-state, #b8c0cc);
     animation: tab-ring 1.4s ease-out infinite;
   }
   /* 226：每条状态类把状态色同时写进自定义属性，外圈读它。 */
-  .tab-dot.busy.waiting { --tab-dot-state: var(--vscode-charts-orange, var(--vscode-charts-yellow)); }
-  .tab-dot.busy.running { --tab-dot-state: var(--vscode-progressBar-background); }
-  .tab-dot.busy.loading { --tab-dot-state: var(--vscode-charts-yellow); }
-  .tab-dot.busy.attention { --tab-dot-state: var(--vscode-charts-blue); }
+  .tab-dot.busy.waiting { --tab-dot-state: #e8912d; }
+  .tab-dot.busy.running { --tab-dot-state: #3b82f6; }
+  .tab-dot.busy.loading { --tab-dot-state: #7d8fa8; }
+  .tab-dot.busy.attention { --tab-dot-state: #7bc96f; }
   @keyframes tab-ring {
     0% { transform: scale(0.7); opacity: 0.9; }
     100% { transform: scale(1.9); opacity: 0; }
@@ -2007,10 +2009,8 @@ export function styles(): string {
     background: var(--vscode-editor-background);
   }
   /* [CUSTOM- tab 的"选中态底色"必须跟着**这个面**的底走：侧边栏面用 sideBar、
-     编辑区面用 editor。只写一套 editor-background 时，侧边栏里的选中 tab 会和面板
-     对不上色 —— 那正是"选中/未选中区分不明显"的一半原因。dot 的挖空字色同理。 */
+     编辑区面用 editor。dot 的字母色从 2026-10-29 起是固定深色，不再按面取。 */
   .surface-editor .tab.active { background: var(--vscode-editor-background); }
-  .surface-editor .tab-dot { color: var(--vscode-editor-background); }
   /* [CUSTOM- 这里原来还有 .composer。底栏从 140 起是**浮在消息之上的透明层**
      （见 .composer 那段），给它刷 editor-background 就等于把整条底栏变成一块不透明带：输入卡
      两侧的消息、右侧大纲栏的底部全被盖住 —— 用户报的"还是遮挡"就是这个，而且它**只在编辑区

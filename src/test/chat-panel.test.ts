@@ -3252,7 +3252,7 @@ suite('chat panel: connection phase and the auto-connect switch', () => {
 // 持有者），并且**必须计入 refreshSessions 的签名**——漏签名的后果在 022/063 上踩过两次：
 // 数据变了，标签栏却永远不刷新。
 suite('chat panel: the tab dot and the waiting state', () => {
-  interface SummaryWire { sessionId: string; waiting: boolean }
+  interface SummaryWire { sessionId: string; waiting: boolean; unread?: boolean }
 
   function summaries(harness: Harness): SummaryWire[] {
     for (let i = harness.surface.sent.length - 1; i >= 0; i--) {
@@ -3313,6 +3313,20 @@ suite('chat panel: the tab dot and the waiting state', () => {
     elicitation.cancelSession('s-1');
     await waitFor(() => summaries(harness).some(row => row.waiting === false), 'the form flag cleared');
     assert.strictEqual(summaries(harness).find(row => row.sessionId === 's-1')?.waiting, false);
+  });
+
+  // [CUSTOM- 2026-10-29] 会话 tab 右键 "Mark as unread"：与后台输出同一条 attention 状态；
+  // 聚焦到该会话时由宿主清掉（与 active-session-changed 的既有规则一致）。
+  test('markUnread lights the unread flag and focusing the session clears it', async () => {
+    const harness = makeHarness('s-1', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'markUnread', sessionId: 's-1' });
+    await waitFor(() => summaries(harness).some(s => s.sessionId === 's-1' && s.unread === true),
+      'the unread flag');
+
+    harness.sessionManager.emit('active-session-changed', 's-1', 'Claude Code');
+    await waitFor(() => summaries(harness).some(s => s.sessionId === 's-1' && s.unread === false),
+      'the unread flag cleared on focus');
   });
 });
 

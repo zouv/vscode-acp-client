@@ -6196,40 +6196,63 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     assert.deepStrictEqual(posted, [{ type: 'copy', text: 'D:\\\\work\\\\demo' }]);
   });
 
-  test('会话 tab：同目录新建 / 复制会话 / Close / Rename / Copy Session ID；草稿 tab 只给 Close', () => {
+  test('会话 tab：Rename 置顶 / Mark as unread / 新建 / Duplicate / Copy cwd / Copy ID / Close 置底', () => {
     const { NS, posted, pop } = withEntry();
     // 这两条是会话作用域消息（宿主按 sessionId 校验后处理），桩里也要接住。
     NS.bridge.postForSession = (message: Record<string, unknown>) => { posted.push(message); };
     const tab = new StubNode('button');
     tab.className = 'tab';
     tab.setAttribute('data-session-id', 's1');
+    tab.setAttribute('data-cwd', '/work/alpha');
     const tabLabel = new StubNode('span');
     tabLabel.className = 'tab-label';
     tabLabel.textContent = 'alpha one';
     tab.appendChild(tabLabel);
 
-    const items = NS.contextMenu.itemsFor(tabLabel) as Array<{ label: string; run: () => void }>;
+    const items = NS.contextMenu.itemsFor(tabLabel) as Array<{
+      label: string; disabled?: boolean; run: (event?: unknown) => void;
+    }>;
     assert.strictEqual(labels(items),
-      'New Session in This Folder / Duplicate / Close / Rename / Copy Session ID');
+      'Rename / Mark as unread / New Session in This Folder / Duplicate / '
+      + 'Copy working directory / Copy Session ID / Close');
+
+    // 0 Rename：先出面板内输入浮层，提交时才发消息。
     items[0].run();
-    assert.deepStrictEqual(posted[0], { type: 'newSessionInDirectory', sessionId: 's1' },
-      '新会话沿用这个 tab 的目录（目录由宿主从源会话取）');
-    items[1].run();
-    assert.deepStrictEqual(posted[1], { type: 'duplicateSession', sessionId: 's1' },
-      '复制会话走 session/fork（保留上下文与消息记录）');
-    items[3].run();
     assert.deepStrictEqual(posted.filter(m => m.type === 'renameSession'), [],
       '改名先出面板内输入浮层，提交前不发消息');
-    assert.strictEqual(pop.input.value, 'alpha one',
-      '初值就是标签上看得见的标题（与用户看到的一致）');
+    assert.strictEqual(pop.input.value, 'alpha one');
     pop.input.value = 'renamed';
     pop.input.dispatch('keydown', {
       key: 'Enter', preventDefault: () => {}, stopPropagation: () => {},
     });
-    assert.deepStrictEqual(posted[2], { type: 'renameSession', sessionId: 's1', title: 'renamed' },
-      '提交时才把新标题发给宿主');
+    assert.deepStrictEqual(posted[0], { type: 'renameSession', sessionId: 's1', title: 'renamed' });
+
+    items[1].run();
+    assert.deepStrictEqual(posted[1], { type: 'markUnread', sessionId: 's1' },
+      'Mark as unread 只报给宿主，不自己改本地状态');
+    items[2].run();
+    assert.deepStrictEqual(posted[2], { type: 'newSessionInDirectory', sessionId: 's1' },
+      '新会话沿用这个 tab 的目录（目录由宿主从源会话取）');
+    items[3].run();
+    assert.deepStrictEqual(posted[3], { type: 'duplicateSession', sessionId: 's1' },
+      '复制会话走 session/fork（保留上下文与消息记录）');
     items[4].run();
-    assert.deepStrictEqual(posted[3], { type: 'copy', text: 's1' }, '复制的是数据上的 sessionId，不是标签文字');
+    assert.deepStrictEqual(posted[4], { type: 'copy', text: '/work/alpha' },
+      'Copy working directory 拷的是 data-cwd');
+    items[5].run();
+    assert.deepStrictEqual(posted[5], { type: 'copy', text: 's1' },
+      '复制的是数据上的 sessionId，不是标签文字');
+
+    // 已经是未读 ⇒ Mark as unread 置灰；没有 cwd ⇒ Copy working directory 置灰。
+    const unreadTab = new StubNode('button');
+    unreadTab.className = 'tab';
+    unreadTab.setAttribute('data-session-id', 's2');
+    const unreadDot = new StubNode('span');
+    unreadDot.className = 'tab-dot attention';
+    unreadTab.appendChild(unreadDot);
+    const unreadItems = NS.contextMenu.itemsFor(unreadDot) as Array<{ label: string; disabled?: boolean }>;
+    assert.strictEqual(unreadItems.find(i => i.label === 'Mark as unread')!.disabled, true);
+    assert.strictEqual(unreadItems.find(i => i.label === 'Copy working directory')!.disabled, true);
 
     const draft = new StubNode('button');
     draft.className = 'tab tab-draft';

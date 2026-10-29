@@ -386,7 +386,7 @@ pending ──用户点按钮──► selected        （回答 optionId）
 | 交互 | **webview 内零拖拽/粘贴处理**，附件只能走命令与资源管理器右键 | 全量 grep 为空 |
 | 界面 | `SafeMarkdown.code` 已输出 `data-lang`，界面完全没用（无语言标签） | `markdown.ts` 产出，无消费 |
 | 界面 | 编辑区面仍用 `--vscode-sideBar-background`（`body` / `.composer` / `.load-overlay`），与周围编辑器底色不一致 | `styles.ts` |
-| 登记 | `.tab-dot.attention` 是**从未被任何 JS 使用**的死 CSS（像没接完的功能），用户已决定不加功能 | `styles.ts` |
+| 登记 | ~~`.tab-dot.attention` 是从未被任何 JS 使用的死 CSS~~ —— **2026-10-29 起已由 unread 状态使用**（`tabs.ts` 的 `dotClass` 加 `attention`），不再是死代码 | `styles.ts` / `tabs.ts` |
 | 登记 | 无 sessionId 的 `error` notice 只进当前 DOM、不进 store，切走再切回消失（**注释已声明是刻意的**） | `boot.ts` 的 `error` 分支 |
 
 **阶段 2-4 的落地结果（CUSTOM-20260925-043..052）**
@@ -402,12 +402,13 @@ pending ──用户点按钮──► selected        （回答 optionId）
 | 049 | 附件拖拽（`attachPath`）；粘贴图片明确提示暂不支持 | 消息**会话作用域**，在守卫**之后**处理。拖拽路径**不 reveal surface**（拖拽本就在可见面上）。取不到路径必须报出来 |
 | 050 | 草稿按会话记忆；编辑区面用编辑器底色；`prefers-reduced-motion` | `stashDraft()` **必须在 `state.sessionId` 改写之前**调用。CSS 里**只有** `.surface-editor` 的覆盖规则——侧边栏面不能加 |
 | 051 | 代码块语言标签 | 标签在左上角（右上角归 Copy），`pointer-events: none`；只有带语言的块才让出顶部内边距。**不引入高亮器**（要改 CSP） |
-| 052 | 清死代码；两处"刻意保留"写明理由 | `dom.esc` **删除处写了"不要补回来"**——通用转义助手是"用字符串拼 HTML"的邀请函。`statusGlyph` 组与 `.tab-dot.attention` 保留但必须带"为什么在这"的注释 |
+| 052 | 清死代码；两处"刻意保留"写明理由 | `dom.esc` **删除处写了"不要补回来"**——通用转义助手是"用字符串拼 HTML"的邀请函。`statusGlyph` 组保留但必须带"为什么在这"的注释；`.tab-dot.attention` 后来已由 unread 状态接上 |
 
 **仍刻意不改的（登记在案，别当 bug 修）**
 
-- `.tab-dot.attention`（死 CSS，设计预留）与无 sessionId 的 `error` notice（只进当前 DOM、不进 store）
-  ——两者都在代码注释与 `pitfalls.md` #20 里写明了理由。
+- ~~`.tab-dot.attention`（死 CSS，设计预留）~~（2026-10-29 起由 unread 使用，不再是死 CSS）与
+  无 sessionId 的 `error` notice（只进当前 DOM、不进 store）
+  ——后者在代码注释与 `pitfalls.md` #20 里写明了理由。
 - `sanitize()` 放行整个 `data-*` 家族，而点击委托信任其中几个属性 —— 当前不可利用
   （`SafeMarkdown.html()` 把原始 HTML 转义成文本，无注入路径），但作为"将来 marked 新增钩子"的
   兜底时形同虚设。见 `pitfalls.md` #21。

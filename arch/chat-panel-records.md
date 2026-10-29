@@ -322,13 +322,17 @@ Webview 默认弹 **Chromium 的原生菜单**，它在这个面板上有两个�
 **分工**（用户指定）：圆点的**颜色**表达这个会话处在什么状态，圆点外的**涟漪圈**表达"它正在做事"。
 两者必须独立 —— 一个卡在权限提示上的轮次两件事同时为真（在跑 **+** 在等人），挤进同一个信号就必然丢掉一件。
 
-| 状态 | 颜色 | 外圈 |
+| 状态 | 颜色（2026-10-29 起固定 hex） | 外圈 |
 |---|---|---|
-| 等人回答（权限 / 表单） | 橙 `--vscode-charts-orange` | 有（轮次通常还在跑） |
-| 轮次在跑 | 蓝 `--vscode-progressBar-background` | 有 |
-| 载入历史（replay） | 黄 `--vscode-charts-yellow` | 有 |
-| 后台有新输出（unread） | 蓝 `--vscode-charts-blue` | 无 —— 它是关于**过去**的提示，不是当下的活动 |
-| 平常 | 灰 `--vscode-descriptionForeground` | 无 |
+| 等人回答（权限 / 表单） | 橙 `#e8912d` | 有（轮次通常还在跑） |
+| 轮次在跑 | 蓝 `#3b82f6` | 有 |
+| 载入历史（replay） | 蓝灰 `#7d8fa8` | 有 |
+| 后台有新输出（unread） | 浅绿 `#7bc96f` | 无 —— 它是关于**过去**的提示，不是当下的活动 |
+| 平常 | 浅灰 `#b8c0cc` | 无 |
+
+> **固定配色（2026-10-29）**：用户要求不再跟随主题的 `charts.*` / `progressBar`，五态各用固定 hex；
+> 字母色固定 `#1f2328`，只有 running 的蓝底改用白字（深色对比不足）。`.surface-editor` 不再覆盖
+> `.tab-dot` 的字色。
 
 > **涟漪曾被裁掉（2026-10-19）**：228/229 给 `.tab-dot` 加了 `overflow: hidden`（防止放大字号时
 > 字母顶出方块），它同时把 `::after` 的涟漪（`scale(1.9)`）裁进了 16px 方块 —— 看起来像"运行中
@@ -351,7 +355,7 @@ Webview 默认弹 **Chromium 的原生菜单**，它在这个面板上有两个�
 > **顶部 2px 强调线**（`tab-activeBorderTop`，回退 `focusBorder`）+ `font-weight: 600` + `opacity: 1`。
 > 底色必须**按面**取：侧边栏面 `sideBar-background`、编辑区面 `editor-background`
 > （`.surface-editor .tab.active` 覆盖）—— 只写 editor 时侧边栏的选中 tab 与面板不同色，
-> 那正是"看起来没选中"的一半原因。`.tab-dot` 的挖空字色同理按面取。
+> 那正是"看起来没选中"的一半原因。`.tab-dot` 的字母色从 2026-10-29 起固定为深色，不再按面取。
 > 拖拽落点指示线用的是左右 `inset` 阴影，与顶部强调线不冲突。
 
 - **数据**：`waiting` 从两个桥的 `hasPendingFor(sessionId)` 读 —— **桥才是 pending 的唯一持有者**，
@@ -507,17 +511,23 @@ hide 与恢复都不报。"变量=0 而卡片可见"于是可达。
   取不到时退回行上可见文本）——不是选区，也不需要选区；
 - **地址栏**（`.session-title`，即 body.ts 的 `#cwdBtn`；用类选择器是为了桩 DOM 也认）：
   `Copy` = `NS.tabs.currentCwd()`（拿不到退回按钮文本 —— 草稿页它可能是 "Default directory"）；
-- **会话 tab**（`.tab`）：`New Session in This Folder` / `Duplicate Session`（仅真会话 tab，
-  见下）＋ `Close`（= tab 上的 × 同一条路，`NS.tabs.closeTabNode` 按 kind 分派
-  草稿=丢弃 / 待恢复=本地忘掉 / 真会话=closeSession）＋ `Rename`（仅真会话 tab，改名见下）；
+- **会话 tab**（`.tab`）：`Rename` / `Mark as unread` / `New Session in This Folder` /
+  `Duplicate` / `Copy working directory` / `Copy Session ID`（仅真会话 tab，见下）＋ `Close`
+  （永远最后；草稿/待恢复只有它。= tab 上的 × 同一条路，`NS.tabs.closeTabNode` 按 kind 分派
+  草稿=丢弃 / 待恢复=本地忘掉 / 真会话=closeSession）；
 - **历史列表行**（`.outline-item[data-open-session]`）：`Archive` / `Rename` —— 悬停图标够不着的
   键盘用户（Shift+F10）走这里同一对动作、同一个出口。
 
-**会话 tab 的两个菜单项（211）**：`Close` = `NS.tabs.closeTabNode`（按 kind 分派：草稿=丢弃 /
-待恢复=本地忘掉 / 真会话=closeSession，与 tab 上的 × 同一条路）；`Rename` = 发 212 的
+**会话 tab 的菜单项（211，2026-10-29 重排）**：顺序固定为 `Rename` → `Mark as unread` →
+`New Session in This Folder` → `Duplicate` → `Copy working directory` → `Copy Session ID` →
+`Close`。`Close` = `NS.tabs.closeTabNode`（按 kind 分派：草稿=丢弃 / 待恢复=本地忘掉 /
+真会话=closeSession，与 tab 上的 × 同一条路）；`Rename` = 发 212 的
 `renameSession {sessionId, currentTitle}`（初值取 `.tab-label` 上**看得见**的标题，同源原则），
-改名由宿主弹原生输入框，回执后 `refreshSessions` 把新标题经 `sessionsChanged` 推回来 —— tab
-自己也就换了名字。**首版曾按用户早先口述做了 `Remove`（归档+忘掉+关闭），用户随后更正
+改名走面板内输入浮层，回执后 `refreshSessions` 把新标题经 `sessionsChanged` 推回来。
+**`Mark as unread`** 发 `markUnread {sessionId}` → 宿主把它加进 `unread` 集合（与后台输出同一个
+浅绿 attention 点），聚焦到该会话时由 `active-session-changed` 清掉；已经是未读时置灰。
+**`Copy working directory`** 读 tab 上的 `data-cwd`（`tabs.ts` 渲染时写入），没有 cwd 时置灰。
+**首版曾按用户早先口述做了 `Remove`（归档+忘掉+关闭），用户随后更正
 "要的是 Rename 不是 Remove"，已整条删除**（包含 `removeSession` 消息）。
 
 **会话 tab 的新建 / 复制（2026-10-27）**：两个都只在**真会话 tab** 上出现（草稿/待恢复没有
@@ -576,7 +586,7 @@ applyAction 摘行换标签且不重置过滤）；真 Chromium 的 `#historyrow
 
 缩写规则：'alpha-beta-gamma' → 'ABG'，'AbcDeFg' → 'ADF'，'abc-de-fg' → 'ADF'。
 
-**踩坑**：拆词不用正则 lookbehind（本文件要走 check-webview-client.mjs 的 new Function 解析，lookbehind 在它的目标解析里会报 Unexpected token）—— 用两轮拆分（先按非字母数字切，再按驼峰边界切）。预览主题里原先没有 `--vscode-charts-orange/yellow/blue` 三个 token，waiting/loading/attention 三态的 background-color 算出来是透明 —— 补齐后探针才验得出对比色。
+**踩坑**：拆词不用正则 lookbehind（本文件要走 check-webview-client.mjs 的 new Function 解析，lookbehind 在它的目标解析里会报 Unexpected token）—— 用两轮拆分（先按非字母数字切，再按驼峰边界切）。2026-10-29 起状态色改成固定 hex，预览不再依赖 `--vscode-charts-orange/yellow/blue` 这几个 token（旧版缺 token 时 waiting/loading/attention 会算成透明，探针才验不出对比色）。
 
 ### 5.52 表单回执卡：标出所选 + 可折叠（CUSTOM-20261013-231）
 

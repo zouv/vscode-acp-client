@@ -1102,6 +1102,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         void this.sessionManager.cancelTurn(sessionId).catch(e => this.reportError(sessionId, e));
         this.refreshSessions();
         return;
+      // [CUSTOM- 2026-10-29] 会话 tab 右键 "Mark as unread"：直接点亮 attention 圆点。
+      // 聚焦到该会话时 active-session-changed 会清掉它（与后台输出同一条规则）。
+      case 'markUnread':
+        this.unread.add(sessionId);
+        this.refreshSessions();
+        return;
       case 'closeSession': {
         const agentName = sessionOf(this.sessionManager, sessionId)?.agentName;
         if (!agentName) { return; }

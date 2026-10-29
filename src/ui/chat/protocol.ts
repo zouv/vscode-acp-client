@@ -458,6 +458,9 @@ export type ChatToExt =
   // 缺省时宿主保留原生输入框兜底（其它调用方 / 旧客户端）。
   | { type: 'renameSession'; sessionId: string; currentTitle?: string; title?: string }
   | { type: 'focusSession'; sessionId: string }
+  // [CUSTOM- 2026-10-29：会话 tab 右键 "Mark as unread" —— 与后台输出同一条 attention
+  // 状态（浅绿点）；聚焦到该会话时由宿主清掉。会话作用域（守卫之后）。
+  | { type: 'markUnread'; sessionId: string }
   // [CUSTOM- 从某条助手消息处 fork 出新会话（`session/fork` + 适配器的消息级 `_meta`）。
   // **会话作用域**（走 `verifySession` 守卫之后）。`entryId` 是面板记录 id —— 宿主据它取回
   // 那一条的 ACP `messageId`，所以记录序列化不必带 messageId。
