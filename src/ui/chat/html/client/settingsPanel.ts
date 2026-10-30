@@ -324,8 +324,10 @@ export const settingsPanelClient = `
       var outlineWidth = item.key === 'panel.outlineWidth';
       num.setAttribute('min', String(item.min !== undefined ? item.min : (outlineWidth ? 160 : 0)));
       num.setAttribute('max', String(item.max !== undefined ? item.max : (outlineWidth ? 480 : 2000)));
-      // 1 的步长适合小整数（目录条数 3–16）；尺寸类仍用 10。
-      num.setAttribute('step', item.max !== undefined && item.max <= 20 ? '1' : '10');
+      // 小跨度（<= 50，例如目录条数 0–30）用 1；尺寸类（几百）仍用 10。
+      var smallRange = item.max !== undefined
+        && item.max - (item.min === undefined ? 0 : item.min) <= 50;
+      num.setAttribute('step', smallRange ? '1' : '10');
       num.value = String(item.value === undefined || item.value === null ? '' : item.value);
       num.addEventListener('change', function () { send(item.key, num.value); });
       wrap.appendChild(num);

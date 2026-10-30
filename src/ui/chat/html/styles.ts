@@ -2505,6 +2505,8 @@ export function styles(): string {
     border: 1px solid var(--vscode-panel-border); border-radius: 3px;
     padding: 0 5px; font-size: 0.88em; max-width: 100%;
   }
+  .attachment[data-path] { cursor: pointer; }
+  .attachment[data-path]:hover { background: var(--vscode-list-hoverBackground); }
   .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .attachment-x {
     border: none; background: transparent; color: inherit; cursor: pointer;

@@ -430,6 +430,11 @@ chip 加 —— 真链接给代码图标会误导）。实测：`caretTop 85 / c
 
 **③ agent 也看得到行区间**：发送时把区间挂进资源链接的 uri 片段
 （`file:///….cs#L12-40`，`name` 里已经有给人看的 `文件名:12-40`）—— 不认片段的实现照旧忽略它。
+**2026-10-30**：这个片段不再只是给 agent 看的 —— `contentBlocks.fileLinkTarget` 把它解析成
+`line` / `endLine` 放进 `resource_link` 视图，`toolCallView` 据此写 `data-line` + `data-end-line`，
+所以用户气泡 / 回放 mention / 工具内容里的文件 chip 点击都会框选整段。正文 markdown 链接同样
+带 `data-end-line`（解析器与 `localPathOf` 同在 `contentBlocks`，`markdown.ts` 单向依赖它）。
+输入框附件行里可点击的 `.attachment[data-path]` chip 补了 cursor + hover 反馈。
 
 **②b 三条修正（207）**：①气泡里那个 `</>` 图标**插在最前面** —— 原来 `el('button','chip', text)`
 已经把文件名写进去了，`appendChild` 会把图标放到名字**后面**（用户截图就是反的），改成
@@ -533,7 +538,10 @@ hide 与恢复都不报。"变量=0 而卡片可见"于是可达。
 **会话 tab 的新建 / 复制（2026-10-27）**：两个都只在**真会话 tab** 上出现（草稿/待恢复没有
 `data-session-id`，维持只有 Close）。`New Session in This Folder` 发 `newSessionInDirectory`
 （会话作用域）→ 宿主按源会话的 `cwd` + `additionalDirectories` 调 `createSession`；新会话照常
-套用记住的模式/默认模型/默认强度。`Duplicate` 发 `duplicateSession` → 宿主走
+套用记住的模式/默认模型/默认强度。**新 tab 落在被右键的 tab 右侧**：宿主拿到新 `sessionId` 后，
+先把「现有 tabOrder + 不在表里的 live 会话」展开成完整顺序，再把新 id 插到源 id 之后写回
+`uiPrefs.tabOrder`（`ChatPanelHost.insertSessionAfter` / `placeSessionAfterInTabOrder`）。
+`Duplicate` 发 `duplicateSession` → 宿主走
 `session/fork` **不带 messageId**（在末尾分叉），新会话继承源会话的上下文与消息记录，再由
 `openExistingSession` 重放并聚焦。agent 不支持 fork 时由 `reportError` 在记录区给出提示。
 tab 的悬停提示改为自绘浮层：标题正常色、**SessionId 灰色**（`tabs.ts` 的 `showTip`）。

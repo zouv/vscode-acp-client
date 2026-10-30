@@ -13,8 +13,8 @@
 // 3. webview 侧还有一层 DOMParser 白名单兜底（见 html/client/dom.ts）——即便将来
 // marked 新增了没人覆盖的钩子也能兜住。
 import { Marked, type RendererObject, type Tokens } from 'marked';
-// [CUSTOM- The one place that decides "is this href a local file".
-import { localPathOf } from './content/contentBlocks';
+// [CUSTOM- The one place that decides "is this href a local file" (and which lines).
+import { fileLinkTarget } from './content/contentBlocks';
 // [CUSTOM- 也借用它的视图模型（mention 解析的产物与 ContentBlock 转出来的同形）。
 import type { ContentBlockView } from './content/contentBlocks';
 
@@ -46,45 +46,10 @@ const UNSAFE_LANG_CHARS = /[^a-z0-9_+#.-]/gi;
 // 根因：`link()` 只认 http/https/mailto，把「没有 scheme 的相对路径」当成了「不认识的协议」
 // （`file:` 同样被挡）。而宿主**早就有**这条通道：内容块 chip 用 `data-path` → links.ts 的
 // 点击委托 → `openFile`（按会话 cwd 解析相对路径 + 跳行号，见 ChatPanelHost.handleOpenFile）。
-// 这里只是把 markdown 链接接到**同一条**路上，判定复用 contentBlocks 的 localPathOf。
+// 这里只是把 markdown 链接接到**同一条**路上，判定复用 contentBlocks 的 fileLinkTarget。
 //
-// 行号语法按 agent 实际写法剥掉：`path:12` / `path:12:5` / `path#L12` / `path#L12-L20`。
-// 剥离必须**先于** localPathOf——`GOAL.md:74` 里 `GOAL.md` 本身符合 URI scheme 的语法
-// （`.` 是合法 scheme 字符），不剥就会被当成 scheme `goal.md` 而判成"非本地路径"。
-const LINE_SUFFIX = /^(.*?):(\d+)(?::\d+)?$/;
-const FRAGMENT_LINE = /^L?(\d+)(?:-L?\d+)?$/i;
-
-/**
- * [CUSTOM- Split `path[:line]` / `path#Lline` into a local path plus
- * an optional line, or undefined when the href is not a local file reference.
- */
-export function fileLinkTarget(href: string): { path: string; line?: number } | undefined {
-  const value = String(href ?? '').trim();
-  if (!value) { return undefined; }
-
-  let rest = value;
-  let line: number | undefined;
-
-  const hash = rest.indexOf('#');
-  if (hash >= 0) {
-    const fragment = FRAGMENT_LINE.exec(rest.slice(hash + 1));
-    // A fragment we do not understand (`#section`) is not a file target: opening
-    // the file at line 1 would be worse than leaving the link inert.
-    if (!fragment) { return undefined; }
-    line = Number(fragment[1]);
-    rest = rest.slice(0, hash);
-  }
-
-  const trailing = LINE_SUFFIX.exec(rest);
-  if (trailing) {
-    rest = trailing[1];
-    if (line === undefined) { line = Number(trailing[2]); }
-  }
-
-  const path = localPathOf(rest);
-  if (!path) { return undefined; }
-  return { path, line };
-}
+// 行号语法（`path:12` / `path#L12-L20`）由 contentBlocks.fileLinkTarget 统一剥离；
+// `markdown.ts → contentBlocks` 是单向依赖，不会成环。
 
 // 回放里的「文件引用」不是内容块，是一段文本。
 //
@@ -101,7 +66,7 @@ export function fileLinkTarget(href: string): { path: string; line?: number } | 
 // `resource_link` 视图，好让回放分支把它和图片一样**并进同一个气泡**。判据刻意窄，两条都要满足：
 // ①整段（trim 后）的每一段都是这种链接（用户随手在正文里写一个 `[@a](b.ts)` 不会中招）；
 // ②标签以 `@` 开头 —— 那是这个约定的形态，抓到的数据里没有例外。
-// 行区间语法直接复用上面的 `fileLinkTarget`（184 已经把 `#L12-L20` / `path:12` 收在一处，不写第二份）。
+// 行区间语法直接复用 `contentBlocks.fileLinkTarget`（`#L12-L20` / `path:12` 收在一处，不写第二份）。
 const MENTION_LINK = /^\[@([^\]\n]*)\]\(([^()\s]+)\)$/;
 /** 标签尾部的行区间（`Foo.cs#L437-440` / `Foo.cs#L437`），归一成 live chip 的 `:437-440`。 */
 const MENTION_RANGE = /#L(\d+)(?:-L?(\d+))?$/;
@@ -125,7 +90,12 @@ export function fileMentionViews(text: string): ContentBlockView[] | null {
     const uri = match[2];
     const target = fileLinkTarget(uri);
     if (!target) { return null; }
-    views.push({ type: 'resource_link', uri, name: mentionName(match[1]), path: target.path });
+    views.push({
+      type: 'resource_link', uri, name: mentionName(match[1]), path: target.path,
+      ...(target.line !== undefined && target.line > 0
+        ? { line: target.line, endLine: target.endLine ?? target.line }
+        : {}),
+    });
   }
   return views;
 }
@@ -186,14 +156,16 @@ const renderer: RendererObject = {
       return `<a href="#" data-href="${escapeHtml(raw)}"${titleAttr}>${label}</a>`;
     }
     // [CUSTOM- A local file reference: same round-trip, but down the
-    // `openFile` channel (session cwd resolves relative paths, `data-line` jumps).
-    // The client's delegated handler already reads exactly these two attributes —
+    // `openFile` channel (session cwd resolves relative paths, `data-line` +
+    // `data-end-line` select the whole inclusive range).
+    // The client's delegated handler already reads exactly these attributes —
     // this branch only had to start emitting them.
     const file = fileLinkTarget(raw);
     if (file) {
       const lineAttr = file.line && file.line > 0 ? ` data-line="${file.line}"` : '';
+      const endAttr = file.endLine && file.endLine > 0 ? ` data-end-line="${file.endLine}"` : '';
       const titleAttr = ` title="${escapeHtml(title || file.path)}"`;
-      return `<a href="#" data-path="${escapeHtml(file.path)}"${lineAttr}${titleAttr}>${label}</a>`;
+      return `<a href="#" data-path="${escapeHtml(file.path)}"${lineAttr}${endAttr}${titleAttr}>${label}</a>`;
     }
     // Downgrade to plain text rather than emitting a dangerous href.
     // `command:` in particular would turn agent output into IDE command

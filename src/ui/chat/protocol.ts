@@ -171,7 +171,7 @@ export interface UiPrefs {
   // [CUSTOM- 每个 agent 的默认推理强度（config option `category === 'thought_level'`，
   // 新建会话时套用）；空串/缺省 = 由 agent 决定。与默认模型同一形态、同一族设置 key。
   defaultEffortByAgent?: Record<string, string>;
-  // [CUSTOM- 目录选择抽屉里「Recently used」最多列几条（3–16，默认 8）。
+  // [CUSTOM- 目录选择抽屉里「Recently used」最多列几条（0–30，默认 8；0 = 不显示该分组）。
   recentDirectoryLimit?: number;
   // [CUSTOM- 「Tail」（消息面板自动追尾，2026-10-28）：与 Times 同一形态 ——
   // tailBySession 记用户在那个会话里最后的开关状态，tailDefault 是没有记录的会话的默认值
@@ -351,6 +351,8 @@ export type ExtToChat =
   | { type: 'autoConnectPref'; value: boolean }
   // [CUSTOM- 「重开面板要不要恢复上次的会话」的当前设置值（设置面板改了它也要跟上）。
   | { type: 'restorePref'; value: RestoreChoice }
+  // [CUSTOM- 恢复快照已被丢弃（某个面点了 New session）：所有面的恢复卡片都要退场。
+  | { type: 'sessionsDismissed' }
   | { type: 'error'; sessionId?: string; message: string };
 
 /** Snapshot variant carrying wire entries. */
@@ -381,6 +383,7 @@ export type ChatToExt =
   // 所以必须放在 verifySession 守卫**之前**（§5.4 规则二）。
   // 「开始恢复」：快照留着（下一次重载还要用），但**这一次**别再问了 —— 客户端已经在建本地 tab 了。
   | { type: 'startRestore' }
+  // 丢弃快照（New session）。宿主清完会广播 `sessionsDismissed`，两个面的卡片一起退场。
   | { type: 'dismissSessions' }
   | { type: 'forgetRestorable'; sessionId: string }
   | { type: 'setRestorePref'; value: RestoreChoice }

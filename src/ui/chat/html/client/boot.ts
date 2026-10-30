@@ -112,10 +112,11 @@ export const bootClient = `
 
   /**
    * 用户在卡片上回答了。
-   * - 'remember'：把这次的选择记进设置（Restore ⇒ always、Start fresh ⇒ never），下次不再问。
+   * - 'remember'：把这次的选择记进设置（Restore ⇒ always、New session ⇒ never），下次不再问。
    * - restore：让宿主开始恢复（它把**上次聚焦的那条**加载起来），客户端把 N 条变成**本地 tab**
    * —— 其余的点开才加载（懒恢复）。
-   * - fresh：丢掉快照 + 走现有的连接/建会话逻辑（= 保持现在的行为）。
+   * - fresh（卡片上叫 New session）：丢掉快照，开一个**本地草稿页**（不立刻建真实会话）；
+   *   目录 / 额外目录 / 模式模型都可以先选，首条消息才创建会话。
    */
   function restoreChoice(kind, remember) {
     restoreAnswered = true;
@@ -124,8 +125,9 @@ export const bootClient = `
     }
     if (kind === 'fresh') {
       NS.bridge.post({ type: 'dismissSessions' });
+      if (NS.draft && NS.draft.start) { NS.draft.start(); }
+      if (NS.composer && NS.composer.focusInput) { NS.composer.focusInput(); }
       syncRestore();
-      NS.bridge.post({ type: 'connectAgent' });
       return;
     }
     NS.bridge.post({ type: 'startRestore' });
@@ -609,6 +611,14 @@ export const bootClient = `
       case 'restorePref':
         restorePref = message.value || 'ask';
         if (NS.stateCard && NS.stateCard.setRestorePref) { NS.stateCard.setRestorePref(restorePref); }
+        syncRestore();
+        break;
+
+      // [CUSTOM- 另一个面点了 New session（或清掉了恢复快照）：本面的恢复卡片也必须退场，
+      // 否则它会留下一个点不动的死卡片。正在恢复的本地 tab 不清 —— 那些仍然可以点开。
+      case 'sessionsDismissed':
+        recoverSessions = [];
+        restoreAnswered = true;
         syncRestore();
         break;
 

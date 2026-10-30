@@ -11,7 +11,7 @@ export type ContentBlockView =
   | { type: 'audio'; mimeType: string; name: string; byteLength: number }
   // [CUSTOM- `path` 存在 = 这是一个**本地文件**，客户端应当走文件通道
   // （`openFile`，由扩展侧按会话 cwd 解析相对路径）而不是 `openLink`。见 localPathOf。
-  | { type: 'resource_link'; uri: string; name: string; title?: string; description?: string; mimeType?: string; path?: string }
+  | { type: 'resource_link'; uri: string; name: string; title?: string; description?: string; mimeType?: string; path?: string; line?: number; endLine?: number }
   | { type: 'resource'; uri: string; mimeType?: string; text?: string; byteLength?: number };
 
 // [CUSTOM- `resource_link.uri` 是 agent 给的字符串，可能是 `file:///abs`、
@@ -45,6 +45,57 @@ export function localPathOf(uri: string | null | undefined): string | undefined 
   return undefined;
 }
 
+// 行号语法按 agent 实际写法剥掉：`path:12` / `path:12:5` / `path#L12` / `path#L12-L20`。
+// 剥离必须**先于** localPathOf——`GOAL.md:74` 里 `GOAL.md` 本身符合 URI scheme 的语法
+// （`.` 是合法 scheme 字符），不剥就会被当成 scheme `goal.md` 而判成"非本地路径"。
+const LINE_SUFFIX = /^(.*?):(\d+)(?::\d+)?$/;
+const FRAGMENT_LINE = /^L?(\d+)(?:-L?(\d+))?$/i;
+
+export interface FileLinkTarget {
+  path: string;
+  line?: number;
+  endLine?: number;
+}
+
+/**
+ * [CUSTOM- Split `path[:line]` / `path#Lline[-Lend]` into a local path plus an
+ * optional inclusive line range. Lives here (next to `localPathOf`) so the
+ * markdown renderer and `resource_link` conversion share one parser.
+ *
+ * A fragment we do not understand (`#section`) is not a file target: opening the
+ * file at line 1 would be worse than leaving the link inert.
+ */
+export function fileLinkTarget(href: string): FileLinkTarget | undefined {
+  const value = String(href ?? '').trim();
+  if (!value) { return undefined; }
+
+  let rest = value;
+  let line: number | undefined;
+  let endLine: number | undefined;
+
+  const hash = rest.indexOf('#');
+  if (hash >= 0) {
+    const fragment = FRAGMENT_LINE.exec(rest.slice(hash + 1));
+    if (!fragment) { return undefined; }
+    line = Number(fragment[1]);
+    endLine = fragment[2] ? Number(fragment[2]) : line;
+    rest = rest.slice(0, hash);
+  }
+
+  const trailing = LINE_SUFFIX.exec(rest);
+  if (trailing) {
+    rest = trailing[1];
+    if (line === undefined) {
+      line = Number(trailing[2]);
+      endLine = line;
+    }
+  }
+
+  const path = localPathOf(rest);
+  if (!path) { return undefined; }
+  return { path, line, endLine };
+}
+
 /** Convert one ACP content block into its view model. */
 export function toContentView(block: ContentBlock | null | undefined): ContentBlockView | null {
   if (!block) { return null; }
@@ -70,7 +121,8 @@ export function toContentView(block: ContentBlock | null | undefined): ContentBl
         byteLength: Math.floor((block.data?.length ?? 0) * 0.75),
       };
 
-    case 'resource_link':
+    case 'resource_link': {
+      const target = fileLinkTarget(block.uri);
       return {
         type: 'resource_link',
         uri: block.uri,
@@ -78,9 +130,15 @@ export function toContentView(block: ContentBlock | null | undefined): ContentBl
         title: block.title ?? undefined,
         description: block.description ?? undefined,
         mimeType: block.mimeType ?? undefined,
-        // [CUSTOM- Pre-decide which channel a click must take.
-        path: localPathOf(block.uri),
+        // [CUSTOM- Pre-decide which channel a click must take. Fall back to the
+        // URI when the fragment is not a line range (`#section`), so such links
+        // keep opening the file.
+        path: target?.path ?? localPathOf(block.uri),
+        ...(target && target.line !== undefined && target.line > 0
+          ? { line: target.line, endLine: target.endLine ?? target.line }
+          : {}),
       };
+    }
 
     case 'resource': {
       const resource = block.resource as { uri?: string; mimeType?: string | null; text?: string; blob?: string };

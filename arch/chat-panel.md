@@ -121,8 +121,9 @@
 
 - CSP：`script-src` **只有 nonce**（无 `'unsafe-inline'`），`img-src` 额外允许 `data:`（非文本内容的 base64 图片）。
 - 链接：markdown 渲染出的 `<a>` **不带真实 href**。点击分两条通道：可放行协议（仅 `http`/`https`/`mailto`）
-  写 `data-href`，回传扩展侧复验后 `openExternal`；**本地文件路径**（相对/绝对/`file:`，含 `:12` / `#L12` 行号后缀）
-  写 `data-path` + `data-line`，走 `openFile`（按会话 cwd 解析、跳到行）。两者都不是 → `link-blocked` 静态 span。
+  写 `data-href`，回传扩展侧复验后 `openExternal`；**本地文件路径**（相对/绝对/`file:`，含 `:12` / `#L12` /
+  `#L12-L30` 行号后缀）写 `data-path` + `data-line` + `data-end-line`，走 `openFile`（按会话 cwd 解析、
+  框选行区间）。两者都不是 → `link-blocked` 静态 span。
   **`command:` 必须拒绝**——那等于把 IDE 变成远程命令执行。
 - markdown：扩展侧 `SafeMarkdown` 渲染 + 客户端 `DOMParser` 白名单双重兜底。
 
@@ -348,10 +349,12 @@ pending ──用户点按钮──► selected        （回答 optionId）
    表现是 plan 卡永远停在第一次快照、切走再切回才对。**编译器看不见这类错位**（pitfall #18）。
 2. **`resource_link` 的点击通道在宿主侧决定**：`contentBlocks.localPathOf(uri)` 判本地文件 → 填 `path`
    → 客户端写 `data-path`（走 `openFile`，相对路径按会话 cwd 解析）；http/https/mailto → `data-href`；
+   `fileLinkTarget` 同时从 `#L12-L30` 解析出 `line` / `endLine`，客户端再写 `data-line` / `data-end-line`。
    **两者都不是 → 静态 chip**（不得长成可点的样子，否则点一次吃一个 `Blocked link` 警告）。
    注意 Windows 盘符（`C:\x`）符合 URI scheme 语法，**必须先于 scheme 判定**。
-   **同一个判定用于 markdown 正文链接**（184）：`markdown.ts` 的 `link()` 先剥行号后缀（`path:12` / `path#L12`）
-   再调**同一个** `localPathOf`，命中就写 `data-path` + `data-line`。此前它只放行 http/https/mailto，
+   **同一个解析器用于 markdown 正文链接**（184）：`markdown.ts` 的 `link()` 调
+   `contentBlocks.fileLinkTarget`（先剥行号后缀 `path:12` / `path#L12` / `path#L12-L30`，再 `localPathOf`），
+   命中就写 `data-path` + `data-line` + `data-end-line`。此前它只放行 http/https/mailto，
    agent 写的 `[GOAL.md:74](GOAL.md:74)` 全被渲染成带删除线的 `link-blocked` 灰字 —— 看着能点、点了没反应。
    **剥行号必须早于 scheme 判定**：`GOAL.md:74` 里 `GOAL.md` 本身就是合法 scheme 语法。
 3. **工具卡的 body 只有一个构建入口 `fillToolBody(body, tool)`**，`render()` 与 `update()` 共用。

@@ -796,8 +796,7 @@ export const tabsClient = `
     cwdBtn.hidden = false;
     cwdBtn.disabled = false;
     cwdBtn.textContent = summary.cwd || '';
-    // The session id stays in the tooltip: it is what you paste into a bug report.
-    cwdBtn.title = (summary.cwd || '') + '\\n' + summary.sessionId;
+    cwdBtn.title = summary.cwd || '';
   }
 
   /**

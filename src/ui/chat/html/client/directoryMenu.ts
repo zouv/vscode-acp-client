@@ -138,10 +138,7 @@ export const directoryMenuClient = `
     }
 
     // A session that has already started cannot have its directory changed: the
-    // protocol fixes it at creation. Offering a "change" here would be a lie, so
-    // the candidates open a NEW draft instead.
-    listEl.appendChild(NS.dom.el('div', 'outline-group',
-      'This session has already started, so its directory is fixed. Pick one to start a new session there:'));
+    // protocol fixes it at creation, so the candidates below open a NEW draft instead.
     group('Workspace folders', folders);
     group('Recently used', recent, true);
     listEl.appendChild(makeRow('Another directory\\u2026', null, 'outline-browse'));

@@ -774,7 +774,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // 「开始新的」：用户不要这些 tab 了 —— 清掉快照，别再拿它问。
         this.restoreDismissed = true;
         this.openSessions = null;
+        // 排队中的防抖写入可能在清空后再把旧快照写回来（New session 不建会话，没有后续
+        // session-created 去覆盖它），先取消。
+        if (this.snapshotTimer) { clearTimeout(this.snapshotTimer); this.snapshotTimer = null; }
         this.globalState?.update(OPEN_SESSIONS_KEY, undefined);
+        // 另一个已打开的面也要把恢复卡片撤掉（它靠随后的 connectAgent/focus 间接退场的旧路径
+        // 已被 New session 的草稿页取代）。
+        this.post({ type: 'sessionsDismissed' });
         log(`${LOG_PREFIX}: open-session snapshot dismissed`);
         return;
       case 'forgetRestorable': {
@@ -1017,8 +1023,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         if (efforts !== undefined) { next.defaultEffortByAgent = efforts; }
         const recentLimit = (msg as { recentDirectoryLimit?: unknown }).recentDirectoryLimit;
         if (recentLimit !== undefined) {
-          next.recentDirectoryLimit = clampNumber(recentLimit, 3, 16,
-            ChatPanelHost.DEFAULT_RECENT_DIRECTORIES);
+          next.recentDirectoryLimit = ChatPanelHost.clampRecentDirectories(recentLimit);
         }
         const markdownStyle = (msg as { markdownStyle?: unknown }).markdownStyle;
         if (markdownStyle !== undefined) { next.markdownStyle = resolveMarkdownStyle(markdownStyle); }
@@ -1164,7 +1169,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           additionalDirectories: source.additionalDirectories,
           focus: true,
         })
-          .then(() => this.refreshSessions())
+          .then(created => {
+            this.placeSessionAfterInTabOrder(sessionId, created.sessionId);
+            this.refreshSessions();
+          })
           .catch(e => this.reportError(sessionId, e));
         return;
       }
@@ -3064,6 +3072,23 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   /** How many recent directories the picker offers (user-configurable; keeps the drawer scannable). */
   private static readonly DEFAULT_RECENT_DIRECTORIES = 8;
 
+  /** 「Recently used」的条数范围；0 = 不显示该分组。 */
+  private static readonly RECENT_DIRECTORIES_MIN = 0;
+  private static readonly RECENT_DIRECTORIES_MAX = 30;
+
+  /**
+   * 条数的唯一夹紧口（读取 / 回显 / 写入共用）。空串与空白视为「没填」→ 默认值：
+   * `Number('') === 0`，直接交给 clampNumber 会把清空输入框静默解释成 0（隐藏分组）。
+   */
+  private static clampRecentDirectories(value: unknown): number {
+    if (value === undefined || value === null
+      || (typeof value === 'string' && value.trim() === '')) {
+      return ChatPanelHost.DEFAULT_RECENT_DIRECTORIES;
+    }
+    return clampNumber(value, ChatPanelHost.RECENT_DIRECTORIES_MIN,
+      ChatPanelHost.RECENT_DIRECTORIES_MAX, ChatPanelHost.DEFAULT_RECENT_DIRECTORIES);
+  }
+
   /** 回放预渲染 markdown 的每片条数（一次几百条会变成宿主线程上的长任务）。 */
   private static readonly PREFILL_BATCH = 40;
 
@@ -3071,8 +3096,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   private static readonly SETTLE_PREFILL_MS = 600;
 
   private recentLimit(): number {
-    return clampNumber(this.uiPrefs?.recentDirectoryLimit, 3, 16,
-      ChatPanelHost.DEFAULT_RECENT_DIRECTORIES);
+    return ChatPanelHost.clampRecentDirectories(this.uiPrefs?.recentDirectoryLimit);
   }
 
   // 草稿页的输入卡要"显示完整"（模式/模型/命令）。
@@ -3346,6 +3370,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   private async recentDirectories(agent: string | null): Promise<string[]> {
     if (!agent) { return []; }
     const limit = this.recentLimit();
+    // 0 = 分组关掉：连 agent 的 session/list 都不必问。
+    if (limit <= 0) { return []; }
     const store = this.sessionManager.getHistoryStore();
     // [CUSTOM- 同一目录的不同写法只留一条（2026-10-28）。Windows 上同一个文件夹会被写成
     // 大写盘符与小写盘符两种（本地缓存与 agent 的 session/list 各记一种），原来按**原字符串**
@@ -3662,6 +3688,21 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     return known.concat(unknown);
   }
 
+  /** [CUSTOM- 新会话 tab 落在源会话右边：把完整顺序写回 `uiPrefs.tabOrder` 并广播。 */
+  private placeSessionAfterInTabOrder(sourceId: string, newSessionId: string): void {
+    const liveIds = this.sessionManager.getLiveSessions().map(session => session.sessionId);
+    const order = sanitizeTabOrder(
+      insertSessionAfter(this.uiPrefs?.tabOrder ?? [], liveIds, sourceId, newSessionId),
+    );
+    const next: UiPrefs = {
+      ...(this.uiPrefs ?? { outlineMode: 'popup' as const, outlineWidth: 240 }),
+      tabOrder: order,
+    };
+    this.uiPrefs = next;
+    this.globalState?.update(UI_PREFS_KEY, next);
+    this.post({ type: 'uiPrefs', ...next });
+  }
+
   /**
    * [CUSTOM- 可以恢复的会话：快照里**现在不活的**那些（活着的已经是 tab 了）。
    *
@@ -3763,9 +3804,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       {
         key: 'panel.recentDirectoryLimit', group: 'chat', type: 'number', scope: 'panel',
         label: 'Recently used directories',
-        description: 'How many recent directories the picker offers (3–16).',
-        value: prefs.recentDirectoryLimit ?? ChatPanelHost.DEFAULT_RECENT_DIRECTORIES,
-        min: 3, max: 16,
+        description: `How many recent directories the picker offers (${ChatPanelHost.RECENT_DIRECTORIES_MIN}–${ChatPanelHost.RECENT_DIRECTORIES_MAX}; 0 hides the group).`,
+        value: ChatPanelHost.clampRecentDirectories(prefs.recentDirectoryLimit),
+        min: ChatPanelHost.RECENT_DIRECTORIES_MIN,
+        max: ChatPanelHost.RECENT_DIRECTORIES_MAX,
       },
       ...this.defaultAgentItems(prefs),
       {
@@ -4062,7 +4104,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         break;
       case 'panel.recentDirectoryLimit':
         this.patchUiPrefs({
-          recentDirectoryLimit: clampNumber(value, 3, 16, ChatPanelHost.DEFAULT_RECENT_DIRECTORIES),
+          recentDirectoryLimit: ChatPanelHost.clampRecentDirectories(value),
         });
         break;
       case 'panel.markdownStyle':
@@ -4683,6 +4725,37 @@ function sanitizeTabOrder(value: unknown): string[] {
     out.push(entry);
     if (out.length >= 200) { break; }
   }
+  return out;
+}
+
+/**
+ * [CUSTOM- 把新会话插到源会话右边。`tabOrder` 里可能留着已关闭 / 待恢复的 id
+ * （客户端会忽略不存在的），所以先原样保留，再把不在表里的 live 会话按宿主顺序补齐 ——
+ * 这正是客户端 `tabModels()` 的排序规则；只 push 新 id 会让源会话不在表里时新 tab 排到末尾。
+ */
+export function insertSessionAfter(
+  tabOrder: readonly string[],
+  liveIds: readonly string[],
+  sourceId: string,
+  newSessionId: string,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of tabOrder) {
+    if (typeof id !== 'string' || id.length === 0 || seen.has(id)) { continue; }
+    seen.add(id);
+    out.push(id);
+  }
+  for (const id of liveIds) {
+    if (typeof id !== 'string' || id.length === 0 || id === newSessionId || seen.has(id)) { continue; }
+    seen.add(id);
+    out.push(id);
+  }
+  const existing = out.indexOf(newSessionId);
+  if (existing >= 0) { out.splice(existing, 1); }
+  const source = out.indexOf(sourceId);
+  if (source >= 0) { out.splice(source + 1, 0, newSessionId); }
+  else { out.push(newSessionId); }
   return out;
 }
 

@@ -39,7 +39,7 @@ import { SessionUpdateHandler } from '../handlers/SessionUpdateHandler';
 // [CUSTOM- The tab dot's "waiting" state is read from these two bridges.
 import { PermissionBridge } from '../handlers/PermissionBridge';
 import { ElicitationBridge } from '../handlers/ElicitationBridge';
-import { isBlankText } from '../ui/chat/content/contentBlocks';
+import { fileLinkTarget, isBlankText, toContentView } from '../ui/chat/content/contentBlocks';
 // [CUSTOM- The markdown link router under test.
 import { SafeMarkdown } from '../ui/chat/markdown';
 import { choiceChanges, choiceSnapshotFromState, choiceSnapshotPatched } from '../ui/chat/sessionChoices';
@@ -51,7 +51,7 @@ import { toToolCallView } from '../ui/chat/content/toolCalls';
 import type { ChatSurface, SurfaceKey } from '../ui/chat/ChatSurface';
 // [CUSTOM- `resolveAutoConnect` / `PanelPrefsIO` are exported so this
 // file can drive the settings seam with a stub instead of the developer's settings.json.
-import { ChatPanelHost, resolveAutoConnect, type PanelPrefsIO } from '../ui/chat/ChatPanelHost';
+import { ChatPanelHost, insertSessionAfter, resolveAutoConnect, type PanelPrefsIO } from '../ui/chat/ChatPanelHost';
 // [CUSTOM- The notification seam (see RecordingChannel).
 import type { NoticeChannel } from '../ui/chat/SessionNotifier';
 import {
@@ -102,7 +102,7 @@ function loadFixture(): Fixture | null {
  * interface, so a faithful stub is cheap.
  */
 class RecordingSurface implements ChatSurface {
-  readonly key: SurfaceKey = 'view';
+  constructor(readonly key: SurfaceKey = 'view') {}
   readonly sent: ExtToChatMessage[] = [];
   html = '';
   reveals = 0;
@@ -538,6 +538,18 @@ suite('chat panel: recent directories for the picker', () => {
 
   test('limit 是去重之后再截断的', () => {
     assert.deepStrictEqual(recentDirectoryList(['/a', '/A', '/b', '/c'], 2, [], 'win32'), ['/a', '/b']);
+  });
+
+  // [CUSTOM- 2026-10-30：条数范围放宽到 0–30。0 是「不显示该分组」，不是 falsy 回落。
+  test('limit 0 表示一条都不列（0 不会被当成"没设置"）', () => {
+    assert.deepStrictEqual(recentDirectoryList(['/a', '/b'], 0, [], 'win32'), []);
+  });
+
+  test('limit 30 生效（旧的 16 上限已移除）', () => {
+    const paths = Array.from({ length: 35 }, (_, i) => `/dir/${i}`);
+    const list = recentDirectoryList(paths, 30, [], 'linux');
+    assert.strictEqual(list.length, 30);
+    assert.strictEqual(list[29], '/dir/29');
   });
 });
 
@@ -2207,6 +2219,8 @@ suite('chat panel: image attachments ()', () => {
     assert.strictEqual(att[0].name, 'notes.txt:12-40', '显示名（含行区间）同源');
     assert.ok(String(att[0].uri).indexOf('#L12-40') >= 0, 'uri 带 #L 片段');
     assert.ok(att[0].path, 'toContentView 认出本地文件 ⇒ 气泡里的 chip 点击走 openFile: ' + JSON.stringify(att[0]));
+    assert.strictEqual(att[0].line, 12, '气泡 chip 也带起始行');
+    assert.strictEqual(att[0].endLine, 40, '以及结束行（点击框选整段）');
 
     const blocks = manager.sent[0].prompt as Array<Record<string, any>>;
     const link = blocks.find(b => b.type === 'resource_link');
@@ -2710,13 +2724,15 @@ suite('chat panel: replay fidelity ()', () => {
       const contents = state.entries.filter(e => e.kind === 'content');
       assert.strictEqual(users.length, 1, 'the mention does not become a second user bubble');
       assert.strictEqual(contents.length, 0, 'and not a content row either');
-      const user = users[0] as { text: string; attachments?: Array<{ type: string; name: string; path?: string; uri: string }> };
+      const user = users[0] as { text: string; attachments?: Array<{ type: string; name: string; path?: string; uri: string; line?: number; endLine?: number }> };
       assert.strictEqual(user.text, '还是很多波浪线', 'the prose stays the bubble text');
       assert.ok(user.attachments, 'the bubble carries the file reference');
       assert.strictEqual(user.attachments!.length, 1);
       assert.strictEqual(user.attachments![0].type, 'resource_link');
       // `path` 存在 ⇒ chip 点击走 openFile（039/205 的既有约定），与发送时那条同形。
       assert.strictEqual(user.attachments![0].path, 'd:\\work\\project\\Source\\Client\\DemoFile.cs');
+      assert.strictEqual(user.attachments![0].line, 437, '回放的 mention 也带起始行');
+      assert.strictEqual(user.attachments![0].endLine, 440, '以及结束行（点击框选整段）');
       // 名字归一成 live chip 的写法（composer.ts refLabel 的 `<name>:<start>-<end>`）。
       assert.strictEqual(user.attachments![0].name, 'DemoFile.cs:437-440');
     } finally {
@@ -3401,6 +3417,124 @@ suite('chat panel: ui prefs merge ()', () => {
     harness.host.onMessage({ type: 'setUiPref', tabOrder: 'not a list' });
     await waitForPrefs(harness);
     assert.deepStrictEqual(prefsOf(harness).tabOrder, [], 'a non-list is not a list');
+  });
+
+  // [CUSTOM- 2026-10-30：范围 0–30。0 必须原样保留（隐藏分组），清空输入框则回落默认 8。
+  test('the recent-directory limit is clamped to 0–30, and an empty box means the default', async () => {
+    const harness = makeHarness('s-1');
+
+    async function write(value: unknown): Promise<unknown> {
+      harness.surface.sent.length = 0;
+      harness.host.onMessage({ type: 'setSetting', key: 'panel.recentDirectoryLimit', value });
+      await waitForPrefs(harness);
+      return prefsOf(harness).recentDirectoryLimit;
+    }
+
+    assert.strictEqual(await write(0), 0, '0 is a real value (hide the group), not "unset"');
+    assert.strictEqual(await write('0'), 0, 'the number input posts strings');
+    assert.strictEqual(await write(30), 30, 'the old 16 ceiling is gone');
+    assert.strictEqual(await write(31), 30, 'above the range clamps');
+    assert.strictEqual(await write(-1), 0, 'below the range clamps');
+    assert.strictEqual(await write(''), 8, 'clearing the box falls back to the default, not 0');
+    assert.strictEqual(await write('   '), 8, 'whitespace counts as cleared');
+    assert.strictEqual(await write('abc'), 8, 'non-numeric falls back');
+  });
+
+  test('a setUiPref merge keeps 0 and later writes do not reset it', async () => {
+    const harness = makeHarness('s-1');
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'setUiPref', recentDirectoryLimit: 0 });
+    await waitForPrefs(harness);
+    assert.strictEqual(prefsOf(harness).recentDirectoryLimit, 0, '0 survives the merge path');
+
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'setUiPref', outlineWidth: 300 });
+    await waitForPrefs(harness);
+    assert.strictEqual(prefsOf(harness).recentDirectoryLimit, 0,
+      'a later write without the field must not reset it');
+
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'setUiPref', recentDirectoryLimit: 99 });
+    await waitForPrefs(harness);
+    assert.strictEqual(prefsOf(harness).recentDirectoryLimit, 30);
+  });
+});
+
+// [CUSTOM- 2026-10-30：「New Session in This Folder」的新 tab 要落在源 tab 右侧。
+suite('chat panel: 新会话 tab 插到源 tab 右侧', () => {
+  async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+    for (let i = 0; i < 100; i++) {
+      if (predicate()) { return; }
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.fail(`timed out waiting for ${label}`);
+  }
+
+  test('insertSessionAfter materializes the live order first', () => {
+    assert.deepStrictEqual(insertSessionAfter(['a', 'b', 'c'], ['a', 'b', 'c'], 'b', 'n'),
+      ['a', 'b', 'n', 'c'], 'source already ordered');
+    assert.deepStrictEqual(insertSessionAfter([], ['a', 'b', 'c'], 'b', 'n'),
+      ['a', 'b', 'n', 'c'], 'never dragged: source is not in tabOrder yet');
+    assert.deepStrictEqual(insertSessionAfter(['x'], ['a', 'b', 'c'], 'b', 'n'),
+      ['x', 'a', 'b', 'n', 'c'], 'stale ids stay put; live ids fill in host order');
+  });
+
+  test('insertSessionAfter keeps restoring ids and never duplicates', () => {
+    assert.deepStrictEqual(insertSessionAfter(['restoring', 'a'], ['a', 'b'], 'a', 'restoring'),
+      ['a', 'restoring', 'b'], 'an id already present is moved, not copied');
+    assert.deepStrictEqual(insertSessionAfter(['a'], ['a'], 'missing', 'n'),
+      ['a', 'n'], 'unknown source falls back to the end');
+  });
+
+  test('newSessionInDirectory writes the new id right after the source', async () => {
+    class BesideManager extends SessionManager {
+      override async createSession(
+        agentName: string,
+        opts: { cwd?: string } = {},
+      ): Promise<SessionInfo> {
+        const sessionId = 's-new';
+        registerFakeSession(this, sessionId, agentName, { cwd: opts.cwd ?? '/tmp' });
+        return {
+          sessionId,
+          agentId: 'fake-agent-id',
+          agentName,
+          agentDisplayName: agentName,
+          cwd: opts.cwd ?? '/tmp',
+          createdAt: new Date().toISOString(),
+          initResponse: {},
+          modes: null,
+          models: null,
+          configOptions: null,
+          availableCommands: [],
+        } as unknown as SessionInfo;
+      }
+    }
+    let manager!: BesideManager;
+    const memento = new FakeMemento();
+    const harness = makeHarness('s-1', 'Claude Code', handler => {
+      manager = new BesideManager(new AgentManager(), new ConnectionManager(handler), handler);
+      registerFakeSession(manager, 's-2', 'Claude Code');
+      return manager;
+    }, new StubPrefs(), {}, memento);
+
+    const prefMessages = () =>
+      harness.surface.sent.filter(m => m.type === 'uiPrefs') as Array<Record<string, unknown>>;
+    const latestPrefs = () => prefMessages()[prefMessages().length - 1];
+
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'setUiPref', tabOrder: ['s-2', 's-1'] });
+    await waitFor(() => prefMessages().length > 0, 'the tab order to be stored');
+
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'newSessionInDirectory', sessionId: 's-1' });
+    await waitFor(
+      () => !!(latestPrefs()?.tabOrder as string[] | undefined)?.includes('s-new'),
+      'the inserted tab order',
+    );
+
+    assert.deepStrictEqual(latestPrefs().tabOrder, ['s-2', 's-1', 's-new']);
+    const stored = memento.get<{ tabOrder?: string[] }>('vac.outlinePrefs.v1');
+    assert.deepStrictEqual(stored?.tabOrder, ['s-2', 's-1', 's-new'], 'and it is persisted');
   });
 });
 
@@ -4216,11 +4350,13 @@ suite('chat panel: markdown links to local files', () => {
     const html = render('[a.ts](./src/a.ts#L12)');
     assert.ok(html.includes('data-path="./src/a.ts"'), `got ${html}`);
     assert.ok(html.includes('data-line="12"'), `got ${html}`);
+    assert.ok(html.includes('data-end-line="12"'), `single line still selects that line: ${html}`);
   });
 
-  test('a fragment range jumps to its first line', () => {
+  test('a fragment range selects the whole range', () => {
     const html = render('[a.ts](src/a.ts#L12-L30)');
     assert.ok(html.includes('data-line="12"'), `got ${html}`);
+    assert.ok(html.includes('data-end-line="30"'), `got ${html}`);
   });
 
   test('an absolute path survives the line split', () => {
@@ -4239,10 +4375,11 @@ suite('chat panel: markdown links to local files', () => {
     assert.ok(!html.includes('link-blocked'), `got ${html}`);
   });
 
-  test('a path without a line still opens, with no data-line', () => {
+  test('a path without a line still opens, with no line attributes', () => {
     const html = render('[notes.md](docs/notes.md)');
     assert.ok(html.includes('data-path="docs/notes.md"'), `got ${html}`);
     assert.ok(!html.includes('data-line='), `got ${html}`);
+    assert.ok(!html.includes('data-end-line='), `got ${html}`);
   });
 
   test('quotes in a path are escaped, not able to break out of the attribute', () => {
@@ -4272,6 +4409,43 @@ suite('chat panel: markdown links to local files', () => {
     const section = render('[see](#section)');
     assert.ok(section.includes('link-blocked'),
       `an anchor we cannot resolve must not silently open a file: ${section}`);
+  });
+});
+
+// [CUSTOM- 2026-10-30：文件引用的行区间解析与 resource_link 视图共用一份。
+suite('chat panel: file link ranges', () => {
+  test('fileLinkTarget returns the whole inclusive range', () => {
+    assert.deepStrictEqual(fileLinkTarget('./src/a.ts#L12-L30'),
+      { path: './src/a.ts', line: 12, endLine: 30 });
+    assert.deepStrictEqual(fileLinkTarget('GOAL.md:74'),
+      { path: 'GOAL.md', line: 74, endLine: 74 }, 'single line selects that line');
+    assert.deepStrictEqual(fileLinkTarget('a.ts#L12'),
+      { path: 'a.ts', line: 12, endLine: 12 });
+    assert.strictEqual(fileLinkTarget('https://example.com/x#L12'), undefined);
+    assert.strictEqual(fileLinkTarget('a.ts#section'), undefined,
+      'an unusable fragment is not a file target');
+  });
+
+  test('resource_link views carry the range, and #section links stay openable', () => {
+    const file = path.resolve(__dirname, 'fixtures', 'a.ts');
+    const url = pathToFileURL(file).toString();
+
+    const ranged = toContentView({ type: 'resource_link', uri: `${url}#L12-L30`, name: 'a.ts' } as any);
+    assert.ok(ranged && ranged.type === 'resource_link');
+    assert.strictEqual(ranged.path, file);
+    assert.strictEqual(ranged.line, 12);
+    assert.strictEqual(ranged.endLine, 30);
+
+    const section = toContentView({ type: 'resource_link', uri: `${url}#section`, name: 'a.ts' } as any);
+    assert.ok(section && section.type === 'resource_link');
+    assert.ok(section.path, 'an unrecognized fragment still opens the file');
+    assert.strictEqual(section.line, undefined);
+    assert.strictEqual(section.endLine, undefined);
+
+    const remote = toContentView({ type: 'resource_link', uri: 'https://example.com/a.ts#L1', name: 'a.ts' } as any);
+    assert.ok(remote && remote.type === 'resource_link');
+    assert.strictEqual(remote.path, undefined);
+    assert.strictEqual(remote.line, undefined);
   });
 });
 
@@ -4788,8 +4962,28 @@ suite('chat panel: session restore ()', () => {
     const reply = harness.surface.sent.filter(m => m.type === 'restorePref').pop() as unknown as { value: string };
     assert.strictEqual(reply.value, 'always', '回话带上真正的值（另一个面/设置面板改了也要跟上）');
 
+    // [CUSTOM- 2026-10-30：New session 不再建真实会话，两个面的恢复卡片只能靠这条广播退场。
+    const second = new RecordingSurface('editor');
+    harness.host.attachSurface(second, { agentName: 'Claude Code', sessionId: 's-1' });
+    second.sent.length = 0;
     harness.host.onMessage({ type: 'dismissSessions' });
     await waitFor(() => snapshotOf(memento) === undefined, 'the snapshot to be dropped');
+    await waitFor(() => harness.surface.sent.some(m => m.type === 'sessionsDismissed'),
+      'the first surface to hear about it');
+    await waitFor(() => second.sent.some(m => m.type === 'sessionsDismissed'),
+      'the other surface to hear about it');
+  });
+
+  test('dismiss cancels a snapshot write that is already queued', async () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    // A focus queues the 300ms debounced snapshot write. Dismiss before it fires:
+    // without clearing the timer it would write the old snapshot back after the clear.
+    harness.host.onMessage({ type: 'focusSession', sessionId: 's-1' });
+    harness.host.onMessage({ type: 'dismissSessions' });
+    await new Promise(resolve => setTimeout(resolve, 350));
+    assert.strictEqual(memento.get('vac.openSessions.v1'), undefined,
+      'the queued write must not resurrect the dismissed snapshot');
   });
 
   test('startRestore loads the session that was focused, and leaves the rest lazy', async () => {

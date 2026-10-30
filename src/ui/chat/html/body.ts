@@ -176,7 +176,7 @@ export function body(surface: SurfaceKey = 'view'): string {
              与 #stateActions 同形但**分开两块** —— 两组的显隐条件不同（提问时连接按钮要退场）。 -->
         <div id="restoreActions" class="state-actions" hidden>
           <button id="restoreAccept" class="state-connect"></button>
-          <button id="restoreFresh" class="state-fresh">Start fresh</button>
+          <button id="restoreFresh" class="state-fresh">New session</button>
         </div>
         <label id="restoreRememberRow" class="state-opt" hidden>
           <input type="checkbox" id="restoreRemember">

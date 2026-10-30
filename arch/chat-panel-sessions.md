@@ -227,15 +227,20 @@ key 由宿主算好。
 | 顺序 | 待恢复的 tab 与真会话**放进同一张 `tabOrder` 排名**（`tabModels()` 先把两者合成一个列表再排）—— 否则恢复出来的会全挤到真会话后面 |
 | `keepOthers` | `handleOpenHistorySession` 的**替换语义（099）只属于历史选择器**（那是导航，不该越点越多）。恢复是"多开" ⇒ 新增 `keepOthers` 跳过"关掉当前聚焦会话"那一段；其余（preload times → `openExistingSession`）一字未改 |
 | 关掉一个未加载的 | 只丢本地那条 + `forgetRestorable`（宿主把它从快照里摘掉）—— 否则下次重载还会拿它问你，而用户的动作明确是"不要它"。会话**已经活了**时反之：`setSessions` 里让真 tab 顶替那条本地 tab |
-| 【Start fresh】 | `dismissSessions`（清快照 + 本次不再问）+ `connectAgent` ⇒ 走现有的"连接就建一个"逻辑 = 用户要的"保持现在的逻辑" |
-| 记住选择 | 卡片上勾了「Remember my choice」再点按钮 ⇒ Restore → `always`、Start fresh → `never`（写设置并回话广播，另一个面/设置面板改了也跟上） |
+| 【New session】 | `dismissSessions`（清快照 + 本次不再问；宿主同时取消排队中的防抖写入并广播 `sessionsDismissed`）+ 客户端 `startDraft()` ⇒ 停在**全新草稿页**，目录 / 额外目录 / 模式模型都可先配置，**不立刻建真实会话**（旧版是 `connectAgent`，会立即建一个空会话） |
+| 记住选择 | 卡片上勾了「Remember my choice」再点按钮 ⇒ Restore → `always`、New session → `never`（写设置并回话广播，另一个面/设置面板改了也跟上） |
+| 跨面退场 | `sessionsDismissed` 是广播：另一个已打开的面收到后清空本地 `recoverSessions` 并让卡片退场。**不清** `tabs.setRestoring` —— 已点过 Restore 的本地待恢复 tab 仍然可点开 |
+
+> 既有漂移（本轮未修）：`vac.restoreSessionsOnOpen = 'always'` 目前仍会显示恢复卡片（`recoverableSessions()` 只排除 `never`）；`never` 下连接时仍会直接建真实会话。
 | 失败不纠缠 | `startRestore` 里那条加载失败（会话在 agent 侧已经没了）⇒ 把它从快照里摘掉 + 报错，下次不再问 |
 
 **不做**：不恢复草稿页（未发出的内容只在客户端，重载即失 —— 同浏览器不恢复未提交表单）；
 「未加载」的 tab 不可拖拽（顺序已由 tabOrder 决定，与草稿同规矩）。
 
-**验收**：客户端桩 5 条（卡片提问态与退场规则、两个按钮 + 勾选把回答交给 boot、待恢复 tab 的
-排序/点击/关闭、活了就让位）；宿主 6 条（设置消毒、快照写盘并端给下一个窗口、`keepOthers` 不关别的、
-有快照时不自动建会话而 `never` 时照建、三条消息落地、`startRestore` 只加载聚焦那条）；
+**验收**：客户端桩 8 条（卡片提问态与退场规则、两个按钮 + 勾选把回答交给 boot、New session 开草稿
+且不建会话、Remember 写 never、New session 文案、待恢复 tab 的排序/点击/关闭、活了就让位）；
+宿主 8 条（设置消毒、快照写盘并端给下一个窗口、`keepOthers` 不关别的、有快照时不自动建会话而
+`never` 时照建、三条消息落地、`sessionsDismissed` 双面广播、dismiss 取消排队中的快照写入、
+`startRestore` 只加载聚焦那条）；
 真 Chromium `#restorecard` / `#restorecardprobe`（相位/文案/三个待恢复 tab + 点一下发出去的是
 `startRestore`）。

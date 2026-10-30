@@ -1198,6 +1198,14 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     assert.strictEqual(els.cwdBtn.textContent, '/late/arrival');
   });
 
+  // [CUSTOM- 2026-10-30：地址栏目录按钮的 tooltip 只留目录路径，不再附带 SessionId。
+  test('the address-bar tooltip carries the directory only (no session id)', () => {
+    const { NS, els } = tabStrip();
+    NS.tabs.setFocus(summary('s-secret'));
+    assert.strictEqual(els.cwdBtn.title, '/tmp');
+    assert.ok(!String(els.cwdBtn.title).includes('s-secret'));
+  });
+
   // [CUSTOM- 手工排序：按住左键把 tab 拖到目标位置，顺序就变成那样，并且
   // **立刻落盘**（setUiPref → globalState）—— 顺序是工作区级的，另一个面/下次重开面板看到同一条。
   // [CUSTOM- 落点是**指针在条带上的横坐标**（不再要求"命中某个 tab 元素"）：
@@ -1345,7 +1353,7 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     assert.strictEqual(posted.filter(m => m.type === 'setUiPref').length, 0, 'an unchanged order is not a write');
   });
 
-  test('a saved order wins, and a brand-new session joins at the end (198)', () => {
+  test('a saved order wins; ids it does not mention keep the host order after them (198)', () => {
     const { NS, els } = tabStrip();
     NS.tabs.applyPrefs({ tabOrder: ['s3', 's1'] });
     NS.tabs.setSessions([summary('s1'), summary('s2'), summary('s3')]);
@@ -1353,7 +1361,8 @@ suite('chat client logic: tab strip (stub DOM)', () => {
       'known ids in the saved order, ids it does not mention keep the host order after them');
 
     NS.tabs.setSessions([summary('s1'), summary('s2'), summary('s3'), summary('s4')]);
-    assert.deepStrictEqual(orderOf(els), ['s3', 's1', 's2', 's4'], 'a new session lands last, not first');
+    assert.deepStrictEqual(orderOf(els), ['s3', 's1', 's2', 's4'],
+      'an id the host has not placed yet joins at the end; New Session in This Folder writes its own place');
   });
 
   test('a drag that starts on the close button does not move anything (198)', () => {
@@ -1951,6 +1960,18 @@ suite('chat client logic: tool-card markdown round trip (stub DOM)', () => {
   function toolWith(over: Record<string, unknown>): Record<string, unknown> {
     return { ...toolWithText('out'), ...over };
   }
+
+  // [CUSTOM- 2026-10-30：ACP 的 location 只有单行 ⇒ 框选整行，与输入框单行引用一致。
+  test('a location chip carries a single-line selection range', () => {
+    const { NS } = loadClient();
+    const card = NS.toolCallView.render(toolWith({
+      locations: [{ path: '/x/a.ts', name: 'a.ts', line: 5 }],
+    }), 'e-loc');
+    const chip = card.querySelector('.chip') as StubNode;
+    assert.strictEqual(chip.getAttribute('data-path'), '/x/a.ts');
+    assert.strictEqual(chip.getAttribute('data-line'), '5');
+    assert.strictEqual(chip.getAttribute('data-end-line'), '5');
+  });
 
   test('the head shows the agent description, and falls back to the title', () => {
     const { NS } = loadClient();
@@ -3279,6 +3300,27 @@ suite('chat client logic: image chip and pinned question (stub DOM)', () => {
     // '.src' is a property assignment, not setAttribute — read it back the same way.
     assert.strictEqual(thumb.src, 'data:image/png;base64,AAAA');
     assert.strictEqual(node.querySelector('.content-image-name').textContent, 'shot.png');
+  });
+
+  // [CUSTOM- 2026-10-30：消息卡片里的文件 chip 也要带行区间，点击才框选整段。
+  test('a resource_link chip carries its line range to the click handler', () => {
+    const { NS } = loadClient();
+    const row = NS.toolCallView.renderContentItem({
+      type: 'content',
+      block: { type: 'resource_link', uri: 'file:///x/a.ts#L12-40', name: 'a.ts', path: '/x/a.ts', line: 12, endLine: 40 },
+    }, 'k1', 'e1');
+    const chip = row.querySelector('.chip') as StubNode;
+    assert.strictEqual(chip.getAttribute('data-path'), '/x/a.ts');
+    assert.strictEqual(chip.getAttribute('data-line'), '12');
+    assert.strictEqual(chip.getAttribute('data-end-line'), '40');
+
+    const plain = NS.toolCallView.renderContentItem({
+      type: 'content',
+      block: { type: 'resource_link', uri: 'file:///x/a.ts', name: 'a.ts', path: '/x/a.ts' },
+    }, 'k2', 'e1');
+    const plainChip = plain.querySelector('.chip') as StubNode;
+    assert.strictEqual(plainChip.getAttribute('data-line'), null);
+    assert.strictEqual(plainChip.getAttribute('data-end-line'), null, 'no line info ⇒ just open the file');
   });
 
   /**
@@ -5150,6 +5192,27 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
       '请宿主记下"不想再看到"（列表是派生的，删不掉源数据）');
   });
 
+  // [CUSTOM- 2026-10-30：已开始会话的抽屉不再显示「目录已固定」说明；
+  // 草稿页的「将在此创建」说明是另一条分支，必须保留。
+  test('已开始会话的抽屉不再有「already started」说明，分组与行不变', () => {
+    const d = drawer();
+    d.NS.directoryMenu.refresh(null);       // null = 已开始的会话（非草稿）
+    d.open();
+    d.choices(['/recent']);
+    const groups = d.list.querySelectorAll('.outline-group').map(node => node.textContent);
+    assert.deepStrictEqual(groups, ['Workspace folders', 'Recently used']);
+    assert.ok(!d.list.textContent.includes('already started'), '那段说明必须删掉');
+    assert.deepStrictEqual(rows(d.list), ['/ws', '/recent', null],
+      '分组与「Another directory…」保持原样');
+  });
+
+  test('草稿抽屉仍保留「将在此创建」说明（防删错分支）', () => {
+    const d = drawer();
+    d.open();
+    d.choices(['/recent']);
+    assert.ok(d.list.textContent.includes('This session will be created in:'));
+  });
+
   test('boot 那条"切草稿/切会话"的路径只在**首次**问一次，之后不再打扰宿主', () => {
     const d = drawer();
     // 首次必须问：草稿要据此采用默认目录，头部不能停在 "Default directory"（058 的第一条坑）。
@@ -6695,6 +6758,89 @@ suite('chat client logic: 会话恢复（stub DOM, ）', () => {
     assert.strictEqual(NS.stateCard.isRestorePending(), true, '回答由 boot 收尾（它随后会更新状态）');
   });
 
+  // [CUSTOM- 2026-10-30：New session 走本地草稿页，不再连接后立刻建真实会话。
+  function bootRestore() {
+    const posted: Array<Record<string, unknown>> = [];
+    const asked: Array<Record<string, unknown>> = [];
+    let focused = 0;
+    const g = globalThis as Record<string, any>;
+    const hadAcquire = Object.prototype.hasOwnProperty.call(g, 'acquireVsCodeApi');
+    g.acquireVsCodeApi = () => ({
+      postMessage: (m: Record<string, unknown>) => posted.push(m),
+      getState: () => ({}),
+      setState: () => { /* stub */ },
+    });
+    const NS: Record<string, any> = {
+      stateCard: {
+        setRestore: (payload: Record<string, unknown>) => asked.push(payload),
+        setRestorePref: () => { /* stub */ },
+      },
+      composer: { focusInput: () => { focused++; } },
+    };
+    const doc: Record<string, unknown> = {
+      readyState: 'loading',
+      body: new StubNode('body'),
+      addEventListener: () => { /* stub */ },
+      removeEventListener: () => { /* stub */ },
+      getElementById: () => null,
+    };
+    const win: Record<string, any> = {
+      __vac: NS,
+      addEventListener: () => { /* stub */ },
+      removeEventListener: () => { /* stub */ },
+      setTimeout: () => 0,
+    };
+    new Function('window', 'document', bootClient)(win, doc);
+    return {
+      NS, posted, asked,
+      focused: () => focused,
+      restoreAcquire: () => {
+        if (hadAcquire) { g.acquireVsCodeApi = () => ({ postMessage: () => { /* stub */ } }); }
+        else { delete g.acquireVsCodeApi; }
+      },
+    };
+  }
+
+  test('New session opens a local draft — it never connects or creates a real session', () => {
+    const h = bootRestore();
+    try {
+      h.posted.length = 0;   // boot's load-time build-fingerprint log
+      let started = 0;
+      // Replace the draft entry point (the real one wires the whole DOM); what matters
+      // here is that New session goes THERE instead of connectAgent.
+      h.NS.draft.start = () => { started++; };
+      h.NS.boot.restoreChoice('fresh', false);
+      assert.deepStrictEqual(h.posted, [{ type: 'dismissSessions' }], 'no connectAgent');
+      assert.strictEqual(started, 1, 'the draft page opens');
+      assert.strictEqual(h.focused(), 1, 'and the composer gets focus');
+      assert.strictEqual(h.asked.length, 1);
+      assert.strictEqual(h.asked[0].askable, false, 'the restore card leaves the screen');
+    } finally {
+      h.restoreAcquire();
+    }
+  });
+
+  test('Remember + New session still means "don\'t ask again"', () => {
+    const h = bootRestore();
+    try {
+      h.posted.length = 0;   // boot's load-time build-fingerprint log
+      h.NS.draft.start = () => { /* stub */ };
+      h.NS.boot.restoreChoice('fresh', true);
+      assert.deepStrictEqual(h.posted, [
+        { type: 'setRestorePref', value: 'never' },
+        { type: 'dismissSessions' },
+      ]);
+    } finally {
+      h.restoreAcquire();
+    }
+  });
+
+  test('the restore card offers New session, not Start fresh', () => {
+    const markup = chatPanelMarkup('view');
+    assert.ok(markup.includes('>New session</button>'), 'button label');
+    assert.ok(!markup.includes('Start fresh'), 'old label is gone');
+  });
+
   test('待恢复的 tab：按 tabOrder 排原位、点开才发 openHistorySession、关掉就忘掉它', () => {
     const els: Record<string, StubNode> = {
       tabs: new StubNode('div'), tabStrip: new StubNode('div'), newTab: new StubNode('button'),
@@ -6921,6 +7067,22 @@ suite('chat client logic: settings panel (stub DOM)', () => {
     tabs[1].dispatch('click', {});
     assert.ok(els.settingsBody.textContent.includes('Auto-expand'));
     assert.ok(!els.settingsBody.textContent.includes('Connect automatically'));
+  });
+
+  // [CUSTOM- 2026-10-30：目录条数范围 0–30。步进必须仍是 1（旧的 max<=20 规则
+  // 在 max=30 时会退化成 0/10/20/30），且 0 要渲染成 "0" 而不是空串。
+  test('small-range number controls keep their 1-step spinner', () => {
+    const { NS, els } = panel();
+    NS.settingsPanel.open();
+    NS.settingsPanel.setItems([{
+      key: 'panel.recentDirectoryLimit', group: 'chat', type: 'number',
+      label: 'Recently used directories', value: 0, min: 0, max: 30,
+    }]);
+    const num = els.settingsBody.querySelector('.settings-number') as StubNode;
+    assert.strictEqual(num.getAttribute('min'), '0');
+    assert.strictEqual(num.getAttribute('max'), '30');
+    assert.strictEqual(num.getAttribute('step'), '1');
+    assert.strictEqual(num.value, '0', '0 is a real value, not an empty box');
   });
 
   test('a checkbox and an action go back to the host as messages', () => {

@@ -452,6 +452,12 @@ export const toolCallViewClient = `
       if (openable) { linkChip.type = 'button'; }
       if (block.path) {
         linkChip.setAttribute('data-path', block.path);
+        // [CUSTOM- 2026-10-30：卡片里的 resource_link 也带区间（发送时挂在 uri 的
+        // '#L12-40' 片段上，宿主的内容块转换把它解析成 line/endLine）。
+        if (block.line) {
+          linkChip.setAttribute('data-line', String(block.line));
+          linkChip.setAttribute('data-end-line', String(block.endLine || block.line));
+        }
         linkChip.title = block.path;
       } else if (openable) {
         linkChip.setAttribute('data-href', block.uri);
@@ -568,7 +574,11 @@ export const toolCallViewClient = `
         var chip = el('button', 'chip', loc.name + (loc.line ? ':' + loc.line : ''));
         chip.type = 'button';
         chip.setAttribute('data-path', loc.path);
-        if (loc.line) { chip.setAttribute('data-line', String(loc.line)); }
+        if (loc.line) {
+          chip.setAttribute('data-line', String(loc.line));
+          // ACP 的 ToolCallLocation 只有单行：框选整行，与输入框单行引用一致。
+          chip.setAttribute('data-end-line', String(loc.line));
+        }
         chip.title = loc.path + (loc.line ? ':' + loc.line : '');
         row.appendChild(chip);
       }
