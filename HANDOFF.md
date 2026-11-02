@@ -15,7 +15,7 @@
 ## 状态快照
 
 - **最近更新**：2026-11-02
-- **整体状态**：v1.9.0 审查整改完成本地验证并归档；无进行中编码任务。真实账号/旧 UI 验收待做，发布与远程 CI 状态以 GitHub 为准。
+- **整体状态**：v1.9.0 已提交推送并打包，GitHub Release 仅为草稿；远程最低宿主 CI 失败，正在定位测试夹具，未公开发布。
 - **当前分支（必填）**：`main`；用户已授权 v1.9.0 的 commit/push、打包与 GitHub Release 上传，不另建分支。
 - **最后验证状态**（2026-11-02，npm ci 后）：lint/typecheck ✅；unit **159 / 25 文件** ✅；Windows stable **1.144.0** 与最低 **1.85.0** 宿主各 **623** ✅；生产构建与 VSIX ✅（`release/vscode-acp-client-1.9.0.vsix`，10 文件）。
   生产与全量 audit 均 **0**；文档体检、diff 空白、新增内容隐私与 LF 检查通过。npm ci 仍有两条传递依赖弃用提示；远程 Linux/Windows CI 由推送触发，结果以 GitHub Actions 为准，不以本地测试替代。
@@ -23,6 +23,11 @@
 
 
 ## 当前任务（In Progress）
+
+- **v1.9.0 发布复核**：main/tag 为 `40d2e35`；附件 SHA256 `62c89e9aa8a4241ca21c5d2f45925a8468e1de57309cb5c08dc1f6266b009dcd`，506800 字节，草稿上传已核。
+  CI `41380506323` 重跑仍在 Linux 1.85 三代进程启动超时；tag CI `41380524323` 另有 Windows 1.85 stalled initialize 夹具提前断连，已重跑。
+  `src/test/{handlers,recovery}-regression.test.ts` 已补齐最低宿主 run-as-node 参数，超时补 PID/stderr；lint/typecheck、unit 159、Windows 两宿主各 623 通过。
+  下一步：推送夹具修复并核四格 CI；用户确认后才移动 `v1.9.0`，干净提交重打包、核摘要再公开 Release。现有草稿附件仍对应旧标签。
 
 - **原生弹框改造（2026-10-29 完成 / 待真机验收）**：弹框/确认/重命名已改为面板内浮层，命令 modal 改非模态通知；见「下一步」1。
 - **Markdown style 预设重做（已随 v1.8.1 发布 / 待真机验收）**：Follow editor + GitHub / Obsidian / Typora / Atom / Minimal / Things 六套（排版 + `--vac-md-*` 明暗配色）；真 Chromium 已核，下一步见「下一步」4⑦。

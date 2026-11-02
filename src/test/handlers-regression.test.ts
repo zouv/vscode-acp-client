@@ -232,8 +232,8 @@ suite('review regression: terminals', () => {
   });
   test('terminating a real process tree stops parent, child, and grandchild', async function () {
     this.timeout(15000);
-    // VS Code 1.85's Windows Electron needs its run-as-node flag on every generation.
-    const flags = process.platform === 'win32' && process.versions.electron && process.versions.node.startsWith('18.') ? ['--ms-enable-electron-run-as-node'] : [];
+    // VS Code 1.85's Electron needs its run-as-node flag on every generation.
+    const flags = process.versions.electron && process.versions.node.startsWith('18.') ? ['--ms-enable-electron-run-as-node'] : [];
     const leaf = "console.log('PID ' + process.pid);setInterval(()=>{},1000)";
     const middle = "const{spawn}=require('node:child_process');console.log('PID '+process.pid);spawn(process.execPath," + JSON.stringify([...flags, '-e', leaf]) + ",{stdio:'inherit',windowsHide:true});setInterval(()=>{},1000)";
     const root = "const{spawn}=require('node:child_process');console.log('PID '+process.pid);spawn(process.execPath," + JSON.stringify([...flags, '-e', middle]) + ",{stdio:'inherit',windowsHide:true});setInterval(()=>{},1000)";
@@ -253,7 +253,9 @@ suite('review regression: terminals', () => {
       });
     });
     try {
-      await withDeadline(() => ready, 5000, 'process tree startup');
+      await withDeadline(() => ready, 5000, 'process tree startup').catch(error => {
+        throw new Error(String(error) + '; collected=' + pids.size + '; ' + diagnostics);
+      });
       terminateTree(child, 'SIGKILL');
       await withDeadline(async () => {
         while (true) {

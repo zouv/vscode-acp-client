@@ -189,7 +189,8 @@ suite('connection recovery regression', () => {
     class StalledAgents extends AgentManager {
       child?: ChildProcess;
       override spawnAgent(name: string): AgentInstance {
-        const instance = super.spawnAgent(name, { command: process.execPath, args: ['-e', 'process.stdin.resume(); setInterval(() => {}, 1000)'], env: { ELECTRON_RUN_AS_NODE: '1' } });
+        const flags = process.versions.electron && process.versions.node.startsWith('18.') ? ['--ms-enable-electron-run-as-node'] : [];
+        const instance = super.spawnAgent(name, { command: process.execPath, args: [...flags, '-e', 'process.stdin.resume(); setInterval(() => {}, 1000)'], env: { ELECTRON_RUN_AS_NODE: '1' } });
         this.child = instance.process; return instance;
       }
     }

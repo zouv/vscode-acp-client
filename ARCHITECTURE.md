@@ -368,7 +368,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 > **与 docs/02 分工**：本节只留**脚本位置指针**；具体**操作步骤/参数/坑**以 [`docs/02-使用说明.md`](docs/02-使用说明.md) 为准。
 
 - CI：`.github/workflows/ci.yml`，Windows/Ubuntu × VS Code 1.85.0/stable，全量 audit 闸门；`scripts/run-tests.mjs` 经 `VSCODE_TEST_VERSION` 选宿主，`src/test/index.ts` 用 Mocha API 串行运行。开发工具要求 Node≥22.13；扩展 bundle target=node18，VS Code 最低仍为 1.85。
-- 测试编译：`scripts/compile-tests.mjs` 为 out 的 CJS 测试打包 ESM-only SDK 与 Mocha 串行 API，再 tsc；不依赖新宿主的 require(ESM)，不加载现代 CLI/并行 worker。
+- 测试编译：`scripts/compile-tests.mjs` 为 out 的 CJS 测试打包 ESM-only SDK 与 Mocha 串行 API，再 tsc；不依赖新宿主的 require(ESM)，不加载现代 CLI/并行 worker。最低宿主的真实进程夹具各代都传 `--ms-enable-electron-run-as-node`（不只 Windows）；终端测试超时带 PID 计数与 stderr。
 - **构建单一源**：`scripts/build.mjs`（esbuild 配置、构建指纹注入都在这一处）。
   产物 `dist/extension.js`，**唯一入口** `src/extension.ts`（`package.json` 的 `main`）。
 - 统一管理脚本：`sh manager.sh help`。
