@@ -4535,6 +4535,38 @@ suite('chat panel: a stale markdown reply is not stored', () => {
     return undefined;
   }
 
+  test('streaming replies accept older prefixes without poisoning stored HTML', () => {
+    const harness = makeHarness('s-1', 'Claude Code');
+    chunk(harness, 'first\n\ntail');
+    const id = assistantId(harness);
+    chunk(harness, ' grows');
+    harness.host.onMessage({ type: 'renderMarkdown', items: [
+      { entryId: id, sessionId: 's-1', text: 'first\n\ntail', streaming: true },
+    ] });
+    const entry = entryOf(harness, id);
+    const replies = harness.surface.sent.filter(message => message.type === 'markdownRendered');
+    const item = replies.flatMap(message => message.type === 'markdownRendered' ? message.items : [])
+      .find(item => item.entryId === id && item.stream);
+    assert.ok(item?.stream);
+    assert.strictEqual(item.stream.source, 'first\n\ntail');
+    assert.strictEqual(item.stream.blocks.join('') + item.stream.tailHtml, new SafeMarkdown().render(item.stream.source));
+    assert.strictEqual(entry?.html, undefined);
+    harness.host.dispose();
+  });
+
+  test('a replaced source cannot produce a streaming reply', () => {
+    const harness = makeHarness('s-1', 'Claude Code');
+    chunk(harness, 'current');
+    const id = assistantId(harness);
+    harness.host.onMessage({ type: 'renderMarkdown', items: [
+      { entryId: id, sessionId: 's-1', text: 'obsolete', streaming: true },
+    ] });
+    entryOf(harness, id);
+    assert.ok(!harness.surface.sent.some(message => message.type === 'markdownRendered'
+      && message.items.some(item => item.entryId === id && item.stream)));
+    harness.host.dispose();
+  });
+
   test('a reply rendered from an older text never reaches the record', () => {
     const harness = makeHarness('s-1', 'Claude Code');
     chunk(harness, '后端');

@@ -25,6 +25,7 @@ export interface SourceState {
 }
 
 export interface ScanOptions {
+  signal?: AbortSignal;
   onBatch?: (events: UsageEvent[]) => void;
   onProgress?: (state: SourceState) => void;
 }

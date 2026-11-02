@@ -98,12 +98,15 @@ export function fileLinkTarget(href: string): FileLinkTarget | undefined {
 
 /** Convert one ACP content block into its view model. */
 export function toContentView(block: ContentBlock | null | undefined): ContentBlockView | null {
-  if (!block) { return null; }
+  // Payload limits may omit nested required fields; never pass partial blocks to the renderer.
+  if (!block || typeof block !== 'object') { return null; }
   switch (block.type) {
     case 'text':
+      if (typeof block.text !== 'string') { return null; }
       return { type: 'text', text: block.text };
 
     case 'image':
+      if (typeof block.mimeType !== 'string' || typeof block.data !== 'string') { return null; }
       return {
         type: 'image',
         mimeType: block.mimeType,
@@ -114,6 +117,7 @@ export function toContentView(block: ContentBlock | null | undefined): ContentBl
       };
 
     case 'audio':
+      if (typeof block.mimeType !== 'string' || typeof block.data !== 'string') { return null; }
       return {
         type: 'audio',
         mimeType: block.mimeType,
@@ -122,6 +126,7 @@ export function toContentView(block: ContentBlock | null | undefined): ContentBl
       };
 
     case 'resource_link': {
+      if (typeof block.uri !== 'string' || typeof block.name !== 'string') { return null; }
       const target = fileLinkTarget(block.uri);
       return {
         type: 'resource_link',
@@ -141,6 +146,7 @@ export function toContentView(block: ContentBlock | null | undefined): ContentBl
     }
 
     case 'resource': {
+      if (!block.resource || typeof block.resource !== 'object') { return null; }
       const resource = block.resource as { uri?: string; mimeType?: string | null; text?: string; blob?: string };
       const hasText = typeof resource.text === 'string';
       return {

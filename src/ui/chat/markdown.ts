@@ -12,7 +12,7 @@
 // 2. `html` / `link` / `image` 三个 renderer 必须覆盖；其余交给默认实现（已正确转义）。
 // 3. webview 侧还有一层 DOMParser 白名单兜底（见 html/client/dom.ts）——即便将来
 // marked 新增了没人覆盖的钩子也能兜住。
-import { Marked, type RendererObject, type Tokens } from 'marked';
+import { Marked, type RendererObject, type Tokens, type TokensList, type Token } from 'marked';
 // [CUSTOM- The one place that decides "is this href a local file" (and which lines).
 import { fileLinkTarget } from './content/contentBlocks';
 // [CUSTOM- 也借用它的视图模型（mention 解析的产物与 ContentBlock 转出来的同形）。
@@ -192,6 +192,10 @@ export class SafeMarkdown {
     this.md = new Marked({ gfm: true, breaks: true, async: false });
     this.md.use({ renderer });
   }
+
+  /** Tokens share the same safe renderer and GFM options as full rendering. */
+  lex(text: string): TokensList { return this.md.lexer(text, this.md.defaults); }
+  renderTokens(tokens: Token[]): string { return this.md.parser(tokens, this.md.defaults); }
 
   /** Render markdown to HTML. Falls back to escaped plain text on failure. */
   render(text: string): string {

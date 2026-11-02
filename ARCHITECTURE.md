@@ -38,7 +38,7 @@ VS Code 扩展，作为 **ACP（Agent Client Protocol）客户端**：把 agent 
 
 技术栈 / 关键约束：npm（禁 pnpm/yarn）；**esbuild** 打包成单文件 `dist/extension.js`；
 ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*.spec.ts`，禁 import `vscode`）、
-`@vscode/test-cli` + mocha 跑真实宿主（`src/**/*.test.ts`）；全局标识符命名空间 `vac.*`。
+`@vscode/test-electron` + Mocha API 跑真实宿主（`src/**/*.test.ts`）；全局标识符命名空间 `vac.*`。
 
 ---
 
@@ -50,7 +50,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 |---|---|---|---|
 | 连接/拉起 agent 失败（ENOENT、退出码、stderr、进程泄漏） | `core/AgentManager.ts` + `core/AgentConnector.ts` + `config/AgentConfig.ts` | UI、webview | §2.1 |
 | ACP 握手 / 协议抓包 / SDK 升级 / 能力协商 | `core/ConnectionManager.ts` + `core/AcpClientImpl.ts` + `utils/Logger.ts(logTraffic)` | tree、webview | §2.2 |
-| 会话生命周期（新建/恢复/切换/关闭、认证 -32000） | `core/SessionManager.ts` + `core/auth.ts` + `core/SessionStore.ts` | handlers、webview | §2.3 |
+| 会话生命周期（新建/恢复/切换/关闭、认证 -32000） | `core/SessionManager.ts` + `core/AgentRecovery.ts` + `core/auth.ts` + `core/SessionStore.ts` | handlers、webview | §2.3；`arch/connection-lifecycle.md` |
 | 发消息 / 取消 / 轮次中补发 / 轮次状态 | `core/SessionManager.ts`(sendPrompt/cancelTurn/steerPrompt) + `handlers/SessionUpdateHandler.ts` | tree | §2.4 |
 | 聊天 UI（面板行为 / 记录 / 标签页） | `src/ui/chat/**`（入口 `index.ts`；**先读 `arch/chat-panel.md` 顶部的分册导航表**，再按主题只读那一份分册） | core、dashboard | §2.5 |
 | 编辑区面 / 双面同步 / 焦点 | `ui/chat/ChatViewProvider.ts` + `ChatEditorPanel.ts` + `ChatSurface.ts` | core 内部 | §2.5 |
@@ -81,17 +81,20 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/config/GlobalSettings.ts` | **跨 IDE 全局配置** `VAC_HOME/config.json`（默认 `~/.vac`）：原子写、白名单（首期仅 `vac.customModels`）、`firstSetLayer` 解析；纯逻辑，禁 import vscode | 新增/改动全局层配置键 |
 | `src/config/SettingScope.ts` | VS Code 三层 + 全局层的解析（`resolveSetting`）与写入（`writeSetting` 写当前生效层）、移除覆盖、打开对应配置文件；`SettingIO` 是可注入的测试缝 | 设置作用域 / 覆盖提示 / 写入层 |
 | `src/core/AgentManager.ts` | agent 子进程生命周期：`spawnAgent`/`killAgent`/`killAll`；Windows 走 `cmd.exe`，类 Unix 走 login shell（修 npx ENOENT）；进程组 + `taskkill /T /F` 一并收子孙；**npx 启动的 agent 命中本地缓存时直接 `node <entry>`**（`scheduleInstall` 在首次连接 15s 后后台缓存） | agent 起不来 / 平台差异 / 进程泄漏 |
-| `src/core/AgentInstall.ts` | **agent 运行时本地缓存**（纯逻辑 + node fs）：`npxSpecOf` 拆 spec、`installDirFor`/`readInstalled`（7 天 TTL）、`entryFromInstall` 从 `package.json`+`bin` 找回入口。绕过 `npm exec` 每次 11–17s 的 reify；缓存目录 `globalStorage/agents/<agent>`（约 320MB/个） | 首次连接慢 / npx 启动开销 |
-| `src/core/ConnectionManager.ts` | stdio → Web Streams → `ndJsonStream`；建 `ClientSideConnection`；`initialize`（含 `clientCapabilities`）；解析 `_meta.steering`；traffic tap | 协议握手 / 抓包 / SDK 升级 |
-| `src/core/AgentConnector.ts` | agent 名 ↔ 进程 id 索引、`ensure()` 合并并发连接、能力摘要缓存、**每连接控制面串行队列** `enqueue()` | 连接去重 / 能力协商 / RPC 排队 |
+| `src/core/AgentInstall.ts` | agent 本地缓存：`npxSpecOf` 只优化简单 `npx [-y/--yes] package`，复杂选项保留 npx 语义；`installDirFor` 用安全 slug + 名称 SHA256 前 16 位，目录为 `globalStorage/agents/<slug-hash>`；`readInstalled` 7 天 TTL，`entryFromInstall` 找入口。旧目录不自动迁移/删除 | 首次连接慢 / 安装路径与参数 |
+| `src/core/ConnectionManager.ts` | stdio → Web Streams → `ndJsonStream`；`initialize` + steering 协商 + traffic tap；握手期间 `pendingTerminals`，移除连接后 `retiredTerminals` 保留输出，最终 `dispose` 全清 | 协议握手 / 抓包 / 终端生命周期 |
+| `src/core/AgentConnector.ts` | agent 名 ↔ 进程 id；`ensure` 单飞 + AbortController、`cancel` 中止握手并拒绝晚到成功；`enqueue` 每连接控制面串行、执行前检查连接是否仍有效 | 连接去重 / 取消 / RPC 排队 |
 | `src/core/SessionManager.ts` | 编排器：`connectToAgent`/`createSession`/`newConversation`/`closeSession`/`disconnectAgent`/`ensureConnected`/`sendPrompt`/`steerPrompt`/`cancelTurn`/`setMode`/`setModel`/`setConfigOption`/`listSessions`/`openExistingSession`/`loadSession`/`resumeSession`；**订阅 `SessionUpdateHandler`**，把 `available_commands_update` / `config_option_update` / `current_mode_update` 落成状态（`applyAvailableCommands`/`applyConfigOptions`/`applyCurrentMode`，会话未注册时进 `PendingSessionState`） | 会话状态机 / 新事件 / 能力协商 |
-| `src/core/SessionStore.ts` | 会话索引与焦点（`focusOrder`/`mostRecentLiveId`）+ `PendingSessionState`（早到通知缓冲）。**纯逻辑，禁 import vscode** | 索引语义 / 焦点后继规则 |
+| `src/core/SessionStore.ts` | 会话索引与焦点；`add` 拒绝不同 agent/连接占用相同 sessionId；`PendingSessionState.remove/clear` 清早到缓冲。纯逻辑，禁 import vscode | 索引隔离 / 焦点后继规则 |
 | `src/core/cwd.ts` | `pickDefaultCwd`：每会话工作目录三级链（配置→工作区→进程），配置非法则拒绝并回退。**纯函数** | 默认目录策略 |
 | `src/core/auth.ts` | `-32000` 判定 + 交互式认证流程（每连接单飞；过滤 `type:'terminal'`；`_meta['api-key']` 标记的方法由客户端提供 key，存 **SecretStorage**、下次静默重试）；`forgetApiKey` | 认证行为 |
 | `src/core/SessionHistoryStore.ts` | `workspaceState` 会话缓存：按 agent 分桶、容量上限（活跃会话豁免）、`reconcileFromAgent`、目录候选、touch 限频落盘 | 会话列表丢失 / 缓存策略 |
-| `src/core/AcpClientImpl.ts` | ACP `Client` 接口门面，把方法转发给各 handler | 新增 ACP 客户端能力 |
-| `src/handlers/FileSystemHandler.ts` | `fs/read_text_file`（优先未保存缓冲区，支持 `line`/`limit`）、`write_text_file` | 文件读写异常 |
-| `src/handlers/TerminalHandler.ts` | `terminal/*`：托管终端、`TailBuffer` 限长、映射到 VS Code 终端；`killAll` 保留终端、`dispose` 一并拆除 | 终端输出卡住 / 乱码 / 泄漏 |
+| `src/core/AcpClientImpl.ts` | ACP Client 门面；携带 sourceAgentId，更新和 fs/terminal/权限/带 sessionId 的表单请求先验证归属再转发 | 客户端能力 / 跨连接隔离 |
+| `src/handlers/FileSystemHandler.ts` | read 优先编辑器缓冲、支持 line/limit；write 对 dirty 文档明确拒绝，clean 文档 WorkspaceEdit + save 并检查结果，未打开文件写磁盘后展示 | 文件读写一致性 / 草稿保护 |
+| `src/handlers/TerminalHandler.ts` | terminal/*：shell-free launcher、stdout/stderr 独立 StringDecoder、TailBuffer；spawn error 结算退出；release/killAll 清进程与活跃索引但保留显示终端，dispose 最终销毁 | argv / 乱码 / 泄漏 |
+| `src/utils/TerminalCommand.ts` / `ProcessTree.ts` | terminal 默认不经过 shell；Windows batch 受限 argv；公共进程树终止（Windows taskkill / Unix 进程组） | 参数边界 / 子孙进程回收 |
+| `src/utils/Abortable.ts` / `CancellationToken.ts` | fallback 取消 race 与 VS Code UI CancellationToken 适配 | 取消后 FIFO 不被旧弹框阻塞 |
+| `src/utils/BoundedPayload.ts` | 非可信工具 JSON 的深度、节点数、集合大小与文本预算；不修改输入 | 大数据 / 内存上限 |
 | `src/utils/TailBuffer.ts` | 限长尾部缓冲（增量计字节，读取时才拼字符串）。**纯逻辑** | 终端输出裁剪 |
 | `src/handlers/PermissionHandler.ts` | 自动批准分支（`vac.autoApprovePermissions`）+ 交给 `PermissionBridge` | 权限弹窗策略 |
 | `src/handlers/PermissionBridge.ts` | 权限请求的唯一出口：面板卡片 vs 弹框、FIFO、`cancelSession`/`cancelAll` 保证每个请求恰好被回答一次 | 权限策略 / 并发 / 超时 |
@@ -105,7 +108,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/ui/SessionTreeProvider.ts` | Agents 树：agent → 会话（来源 `session/list` 或本地缓存）；刷新已合并节流（50ms） | 树结构 / 右键菜单 |
 | `src/ui/StatusBarManager.ts` | 状态栏 `$(hubot) VAC: <status>` | 状态显示 |
 | `src/dashboard/` | Dashboard 视图与用量统计（数据层纯逻辑，见 `docs/dashboard-design.md`） | 统计指标 / 数据源 |
-| `src/utils/Logger.ts` | 双输出通道（`VAC` / `VAC Traffic`）+ 落盘 `~/.vac/vac.log`（5MB 轮转、批量刷写）；`logTraffic` 有字符串截断 | 日志格式 / 排查「改动没生效」 |
+| `src/utils/Logger.ts` | VAC / VAC Traffic 双通道；traffic 默认关闭，`LogPrivacy.redactTraffic` 脱敏内容/凭证；`FileLog` 1MB 排队、运行中 5MB 轮转、串行 flush；deactivate 等待刷盘 | 隐私 / 轮转 / 退出刷盘 |
 | `src/utils/BuildInfo.ts` | 构建指纹（版本·git sha·打包时间·bundle 哈希）；`readPackageVersion()` 也被 `ConnectionManager` 用作 `clientInfo.version` | 日志身份标识 |
 | `src/test/*.test.ts` | 真实 Extension Host 的 mocha 测试（**用 Tab 缩进**） | 改扩展 id / 命令前缀 / 面板协议 |
 | `src/**/*.spec.ts` | vitest 纯逻辑测试（2 空格，禁 import `vscode`） | 改对应纯逻辑模块 |
@@ -135,7 +138,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 首次连接慢 / npx 启动开销 | `AgentManager.spawnAgent`（缓存命中走 `node <entry>`）+ `scheduleInstall`/`runInstall`；纯逻辑在 `AgentInstall.ts` | 实测 npx 11–17s vs 直启 0.6s；缓存目录 `globalStorage/agents/`，7 天过期 |
 | 控制面 RPC 排队 | `AgentConnector.enqueue()` | 只排 new/load/resume/close，**prompt 不排** |
 
-### 2.2 协议与握手（`src/core/ConnectionManager.ts`）
+### 2.2 协议与握手（`src/core/ConnectionManager.ts`；超时/恢复见 [分册](arch/connection-lifecycle.md)）
 
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
@@ -155,7 +158,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 删除会话（真删） | `deleteSession()` | 先 cancel/close 活会话 → `session/delete`（能力 `delete`）→ 清本地缓存 |
 | 分叉会话 | `forkSession()` | `session/fork`（能力 `fork`）；带 `messageId` 时在 `_meta.jetbrains.air.fork` 指定分叉点；建好后走 `openExistingSession` 重放 |
 | 认证失败（-32000） | `auth.ts`：`isAuthRequiredError` / `runAuthFlow`；`SessionManager.withAuthRetry` | new / list / load / resume / prompt 都经 `withAuthRetry` 认证后重试一次 |
-| API key 认证 / 登出 | `auth.ts`：`takesApiKey` / `setAuthSecrets` / `forgetApiKey`；`SessionManager.logout` + 命令 `vac.logoutAgent` | key 走 `authenticate._meta['api-key'].apiKey`（codex-acp 约定），**流量日志里按键名脱敏**（`Logger.clip`）；`logout` 需能力 `auth.logout` |
+| API key 认证 / 登出 | `auth.ts`：`takesApiKey` / `setAuthSecrets` / `forgetApiKey`；`SessionManager.logout` + 命令 `vac.logoutAgent` | key 走 `authenticate._meta['api-key'].apiKey`（codex-acp 约定），**流量日志里按键名脱敏**（`LogPrivacy.redactTraffic`，流量日志默认关闭）；`logout` 需能力 `auth.logout` |
 | 焦点切换 | `focusSession()` | `active-session-changed` 的唯一出口 |
 | 每会话工作目录 | `resolveDefaultCwd()` / `sessionCwd()` / `cwd.ts:pickDefaultCwd` | 会话级属性，与进程 cwd 无关 |
 | 自定义模型注入 | `metaFor()` | 经 `AgentProfile` 按 kind 分化 |
@@ -248,7 +251,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | Claude 转录解析 | `usage/ClaudeUsageSource.ts`、`usage/JsonlUsageSource.ts` | 增量只读新增字节 |
 | Codex 转录解析 | `usage/CodexUsageSource.ts` | 按回合 `token_count` 差值 |
 | 价格与成本估算 | `usage/pricing.ts`（`PRICING_AS_OF`） | 是**估值**，UI 标 "est." |
-| 扫描编排 / 文件监听 | `usage/UsageService.ts`（`refresh` / `startWatching`） | 单飞 + 防抖 |
+| 扫描编排 / 文件监听 | `usage/UsageService.ts`（`setEnabled` / `replaceSources` / `refresh` / `startWatching`） + `extension.ts` 配置队列 | enabled 门控、单飞/防抖、AbortSignal；禁用停止 watcher/扫描，换目录等待旧任务与落盘再重建 |
 | HTML / 客户端脚本 | `DashboardHtml.ts` + `DashboardHtml.spec.ts` / `DashboardClient.spec.ts` | 无外部依赖，手写脚本 |
 | 视图与消息 | `DashboardViewProvider.ts` | 无 `retainContextWhenHidden` |
 
@@ -264,7 +267,6 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 - **正确实现**：一切收敛到 `SessionManager.openExistingSession()`：先 `ensureConnected`，
   再按 live → load → resume 决策（涉及函数：`openExistingSession`）。
 - **调用链**：`commands.ts(vac.openSession)` / 面板历史选择器 → `openExistingSession` → `loadSession|resumeSession`。
-
 ### 3.2 权限/表单请求的「恰好回答一次」
 
 - **需求语义**：agent 阻塞等答复；客户端要么在面板画卡片，要么弹 QuickPick，**不能两边都答、也不能都不答**。
@@ -273,9 +275,10 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
   `canPresent` 必须同时满足「有可见 surface」+「该 surface 正在显示这个会话」；
   **子会话 id 先经 `setSessionResolver` 解析到父会话**（`ChatPanelHost.subagentParents`），
   否则未注册的子会话会被判成"无处可画"而弹到窗口顶部 QuickPick；
-  会话取消/关闭时 `cancelSession` 把待决项答成 cancelled（原始 id 与父 id 双匹配）。
+  会话取消/关闭/断开时，两桥的 `cancelSession` 把待决项答成 cancelled（原始 id 与父 id 双匹配）；
+  每个 pending 有 AbortController，fallback 经 `abortable` 竞速，旧弹框即使不配合取消也不堵后续 FIFO；
+  QuickPick/InputBox 使用真实 CancellationToken，晚到答案不二次结算。
 - **调用链**：`ConnectionManager` → `AcpClientImpl.requestPermission` → `PermissionHandler` → `PermissionBridge` → `ChatPanelHost` 或 QuickPick。
-
 ### 3.3 轮次状态与 `vac.turnInProgress`
 
 - **需求语义**：Esc 与标题栏 Stop 只在**有轮次在跑**时可用，且都必须先出 `#stopConfirm`（停止不可逆）。
@@ -290,6 +293,12 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
   取消：Esc/Stop → `#stopConfirm` → `cancelTurn` 消息 → `SessionManager.cancelTurn`。
 
 ---
+### 3.4 生命周期、隔离与工具回收（2026-11-01）
+
+- disconnect 先取消握手/自动恢复，再移除会话并结算两桥；意外退出仅对 resume-capable agent 有界恢复，保留 tab/草稿、不重发 prompt；详见 `arch/connection-lifecycle.md`。
+- SessionUpdateHandler 的 sourceAgentId ownership 覆盖早到更新；releaseAgent 清归属且拒绝旧连接晚到数据。SessionStore、openExisting/load/resume 遇跨 agent 同 sessionId 明确拒绝，不静默覆盖（尚未改复合键）。
+- TranscriptStore 的 onRemove 在条目限长、会话 LRU、drop/dropAgent 时通知 host；host 只回收已经没有可见引用的 toolCallId 及 entry-id 索引，重复引用保留。
+- ToolInvocationStore 的单次消息 JSON 有 128K 字符预算（深度 10、2048 节点、集合 128 项、单字符串 32K）；保留身份字段与显式集合替换语义，contentBlocks 拒绝必需字段缺失的块。活跃会话仍豁免 LRU；agent terminal 的 ID 数量还不是硬上限。
 
 ## 4. 数据流 / 接口契约
 
@@ -347,7 +356,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 整体外壳 | `renderChatHtml`（`html/shell.ts`）、`html/body.ts` | CSP、nonce、`data-vac-build` 指纹 |
 | 样式总表 | `html/styles.ts` | 面板全部 CSS；按 `.section` / 变量名搜 |
 | 布局变量 | `--vac-aside-w`、`--vac-composer-h`、`--vac-perm-h`、`--vac-elic-h` | 抽屉与输入卡的高度让位关系 |
-| 记录区渲染 | `html/client/transcriptView.ts`、`toolCallView.ts` | 折叠、markdown、时间、右键 |
+| 记录区渲染 | `html/client/transcriptView.ts`、`toolCallView.ts`、`MarkdownStream.ts`、`scroll.ts` | 折叠、markdown、时间、右键；流式尾块、原生正文窗口与会话锚点恢复见 `arch/chat-performance.md` |
 | 无头验收 | `scripts/preview-records.mjs` | 真 Chromium 截图，**别靠推理** |
 
 ---
@@ -358,6 +367,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 >
 > **与 docs/02 分工**：本节只留**脚本位置指针**；具体**操作步骤/参数/坑**以 [`docs/02-使用说明.md`](docs/02-使用说明.md) 为准。
 
+- CI：`.github/workflows/ci.yml`，Windows/Ubuntu × VS Code 1.85.0/stable，全量 audit 闸门；`scripts/run-tests.mjs` 经 `VSCODE_TEST_VERSION` 选宿主，`src/test/index.ts` 用 Mocha API 串行运行。开发工具要求 Node≥22.13；扩展 bundle target=node18，VS Code 最低仍为 1.85。
+- 测试编译：`scripts/compile-tests.mjs` 为 out 的 CJS 测试打包 ESM-only SDK 与 Mocha 串行 API，再 tsc；不依赖新宿主的 require(ESM)，不加载现代 CLI/并行 worker。
 - **构建单一源**：`scripts/build.mjs`（esbuild 配置、构建指纹注入都在这一处）。
   产物 `dist/extension.js`，**唯一入口** `src/extension.ts`（`package.json` 的 `main`）。
 - 统一管理脚本：`sh manager.sh help`。

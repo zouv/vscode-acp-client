@@ -1,3 +1,4 @@
+import { withCancellationToken } from '../utils/CancellationToken';
 import * as vscode from 'vscode';
 import type { RequestPermissionRequest, RequestPermissionResponse } from '@agentclientprotocol/sdk';
 
@@ -19,13 +20,13 @@ export class PermissionHandler {
     }
 
     if (this.bridge) {
-      return this.bridge.request(params, (p, label) => this.quickPick(p, label));
+      return this.bridge.request(params, (p, label, signal) => this.quickPick(p, label, signal));
     }
     return this.quickPick(params, '');
   }
 
   /** Dialog fallback for when no panel can render the prompt. */
-  private async quickPick(params: RequestPermissionRequest, label: string): Promise<RequestPermissionResponse> {
+  private async quickPick(params: RequestPermissionRequest, label: string, signal?: AbortSignal): Promise<RequestPermissionResponse> {
     const title = params.toolCall?.title || 'Permission Request';
     const items = params.options.map(option => ({
       label: `${option.kind.startsWith('allow') ? '$(check)' : '$(x)'} ${option.name}`,
@@ -33,11 +34,11 @@ export class PermissionHandler {
       optionId: option.optionId,
     }));
 
-    const picked = await vscode.window.showQuickPick(items, {
+    const picked = await withCancellationToken(signal, token => vscode.window.showQuickPick(items, {
       placeHolder: label ? `${label} — ${title}` : title,
       title: 'Agent Permission Request',
       ignoreFocusOut: true,
-    });
+    }, token));
     if (!picked) {
       log('Permission cancelled by user');
       return CANCELLED;

@@ -6,6 +6,7 @@ import * as path from 'path';
 
 export interface CreateUsageServiceOptions {
   storageDir: string;
+  enabled?: boolean;
   claudeProjectsDir?: string;
   codexSessionsDir?: string;
   now?: () => number;
@@ -16,6 +17,7 @@ export function createUsageService(options: CreateUsageServiceOptions): UsageSer
   const sources: UsageSource[] = [new ClaudeUsageSource(options.claudeProjectsDir), new CodexUsageSource(options.codexSessionsDir)];
   const service = new UsageService({
     sources,
+    enabled: options.enabled,
     persistPath: path.join(options.storageDir, 'usage-index.json'),
     now: options.now,
   });

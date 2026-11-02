@@ -19,6 +19,10 @@
 
 ---
 
+### 工具记录的引用回收（2026-11-01）
+
+TranscriptStore 的 onRemove 覆盖记录上限、会话 LRU、drop/dropAgent。ChatPanelHost 查剩余 entries：仅无同 toolCallId 可见引用时调用 ToolInvocationStore.remove，并清 toolEntryIds；appendTool 失败也立即回收。不要另加独立工具 LRU，否则仍可见的卡片会成为空壳。工具 payload 限长后的不完整内容块由 contentBlocks 安全过滤。
+
 ### 5.16 记录的折叠（Thought / 用户消息）与 INV-J
 
 **两条记录可以折叠**：`thought`（推理块）与**多行**用户消息。两者共用同一套形态：`<details>` +
@@ -67,7 +71,7 @@
 | **正文为什么不在 summary 里** | 用户气泡里是惰性文本，整行当点击区没问题；**助手正文是 markdown HTML**（链接、代码 Copy、图片 chip），而且**在 `<summary>` 里划选文本 == 点它** —— 读者选中一段回答就会把它折起来。所以切换区只有那一行 [图标][三角]，正文在外面 |
 | 折叠怎么实现 | **首行预览**：一段预览文本放在 summary 里（`.msg-preview`，真文本节点），折叠时显示、展开时由 CSS 藏掉。**"更聪明"的两条路都试过并否掉了**：按测量切开正文（渲染后的 markdown 里"切在第几个字符"没有意义）、给正文加行钳制（**`details` 折叠时对非 summary 子节点的隐藏，作者样式抢不过**——115 用 `display` 覆盖，结果折叠后正文干脆不可见，用户看到的正是"折叠后文字没了"） |
 | **折叠后占几行（115→116）** | **一行**：`[图标][三角][正文首行]`，与用户消息一致（用户要求）。115 想用 flex 把正文的首行挪到标题行上——**没用**：`display:flex` 挂在 `details` 上并不产生"两个 flex 项目"的布局（实测首行跑到图标行、其余照旧另起）。116 改成"预览文本"这条唯一可行的路。**这类判断必须靠 `preview-records.mjs` 截图，不要靠推理**（pitfalls #31） |
-| 预览从哪来 | `refreshPreview(record, body)`，在 **`applyAssistant` 末尾**调用——那是正文内容变化仅有的两个入口（首次渲染 / 每次 patch）的汇聚点，所以只有一个同步点。文本取自**渲染后**正文的**首个块元素**（`firstElementChild.textContent`），纯流式文本没有元素子节点时回退到整段文本；只取一行、截到 240 字（`ASSISTANT_PREVIEW_CHARS`）。**取自渲染结果而不是 `entry.text`**，否则 `## 标题` 会原样出现在预览里 |
+| 预览从哪来 | `refreshPreview(record, body)`，在 **`applyAssistant` 末尾**调用——那是正文内容变化仅有的两个入口（首次渲染 / 每次 patch）的汇聚点，所以只有一个同步点。文本取自**渲染后**正文的**首个块元素**（`firstElementChild.textContent`），纯流式文本没有元素子节点时回退到整段文本；只取一行、截到 240 字（`ASSISTANT_PREVIEW_CHARS`）；纯流式直接截 `entry.text` 的前 240 字，不读取完整 DOM textContent，未变化的预览不重写。**取自渲染结果而不是 `entry.text`**，否则 `## 标题` 会原样出现在预览里 |
 | 预览不是"正文的副本"隐患 | 展开时它是 `display:none`：不参与渲染，也不进划选/全选复制（`Copy message` 读 `entry.text`，与 DOM 无关）；折叠时正文被浏览器整块藏起来，屏幕上只有这一份 |
 | 图标挂在哪 | `icons.attach` 的 `HOST.assistant` 从 `.bubble` 改成 `.msg-head`（在 caret 之后 prepend ⇒ 仍是 `[图标][三角]`）。**顺带删掉 `applyAssistant` 里 takeIcon/putIcon 那一对**：图标不再住在被重写的节点里，没有东西能擦掉它 |
 | 外观挂在哪 | `.entry-assistant .msg-fold`（原来是 `.bubble`）——details 现在包住标题行+正文两段。`.md` 类名移到 `.bubble-body`，故 `.entry-assistant .bubble-body.md { white-space: normal }` |
@@ -175,10 +179,7 @@ Webview 默认弹 **Chromium 的原生菜单**，它在这个面板上有两个�
 - **INV-K：思考块的合并分支必须清掉 `html`**（`appendThoughtChunk` 的 merges 分支）。
   助手分支一直有这一行，思考分支漏了的话，之后每个 chunk 都会带上**过期前缀**的 html
   ——正文冻结或来回跳，而且没有任何报错。
-- **流式期间不渲染 markdown**：只从**定稿**的 revise 排 pending。给还在长的正文应用"某个前缀的 html"
-  是错的；定稿的 revise 又**不带 html 键**，所以 `patch` 里必须"html 到了就不再请求、定稿且没有 html 就重新排"
-  两个方向都写（`trackMarkdown`，与助手共用）——只判断 `changes.html` 会永远不排，表现就是
-  "markdown 刚到达又被原文覆盖"。
+- **流式与定稿分离**（2026-11-02）：思考块与助手共用稳定块/可变尾块请求，临时 HTML 不写 `ThoughtEntry.html`；新到字符以 raw extra 保留，不能冻结前缀。定稿 revise **不带 html 键**时仍须重新排完整渲染；收到最终 html 才停止请求。详见 [`chat-performance.md`](./chat-performance.md)。
 - **hydrate 也要覆盖**：`buildThought` 直接按 `entry.html` 决定渲染方式，否则从快照恢复的思考块永远是纯文本。
 - **CSS 作用域**：markdown 规则从 `.bubble` 扩到 `.bubble, .md` **共享**（各写一套 = 同一份知识存两份）。
   `.thought-body.md` 回到 `white-space: normal`（pre-wrap 会把 marked 的换行**再加一倍**）；

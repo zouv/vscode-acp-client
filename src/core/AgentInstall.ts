@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -26,14 +27,16 @@ export const REFRESH_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 export function npxSpecOf(command: string, args: string[]): NpxLaunch | null {
   const base = (command.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.(cmd|exe|bat)$/, '');
   if (base !== 'npx') { return null; }
-  const index = args.findIndex(arg => !arg.startsWith('-'));
-  if (index < 0) { return null; }
+  let index = 0;
+  while (args[index] === '-y' || args[index] === '--yes') { index++; }
+  if (!args[index] || args[index].startsWith('-')) { return null; }
   return { spec: args[index], extraArgs: args.slice(index + 1) };
 }
 
 /** 每个 agent 一个固定目录：换 spec 时整棵 node_modules 会重建，不会越攒越多。 */
 export function installDirFor(root: string, agentName: string): string {
-  const key = agentName.toLowerCase().replace(/[^a-z0-9._-]+/g, '-') || 'agent';
+  const slug = agentName.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'agent';
+  const key = slug + '-' + createHash('sha256').update(agentName).digest('hex').slice(0, 16);
   return join(root, 'agents', key);
 }
 

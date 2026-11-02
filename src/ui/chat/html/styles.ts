@@ -6,6 +6,24 @@ export function styles(): string {
   return `<style>
   * { box-sizing: border-box; }
 
+  /* Native render window: preserve real anchors, folds, selection and form DOM.
+     Measured intrinsic sizes are cached by Chromium, not guessed in JS. */
+  @supports (content-visibility: auto) {
+    #messages > [data-render-window="true"][data-streaming="false"] .bubble-body,
+    #messages > [data-render-window="true"][data-streaming="false"] .thought-body,
+    #messages > [data-render-window="true"][data-streaming="false"] .tool-body {
+      content-visibility: auto;
+      contain-intrinsic-size: auto 80px;
+    }
+    #messages > [data-render-window="true"]:focus-within .bubble-body,
+    #messages > [data-render-window="true"]:focus-within .thought-body,
+    #messages > [data-render-window="true"]:focus-within .tool-body {
+      content-visibility: visible;
+    }
+  }
+  .stream-extra { white-space: pre-wrap; }
+  .stream-extra:empty, .stream-tail:empty { display: none; }
+
   /* ⚠️ 不要删这条规则。
      'hidden' 属性靠 UA 样式表的 [hidden]{display:none} 生效，而**作者样式里的任何 display
      声明都会覆盖它**——这与选择器权重无关，是"作者样式 > UA 样式"的层叠顺序决定的。

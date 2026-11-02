@@ -21,10 +21,11 @@ export function yieldToLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-export async function listJsonlFiles(root: string): Promise<string[]> {
+export async function listJsonlFiles(root: string, signal?: AbortSignal): Promise<string[]> {
   const out: string[] = [];
   const stack = [root];
   while (stack.length > 0) {
+    signal?.throwIfAborted();
     const dir = stack.pop() as string;
     let entries: fs.Dirent[];
     try {
@@ -51,6 +52,7 @@ export async function readLinesFrom(
   onLine: (line: Buffer, offset: number) => void,
   chunkBytes: number,
   maxSliceMs: number,
+  signal?: AbortSignal,
 ): Promise<number> {
   const handle = await fs.promises.open(file, 'r');
   try {
@@ -60,6 +62,7 @@ export async function readLinesFrom(
     let sliceStart = Date.now();
     const chunk = Buffer.allocUnsafe(chunkBytes);
     for (;;) {
+      signal?.throwIfAborted();
       const { bytesRead } = await handle.read(chunk, 0, chunkBytes, pos);
       if (bytesRead === 0) {
         break;
@@ -116,7 +119,7 @@ export abstract class JsonlUsageSource implements UsageSource {
   }
 
   async scan(state: SourceState, options: ScanOptions = {}): Promise<ScanResult> {
-    const files = await listJsonlFiles(this.root);
+    const files = await listJsonlFiles(this.root, options.signal);
     const next: SourceState = { files: {} };
     const collected: UsageEvent[] = [];
     const prevFiles = state && state.files ? state.files : {};
@@ -128,12 +131,13 @@ export abstract class JsonlUsageSource implements UsageSource {
     let index = 0;
     const worker = async (): Promise<void> => {
       for (;;) {
+        options.signal?.throwIfAborted();
         const i = index++;
         if (i >= files.length) {
           return;
         }
         const file = files[i];
-        const res = await this.scanFile(file, prevFiles[file]);
+        const res = await this.scanFile(file, prevFiles[file], options.signal);
         if (!res) {
           continue;
         }
@@ -157,13 +161,18 @@ export abstract class JsonlUsageSource implements UsageSource {
     for (let w = 0; w < Math.min(this.concurrency, files.length); w++) {
       workers.push(worker());
     }
-    await Promise.all(workers);
+    // Do not finish cancellation until every worker has closed its file handle.
+    const results = await Promise.allSettled(workers);
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failure) { throw failure.reason; }
+    options.signal?.throwIfAborted();
     return { events: collected, state: next };
   }
 
   private async scanFile(
     file: string,
     prev: FileCursor | undefined,
+    signal?: AbortSignal,
   ): Promise<{ events: UsageEvent[]; cursor: FileCursor } | undefined> {
     let st: fs.Stats;
     try {
@@ -178,7 +187,7 @@ export abstract class JsonlUsageSource implements UsageSource {
     const start = replaced ? 0 : (prev as FileCursor).offset;
     try {
       const parser = this.createParser(file, replaced ? undefined : prev?.extra);
-      const offset = await readLinesFrom(file, start, (line, off) => parser.onLine(line, off), this.chunkBytes, this.maxSliceMs);
+      const offset = await readLinesFrom(file, start, (line, off) => parser.onLine(line, off), this.chunkBytes, this.maxSliceMs, signal);
       const fin = parser.finish();
       const cursor: FileCursor = { size: st.size, mtimeMs: st.mtimeMs, offset };
       if (fin.extra) {

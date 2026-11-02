@@ -18,6 +18,8 @@ import { readCustomModels } from '../config/CustomModels';
 import type { ElicitationBridge } from '../handlers/ElicitationBridge';
 import type { PermissionBridge } from '../handlers/PermissionBridge';
 import { log, logError } from '../utils/Logger';
+import { DeadlineExceededError, withDeadline } from '../utils/AsyncDeadline';
+import { RecoveryBudget, recoveryDelay, type RecoveryOptions } from './AgentRecovery';
 import { AgentConnector } from './AgentConnector';
 import type { AgentManager } from './AgentManager';
 import { forgetApiKey, isAuthRequiredError, runAuthFlow } from './auth';
@@ -68,6 +70,10 @@ function forkPointMeta(messageId: string): Record<string, unknown> {
  * `activeSessionId` means "the focused session" — the one the chat panel shows.
  */
 export class SessionManager extends EventEmitter {
+  private disposed = false;
+  private readonly recoveries = new Map<string, { controller: AbortController; promise: Promise<void> }>();
+  private readonly recoveryBudgets = new Map<string, RecoveryBudget>();
+  private readonly retainedResumes = new Map<SessionInfo, { conn: ConnectionInfo; promise: Promise<void> }>();
   private readonly store = new SessionStore();
   private readonly pending = new PendingSessionState();
   private readonly connector: AgentConnector;
@@ -82,6 +88,7 @@ export class SessionManager extends EventEmitter {
     private readonly agentManager: AgentManager,
     private readonly connectionManager: ConnectionManager,
     private readonly sessionUpdateHandler?: SessionUpdateHandler,
+    private readonly recoveryOptions: RecoveryOptions = {},
   ) {
     super();
     this.connector = new AgentConnector(agentManager, connectionManager, {
@@ -93,6 +100,7 @@ export class SessionManager extends EventEmitter {
     // 这些通知会早于 `session/new` 响应到达，而 UI 侧的监听器在会话未注册时整体丢弃，
     // 这里走 `apply*` 的 pending 缓冲 + `registerSession` 的 drain 才是对的。
     if (sessionUpdateHandler) {
+      sessionUpdateHandler.onRelease = sessionId => this.pending.remove(sessionId);
       this.updateListener = notification => this.applySessionUpdate(notification);
       sessionUpdateHandler.addListener(this.updateListener);
     }
@@ -110,7 +118,12 @@ export class SessionManager extends EventEmitter {
       log(`Agent ${agentName ?? evt.agentId} closed with code ${evt.code}`);
       // disconnectAgent() deregisters before killing, so a deliberate kill does not tear down twice
       if (agentName && this.connector.agentIdOf(agentName) === evt.agentId) {
-        this.teardownAgent(agentName, false);
+        if (this.recoveries.has(agentName)) {
+          this.suspendAgent(agentName);
+        } else if (this.canRecover(agentName)) {
+          this.suspendAgent(agentName);
+          this.startRecovery(agentName);
+        } else { this.teardownAgent(agentName, false); }
       }
       this.emit('agent-closed', evt.agentId, evt.code, agentName);
     });
@@ -149,11 +162,15 @@ export class SessionManager extends EventEmitter {
 
   /** Test seam: registers an already-built session as live without any agent process. */
   seedSession(session: SessionInfo): void {
-    this.registerSession(session);
     this.connector.register(session.agentName, session.agentId);
+    this.registerSession(session);
   }
 
   private registerSession(session: SessionInfo): void {
+    if (this.disposed || this.connector.agentIdOf(session.agentName) !== session.agentId) {
+      throw new Error('Agent connection was closed before the session could be registered.');
+    }
+    this.sessionUpdateHandler?.claim(session.sessionId, session.agentId);
     this.store.add(session);
     this.pending.drainInto(session);
     this.syncLiveSessions(session.agentName);
@@ -165,9 +182,11 @@ export class SessionManager extends EventEmitter {
 
   private removeSession(sessionId: string, reason: SessionCloseReason): void {
     const wasFocused = this.store.focusedId === sessionId;
+    this.permissionBridge?.cancelSession(sessionId);
+    this.elicitationBridge?.cancelSession(sessionId);
     const session = this.store.remove(sessionId);
     if (!session) { return; }
-    this.inFlightTurns.delete(sessionId);
+    if (this.inFlightTurns.delete(sessionId)) { this.emit('turn-state-changed', sessionId, false); }
     this.loadingSessionIds.delete(sessionId);
     this.syncLiveSessions(session.agentName);
     this.emit('session-closed', sessionId, session.agentName, reason);
@@ -189,6 +208,110 @@ export class SessionManager extends EventEmitter {
     this.focusSession(this.store.mostRecentLiveId());
   }
 
+  private canRecover(agentName: string): boolean {
+    return !this.disposed && (this.recoveryOptions.enabled?.() ?? vscode.workspace.getConfiguration('vac').get<boolean>('autoReconnect', true))
+      && !!this.connector.capabilities(agentName)?.resume && this.store.hasAgent(agentName);
+  }
+
+  /** Keep tab/transcript/draft identity; settle old turns and release the dead connection. */
+  private suspendAgent(agentName: string, kill = false): void {
+    const agentId = this.connector.detach(agentName);
+    if (agentId) { this.connectionManager.removeConnection(agentId); if (kill) { this.agentManager.killAgent(agentId); } }
+    for (const id of this.store.idsForAgent(agentName)) {
+      this.permissionBridge?.cancelSession(id);
+      this.elicitationBridge?.cancelSession(id);
+      if (this.inFlightTurns.delete(id)) { this.emit('turn-state-changed', id, false); }
+    }
+    this.emit('agent-disconnected', agentName);
+  }
+
+  private startRecovery(agentName: string): void {
+    const controller = new AbortController();
+    const job = { controller, promise: undefined as unknown as Promise<void> };
+    this.recoveries.set(agentName, job);
+    job.promise = this.recoverAgent(agentName, controller.signal).catch(error => {
+      if (!controller.signal.aborted && !this.disposed && this.recoveries.get(agentName) === job) {
+        this.suspendAgent(agentName, true);
+        this.connector.cancel(agentName);
+        this.emit('agent-recovery-failed', agentName);
+        logError('Automatic agent recovery stopped', error);
+      }
+      throw error;
+    }).finally(() => { if (this.recoveries.get(agentName) === job) { this.recoveries.delete(agentName); } });
+    // There need not be a caller awaiting this background job.
+    void job.promise.catch(() => {});
+  }
+
+  private async recoverAgent(agentName: string, signal: AbortSignal): Promise<void> {
+    let budget = this.recoveryBudgets.get(agentName);
+    if (!budget) { budget = new RecoveryBudget(this.recoveryOptions.delaysMs); this.recoveryBudgets.set(agentName, budget); }
+    while (this.canRecover(agentName) && !signal.aborted) {
+      const delay = budget.nextDelay();
+      if (delay === undefined) { throw new Error('Automatic recovery retry limit reached.'); }
+      await recoveryDelay(delay, signal);
+      if (!this.canRecover(agentName)) { return; }
+      const first = this.store.get(this.store.idsForAgent(agentName)[0]);
+      if (!first) { return; }
+      let conn: ConnectionInfo;
+      try { conn = await this.connector.ensure(agentName, first.cwd); }
+      catch (error) { if (signal.aborted) { throw error; } continue; }
+      try {
+        for (const id of this.store.idsForAgent(agentName)) {
+          const session = this.store.get(id);
+          if (!session) { continue; }
+          // No auth retry here: authentication / missing sessions require an explicit user action.
+          await this.resumeRetainedSession(session, conn, signal);
+        }
+      } catch (error) {
+        if (!signal.aborted && this.connectionManager.getConnection(conn.agentId) !== conn) { continue; }
+        throw error;
+      }
+      if (this.connectionManager.getConnection(conn.agentId) !== conn) { continue; }
+      budget.connected();
+      this.emit('agent-recovered', agentName);
+      return;
+    }
+  }
+
+  private resumeRetainedSession(session: SessionInfo, conn: ConnectionInfo, signal?: AbortSignal): Promise<void> {
+    if (session.agentId === conn.agentId) { return Promise.resolve(); }
+    const pending = this.retainedResumes.get(session);
+    if (pending?.conn === conn) { return pending.promise; }
+    const job = { conn, promise: undefined as unknown as Promise<void> };
+    this.retainedResumes.set(session, job);
+    job.promise = this.resumeRetainedSessionOnce(session, conn, signal).finally(() => {
+      if (this.retainedResumes.get(session) === job) { this.retainedResumes.delete(session); }
+    });
+    return job.promise;
+  }
+
+  private async resumeRetainedSessionOnce(session: SessionInfo, conn: ConnectionInfo, signal?: AbortSignal): Promise<void> {
+    if (!this.connector.capabilities(session.agentName)?.resume) { throw new Error('Agent no longer supports session/resume.'); }
+    const request = () => conn.connection.resumeSession({
+      sessionId: session.sessionId, cwd: session.cwd, mcpServers: [], ...this.metaFor(session.agentName),
+    });
+    let response: unknown;
+    try {
+      response = await withDeadline(() => this.connector.enqueue(conn.agentId, () => signal ? request() : this.withAuthRetry(session.agentName, conn, request)),
+        this.recoveryOptions.resumeTimeoutMs ?? 30_000, 'ACP session/resume', signal);
+    } catch (error) {
+      // A timed-out queued/manual RPC must not execute later on a still-live connection.
+      if (error instanceof DeadlineExceededError && !signal) { this.suspendAgent(session.agentName, true); }
+      throw error;
+    }
+    if (this.store.get(session.sessionId) !== session) { return; } // Closed tabs must not be resurrected by late RPCs.
+    if (this.disposed || signal?.aborted || this.connectionManager.getConnection(conn.agentId) !== conn) {
+      throw new Error('Session was closed while recovering.');
+    }
+    this.sessionUpdateHandler?.claim(session.sessionId, conn.agentId);
+    // Migration is allowed only for the same retained object after a successful resume.
+    session.agentId = conn.agentId;
+    session.initResponse = conn.initResponse;
+    this.applyStateFrom(session, response);
+    this.pending.drainInto(session);
+    this.emit('session-info-changed', session.sessionId);
+  }
+
   // --- Connection + session lifecycle --------------------------------------
 
   /** Reuses the agent's newest live session, otherwise creates one. */
@@ -197,6 +320,7 @@ export class SessionManager extends EventEmitter {
     const live = this.getSessionIdsForAgent(agentName);
     if (live.length > 0) {
       const sessionId = live[live.length - 1];
+      if (!this.getConnectionForSession(sessionId)) { await this.ensureConnected(agentName); }
       this.focusSession(sessionId, { force: focus });
       return this.store.get(sessionId)!;
     }
@@ -291,14 +415,37 @@ export class SessionManager extends EventEmitter {
     this.historyStore?.forget(agentName, sessionId);
   }
 
+  cancelAutomaticRecovery(): void {
+    for (const [name, recovery] of this.recoveries) {
+      this.recoveries.delete(name);
+      recovery.controller.abort();
+      this.connector.cancel(name);
+      this.suspendAgent(name, true);
+    }
+  }
+
   async disconnectAgent(agentName: string): Promise<void> {
-    if (!this.connector.isConnected(agentName) && !this.store.hasAgent(agentName)) { return; }
+    const recovery = this.recoveries.get(agentName);
+    this.recoveries.delete(agentName);
+    recovery?.controller.abort();
+    this.recoveryBudgets.delete(agentName);
+    const cancelled = this.connector.cancel(agentName);
+    if (!cancelled && !this.connector.isConnected(agentName) && !this.store.hasAgent(agentName)) { return; }
     log(`Disconnecting agent ${agentName}`);
     this.teardownAgent(agentName, true);
   }
 
   async ensureConnected(agentName: string, preferredCwd?: string): Promise<ConnectionInfo> {
-    return this.connector.ensure(agentName, preferredCwd);
+    const recovery = this.recoveries.get(agentName);
+    if (recovery) { await recovery.promise; }
+    const conn = await this.connector.ensure(agentName, preferredCwd);
+    // Explicit reconnects may authenticate, unlike unattended crash recovery.
+    for (const id of this.store.idsForAgent(agentName)) {
+      const session = this.store.get(id);
+      if (!session) { continue; }
+      if (session.agentId !== conn.agentId) { await this.resumeRetainedSession(session, conn); }
+    }
+    return conn;
   }
 
   /**
@@ -337,8 +484,10 @@ export class SessionManager extends EventEmitter {
       log(`Prompt response: stopReason=${response.stopReason}`);
       return response;
     } finally {
-      this.inFlightTurns.delete(sessionId);
-      this.emit('turn-state-changed', sessionId, false);
+      // A late response from a dead connection must not end a new recovered turn.
+      if (this.connectionManager.getConnection(session.agentId) === conn && this.inFlightTurns.delete(sessionId)) {
+        this.emit('turn-state-changed', sessionId, false);
+      }
     }
   }
 
@@ -607,6 +756,8 @@ export class SessionManager extends EventEmitter {
   ): Promise<'live' | 'load' | 'resume'> {
     const existing = this.store.get(sessionId);
     if (existing) {
+      if (existing.agentName !== agentName) { throw new Error('Session id is already open for another agent.'); }
+      if (!this.getConnectionForSession(sessionId)) { await this.ensureConnected(agentName, opts.cwd); }
       if (opts.title && !existing.title) { existing.title = opts.title; }
       this.focusSession(sessionId, { force: true });
       return 'live';
@@ -627,6 +778,8 @@ export class SessionManager extends EventEmitter {
   async loadSession(agentName: string, sessionId: string, requestedCwd?: string, title?: string): Promise<SessionInfo> {
     const existing = this.store.get(sessionId);
     if (existing) {
+      if (existing.agentName !== agentName) { throw new Error('Session id is already open for another agent.'); }
+      if (!this.getConnectionForSession(sessionId)) { await this.ensureConnected(agentName, requestedCwd); }
       this.focusSession(sessionId, { force: true });
       return existing;
     }
@@ -653,10 +806,13 @@ export class SessionManager extends EventEmitter {
         mcpServers: [],
         ...this.metaFor(agentName),
       })));
+      if (this.disposed || this.store.get(sessionId) !== placeholder) {
+        throw new Error('Session was closed while loading.');
+      }
       this.applyStateFrom(placeholder, response);
     } catch (e) {
       this.loadingSessionIds.delete(sessionId);
-      this.removeSession(sessionId, 'user');
+      if (this.store.get(sessionId) === placeholder) { this.removeSession(sessionId, 'user'); }
       this.emit('session-load-end', sessionId, agentName, false);
       if (NOT_FOUND.test(String((e as Error | undefined)?.message || ''))) {
         this.historyStore?.forget(agentName, sessionId);
@@ -674,6 +830,8 @@ export class SessionManager extends EventEmitter {
   async resumeSession(agentName: string, sessionId: string, requestedCwd?: string, title?: string): Promise<SessionInfo> {
     const existing = this.store.get(sessionId);
     if (existing) {
+      if (existing.agentName !== agentName) { throw new Error('Session id is already open for another agent.'); }
+      if (!this.getConnectionForSession(sessionId)) { await this.ensureConnected(agentName, requestedCwd); }
       this.focusSession(sessionId, { force: true });
       return existing;
     }
@@ -775,11 +933,20 @@ export class SessionManager extends EventEmitter {
   }
 
   dispose(): void {
+    if (this.disposed) { return; }
+    this.disposed = true;
+    for (const recovery of this.recoveries.values()) { recovery.controller.abort(); }
+    this.recoveries.clear();
+    this.recoveryBudgets.clear();
     if (this.updateListener) { this.sessionUpdateHandler?.removeListener(this.updateListener); }
-    this.agentManager.killAll();
+    this.permissionBridge?.cancelAll();
+    this.elicitationBridge?.cancelAll();
+    this.connector.clear();
+    this.agentManager.dispose();
     this.connectionManager.dispose();
     this.store.clear();
-    this.connector.clear();
+    this.pending.clear();
+    if (this.sessionUpdateHandler) { this.sessionUpdateHandler.onRelease = undefined; }
     this.inFlightTurns.clear();
     this.loadingSessionIds.clear();
   }
@@ -809,8 +976,9 @@ export class SessionManager extends EventEmitter {
     try {
       return await call();
     } catch (e) {
-      if (!isAuthRequiredError(e)) { throw e; }
+      if (!isAuthRequiredError(e) || this.disposed || this.connectionManager.getConnection(conn.agentId) !== conn) { throw e; }
       await runAuthFlow(agentName, conn);
+      if (this.disposed || this.connectionManager.getConnection(conn.agentId) !== conn) { throw new Error('Agent connection cancelled during authentication.'); }
       return call();
     }
   }

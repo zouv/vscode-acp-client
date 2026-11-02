@@ -124,3 +124,16 @@ describe('PendingSessionState', () => {
     expect(target.modes).toBeNull();
   });
 });
+
+describe('SessionStore collision protection', () => {
+  it('rejects a second agent or connection without corrupting either index', () => {
+    const store = new SessionStore();
+    const original = session('shared');
+    store.add(original);
+    expect(() => store.add(session('shared', 'Codex CLI'))).toThrow(/owned/);
+    expect(() => store.add({ ...original, agentId: 'reconnected' })).toThrow(/owned/);
+    expect(store.get('shared')).toBe(original);
+    expect(store.idsForAgent('Codex CLI')).toEqual([]);
+    expect(store.idsForAgent('Claude Code')).toEqual(['shared']);
+  });
+});

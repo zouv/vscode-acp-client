@@ -1,3 +1,4 @@
+import { abortable } from '../utils/Abortable';
 // 权限请求桥（面板内提示 + 弹框兜底）：新增文件。
 // 早期实现的 `PermissionHandler` 直接 `showQuickPick`，本仓库把它改成：能进面板就进面板，
 // 进不去才退回弹框。桥的职责是把「ACP 请求 → 用户决定 → ACP 响应」这条链路的**所有出口**
@@ -82,6 +83,7 @@ export interface SessionLabel {
 export type PermissionFallback = (
   params: RequestPermissionRequest,
   label: string,
+  signal?: AbortSignal,
 ) => Promise<RequestPermissionResponse>;
 
 interface Pending {
@@ -94,6 +96,7 @@ interface Pending {
   /** Whether `presenter.show` was actually called for this prompt. */
   shown: boolean;
   resolved: boolean;
+  controller: AbortController;
   /**
    * [CUSTOM-20261029 The session the PANEL should anchor this prompt to.
    *
@@ -164,7 +167,7 @@ export class PermissionBridge {
     return new Promise<RequestPermissionResponse>(resolve => {
       const item: Pending = {
         prompt, params, fallback, resolve,
-        owner: 'dialog', shown: false, resolved: false, panelSessionId,
+        owner: 'dialog', shown: false, resolved: false, panelSessionId, controller: new AbortController(),
       };
       this.pending.set(prompt.promptId, item);
 
@@ -307,9 +310,9 @@ export class PermissionBridge {
         if (item.resolved) { continue; }
         let response: RequestPermissionResponse;
         try {
-          response = await item.fallback(item.params, this.labelFor(item.panelSessionId));
+          response = await abortable(item.controller.signal, () => item.fallback(item.params, this.labelFor(item.panelSessionId), item.controller.signal));
         } catch (e) {
-          log(`${LOG_PREFIX}: dialog failed for ${item.prompt.promptId}: ${String(e)}`);
+          if (!item.resolved) { log(`${LOG_PREFIX}: dialog failed for ${item.prompt.promptId}: ${String(e)}`); }
           response = { outcome: { outcome: 'cancelled' } };
         }
         if (item.resolved) { continue; }
@@ -331,6 +334,7 @@ export class PermissionBridge {
   private settleWith(item: Pending, optionId: string | undefined, response: RequestPermissionResponse): void {
     if (item.resolved) { return; }
     item.resolved = true;
+    item.controller.abort();
     this.pending.delete(item.prompt.promptId);
     if (item.shown && this.presenter) {
       this.presenter.update(this.stateOf(item, optionId ? 'selected' : 'cancelled', optionId));

@@ -1,3 +1,4 @@
+import { abortable } from '../utils/Abortable';
 // ACP elicitation（表单）桥：AskUserQuestion 等
 // 「向用户要结构化输入」的请求可以在面板里答了。
 //
@@ -99,6 +100,7 @@ export type ElicitationContent = Record<string, string | number | boolean | stri
 export type ElicitationFallback = (
   params: CreateElicitationRequest,
   label: string,
+  signal?: AbortSignal,
 ) => Promise<CreateElicitationResponse>;
 
 interface Pending {
@@ -109,6 +111,7 @@ interface Pending {
   owner: 'panel' | 'dialog';
   shown: boolean;
   resolved: boolean;
+  controller: AbortController;
   /** [CUSTOM-20261029] Registered session the panel anchors this form to (see PermissionBridge). */
   panelSessionId: string;
 }
@@ -161,7 +164,7 @@ export class ElicitationBridge {
     return new Promise<CreateElicitationResponse>(resolve => {
       const item: Pending = {
         prompt, params, fallback, resolve,
-        owner: 'dialog', shown: false, resolved: false, panelSessionId,
+        owner: 'dialog', shown: false, resolved: false, panelSessionId, controller: new AbortController(),
       };
       this.pending.set(prompt.promptId, item);
 
@@ -290,9 +293,9 @@ export class ElicitationBridge {
         if (item.resolved) { continue; }
         let response: CreateElicitationResponse;
         try {
-          response = await item.fallback(item.params, this.labelFor(item.panelSessionId));
+          response = await abortable(item.controller.signal, () => item.fallback(item.params, this.labelFor(item.panelSessionId), item.controller.signal));
         } catch (e) {
-          log(`${LOG_PREFIX}: dialog failed for ${item.prompt.promptId}: ${String(e)}`);
+          if (!item.resolved) { log(`${LOG_PREFIX}: dialog failed for ${item.prompt.promptId}: ${String(e)}`); }
           response = { action: 'cancel' };
         }
         if (item.resolved) { continue; }
@@ -313,6 +316,7 @@ export class ElicitationBridge {
   private settleWith(item: Pending, response: CreateElicitationResponse): void {
     if (item.resolved) { return; }
     item.resolved = true;
+    item.controller.abort();
     this.pending.delete(item.prompt.promptId);
     if (item.shown && this.presenter) {
       const status: ElicitationStatus = response.action === 'accept' ? 'accepted'

@@ -5,7 +5,7 @@ import { setAuthSecrets } from './core/auth';
 import { ConnectionManager } from './core/ConnectionManager';
 import { SessionHistoryStore } from './core/SessionHistoryStore';
 import { SessionManager } from './core/SessionManager';
-import { createUsageService, DashboardViewProvider, type DashboardHost } from './dashboard';
+import { createUsageService, ClaudeUsageSource, CodexUsageSource, DashboardViewProvider, type DashboardHost } from './dashboard';
 import type { DashboardValues } from './dashboard/DashboardModel';
 import { registerCommands } from './commands';
 import { offerAgentMigration } from './config/AgentConfig';
@@ -63,6 +63,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const connectionManager = new ConnectionManager(updates, permissionBridge, elicitationBridge);
   const sessions = new SessionManager(agentManager, connectionManager, updates);
 
+  sessions.on('agent-recovery-failed', () => {
+    void vscode.window.showWarningMessage('VAC: Automatic recovery stopped. Your tabs are retained; reconnect manually or disconnect to close them.');
+  });
+  const agentConfigListener = vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration('vac.autoReconnect') && !vscode.workspace.getConfiguration('vac').get<boolean>('autoReconnect', true)) { sessions.cancelAutomaticRecovery(); }
+    if (!event.affectsConfiguration('vac.agents')) { return; }
+    void vscode.window.showInformationMessage('VAC: Agent configuration changed. Reload the window to apply it to running agents.', 'Reload Window').then(action => {
+      if (action === 'Reload Window') { void vscode.commands.executeCommand('workbench.action.reloadWindow'); }
+    });
+  });
+
   const history = new SessionHistoryStore(context.workspaceState);
   sessions.setHistoryStore(history);
   sessions.setPermissionBridge(permissionBridge);
@@ -74,7 +85,6 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   permissionBridge.setSessionLookup(sessionLookup);
   elicitationBridge.setSessionLookup(sessionLookup);
-  sessions.on('session-closed', (sessionId: string) => permissionBridge.cancelSession(sessionId));
 
   const tree = new SessionTreeProvider(sessions, history, () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
   const chat = new ChatViewProvider(
@@ -85,7 +95,24 @@ export function activate(context: vscode.ExtensionContext): void {
   const config = () => vscode.workspace.getConfiguration('vac');
   const usage = createUsageService({
     storageDir: context.globalStorageUri.fsPath,
+    enabled: config().get<boolean>('dashboard.enabled', true),
     claudeProjectsDir: config().get<string>('dashboard.claudeProjectsDir') || undefined,
+  });
+  let projectsDir = config().get<string>('dashboard.claudeProjectsDir') || undefined;
+  let usageConfigQueue: Promise<void> = Promise.resolve();
+  const usageConfigListener = vscode.workspace.onDidChangeConfiguration(event => {
+    if (!event.affectsConfiguration('vac.dashboard.enabled') && !event.affectsConfiguration('vac.dashboard.claudeProjectsDir')) { return; }
+    usage.setEnabled(false);
+    usageConfigQueue = usageConfigQueue.then(async () => {
+      const nextDir = config().get<string>('dashboard.claudeProjectsDir') || undefined;
+      if (nextDir !== projectsDir) {
+        await usage.replaceSources([new ClaudeUsageSource(nextDir), new CodexUsageSource()]);
+        projectsDir = nextDir;
+      }
+      const enabled = config().get<boolean>('dashboard.enabled', true);
+      usage.setEnabled(enabled);
+      if (enabled) { usage.startWatching(); await usage.refresh(); }
+    }).catch(error => logError('dashboard configuration failed', error));
   });
   const dashboard = new DashboardViewProvider(
     context.extensionUri,
@@ -123,13 +150,15 @@ export function activate(context: vscode.ExtensionContext): void {
         permissionBridge.cancelAll();
         elicitationBridge.cancelAll();
         dashboard.dispose();
+        usageConfigListener.dispose();
+        agentConfigListener.dispose();
         usage.dispose();
         chat.dispose();
         permissionBridge.dispose();
         elicitationBridge.dispose();
         tree.dispose();
         history.dispose();
-        disposeChannels();
+        void disposeChannels();
       },
     },
   );
@@ -141,6 +170,7 @@ export function activate(context: vscode.ExtensionContext): void {
   log('VAC extension activated.');
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   log('VAC extension deactivated.');
+  await disposeChannels();
 }

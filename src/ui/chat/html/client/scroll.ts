@@ -19,9 +19,12 @@ export const scrollClient = `
   var recomputePending = false;
   // 滚动记忆的「再对齐」状态：切回一个会话时先按记录恢复位置，随后 markdown 回填
   // 会改变高度、把位置冲掉，所以要在收到渲染结果后再对齐一次。
-  // 只在**用户自己滚动**时放弃（expectedTop 用来区分程序写入与用户滚动）。
+  // 只在**真实用户滚动意图**之后放弃；布局锚定不算用户接管。
   var restoreTarget = null;
   var expectedTop = 0;
+  var restoreAnchor = null;
+  var restoreEpoch = 0;
+  var anchorPending = false;
 
   // [CUSTOM- 内层滚动卡片：焦点门控 + 自动追尾（2026-10-28）。
   //
@@ -231,8 +234,9 @@ export const scrollClient = `
         if (fromUser) { cancelTail('scroll'); }
       }
       logScrollState(fromProgram ? 'scroll-after-program' : (fromUser ? 'user-scroll' : 'layout-scroll'));
-      onScroll();
+      onScroll(fromUser);
     });
+    container.addEventListener('contentvisibilityautostatechange', scheduleAnchorReassert, true);
     // [CUSTOM- 滚轮单独留一条：用户报的"点 Jump 正常、滚轮一碰又错乱"里，真正要看的是
     // **滚轮之后**的几何（scroll 事件可能不派发：夹紧、焦点切换、内容在写入之后才长高）。
     // 每次滚轮在下一帧采样一次，deltaY 一起记 —— 用来区分"他往上滚了一格"与"位置没动"。
@@ -466,10 +470,10 @@ export const scrollClient = `
     }
   }
 
-  function onScroll() {
+  function onScroll(fromUser) {
     recompute();
     // 用户接管了视口：放弃待恢复的位置，不要跟他抢。
-    if (restoreTarget !== null && container && Math.abs(container.scrollTop - expectedTop) > 2) {
+    if (fromUser && restoreTarget !== null && container && Math.abs(container.scrollTop - expectedTop) > 2) {
       restoreTarget = null;
     }
   }
@@ -847,6 +851,7 @@ export const scrollClient = `
     cancelTail('scroll');
     pinned = false;
     showJump();
+    restoreTarget = null;
     writeTop(top);
     onScroll();
     logScrollState('jumpTo', true);
@@ -892,11 +897,30 @@ export const scrollClient = `
   // 只记 top 的话，一个本来贴底的会话切回来会停在半空；只记 pinned 又会丢掉阅读位置。
   function remember(sessionId) {
     if (!container || !sessionId) { return; }
-    offsets[sessionId] = { top: container.scrollTop, pinned: pinned };
+    var saved = { top: container.scrollTop, pinned: pinned };
+    // Intrinsic sizes belong to DOM instances; absolute offsets drift after hydrate.
+    // Hit-test a visible record without measuring every offscreen body.
+    if (!pinned && document.elementsFromPoint && container.getBoundingClientRect) {
+      var box = container.getBoundingClientRect();
+      var fractions = [0.25, 0.5, 0.75];
+      for (var f = 0; f < fractions.length && !saved.anchorId; f++) {
+        var hits = document.elementsFromPoint(box.left + box.width / 2, box.top + container.clientHeight * fractions[f]);
+        for (var h = 0; h < hits.length; h++) {
+          var node = hits[h].closest ? hits[h].closest('[data-entry-id]') : null;
+          if (!node || !container.contains(node)) { continue; }
+          saved.anchorId = node.getAttribute('data-entry-id');
+          saved.anchorOffset = node.getBoundingClientRect().top - box.top;
+          break;
+        }
+      }
+    }
+    offsets[sessionId] = saved;
     persistSoon();
   }
 
   function restore(sessionId) {
+    restoreEpoch++;
+    restoreAnchor = null;
     if (!container) { return; }
     // 切会话 = 换了一批卡片：上一张卡片的焦点环不能跟过来。
     setActive(null);
@@ -915,9 +939,14 @@ export const scrollClient = `
     pinned = false;
     showJump();
     restoreTarget = saved.top;
+    if (saved.anchorId && typeof saved.anchorOffset === 'number' && NS.transcriptView && NS.transcriptView.node) {
+      var anchor = NS.transcriptView.node(saved.anchorId);
+      if (anchor && container.contains(anchor)) { restoreAnchor = { node: anchor, offset: saved.anchorOffset }; }
+    }
     writeTop(saved.top);
     expectedTop = container.scrollTop;
     logScrollState('restore:' + saved.top, true);
+    settleAnchor(restoreEpoch, 6);
   }
 
   /**
@@ -927,8 +956,34 @@ export const scrollClient = `
    */
   function reassert() {
     if (!container || restoreTarget === null) { return; }
-    writeTop(restoreTarget);
+    var top = restoreTarget;
+    if (restoreAnchor && container.contains(restoreAnchor.node)) {
+      var delta = restoreAnchor.node.getBoundingClientRect().top - container.getBoundingClientRect().top - restoreAnchor.offset;
+      top = container.scrollTop + delta;
+    }
+    if (Math.abs(container.scrollTop - top) > 0.5) { writeTop(top); }
     expectedTop = container.scrollTop;
+  }
+
+  // A handful of frames lets native content-visibility materialize the restored
+  // viewport; epoch and user intent cancel work belonging to a previous session.
+  function settleAnchor(epoch, frames) {
+    if (!restoreAnchor || restoreTarget === null || frames <= 0 || !NS.dom || !NS.dom.schedule) { return; }
+    NS.dom.schedule(function () {
+      if (epoch !== restoreEpoch || restoreTarget === null) { return; }
+      reassert();
+      settleAnchor(epoch, frames - 1);
+    });
+  }
+
+  function scheduleAnchorReassert() {
+    if (anchorPending || !restoreAnchor || restoreTarget === null || !NS.dom || !NS.dom.schedule) { return; }
+    anchorPending = true;
+    var epoch = restoreEpoch;
+    NS.dom.schedule(function () {
+      anchorPending = false;
+      if (epoch === restoreEpoch) { reassert(); }
+    });
   }
 
   function forget(sessionId) {

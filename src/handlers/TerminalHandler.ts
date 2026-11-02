@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { type ChildProcess } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import * as vscode from 'vscode';
 import type {
   CreateTerminalRequest,
@@ -15,6 +16,8 @@ import type {
 
 import { log, logError } from '../utils/Logger';
 import { TailBuffer } from '../utils/TailBuffer';
+import { terminateTree } from '../utils/ProcessTree';
+import { spawnTerminalCommand } from '../utils/TerminalCommand';
 
 const DEFAULT_OUTPUT_LIMIT = 1024 * 1024;
 
@@ -39,24 +42,21 @@ interface ManagedTerminal {
 
 /** Backs the ACP `terminal/*` methods with real child processes mirrored into VS Code terminals. */
 export class TerminalHandler {
+  private disposed = false;
   private readonly terminals = new Map<string, ManagedTerminal>();
   private nextId = 1;
+  private readonly retained = new Set<vscode.Terminal>();
 
   async createTerminal(params: CreateTerminalRequest): Promise<CreateTerminalResponse> {
+    if (this.disposed) { throw new Error('Terminal handler is disposed.'); }
     const terminalId = `term_${this.nextId++}`;
     const args = params.args ?? [];
-    log(`createTerminal: ${params.command} ${args.join(' ')} (id=${terminalId})`);
+    log(`createTerminal: ${params.command} (id=${terminalId})`);
 
     const env: Record<string, string> = { ...process.env } as Record<string, string>;
     for (const v of params.env ?? []) { env[v.name] = v.value; }
 
-    const child = spawn(params.command, args, {
-      cwd: params.cwd || undefined,
-      env,
-      shell: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    const child = spawnTerminalCommand(params.command, args, params.cwd || undefined, env);
 
     const writer = new vscode.EventEmitter<string>();
     const vsTerminal = vscode.window.createTerminal({
@@ -64,17 +64,24 @@ export class TerminalHandler {
       pty: {
         onDidWrite: writer.event,
         open: () => writer.fire(`$ ${params.command} ${args.join(' ')}\r\n`),
-        close: () => { /* output stays visible per ACP spec */ },
+        close: () => {
+          this.retained.delete(vsTerminal);
+          if (child.exitCode === null) { terminateTree(child, 'SIGKILL'); }
+          writer.dispose();
+        },
       },
     });
 
     const buffer = new TailBuffer(params.outputByteLimit ?? DEFAULT_OUTPUT_LIMIT);
-    const onData = (data: Buffer) => {
-      buffer.append(data);
-      writer.fire(data.toString().replace(/\n/g, '\r\n'));
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
+    const append = (text: string) => {
+      if (!text) { return; }
+      buffer.append(Buffer.from(text));
+      writer.fire(text.replace(/\n/g, '\r\n'));
     };
-    child.stdout?.on('data', onData);
-    child.stderr?.on('data', onData);
+    child.stdout?.on('data', (data: Buffer) => append(stdoutDecoder.write(data)));
+    child.stderr?.on('data', (data: Buffer) => append(stderrDecoder.write(data)));
 
     const managed: ManagedTerminal = {
       process: child,
@@ -87,13 +94,20 @@ export class TerminalHandler {
       writer,
     };
     managed.exitPromise = new Promise<void>(resolve => {
-      child.on('close', (code, signal) => {
-        managed.exitCode = code;
+      child.once('close', (code, signal) => {
+        append(stdoutDecoder.end());
+        append(stderrDecoder.end());
+        if (managed.exitCode === null) { managed.exitCode = code; }
         managed.exitSignal = signal;
         managed.exited = true;
         resolve();
       });
-      child.on('error', () => resolve());
+      child.once('error', error => {
+        managed.exited = true;
+        managed.exitCode = 1;
+        buffer.append(Buffer.from(String(error)));
+        resolve();
+      });
     });
 
     this.terminals.set(terminalId, managed);
@@ -129,7 +143,7 @@ export class TerminalHandler {
   async killTerminal(params: KillTerminalRequest): Promise<KillTerminalResponse> {
     const t = this.require(params.terminalId);
     try {
-      t.process.kill('SIGTERM');
+      terminateTree(t.process, 'SIGKILL');
     } catch (e) {
       logError(`Failed to kill terminal ${params.terminalId}`, e);
     }
@@ -140,30 +154,37 @@ export class TerminalHandler {
     const t = this.require(params.terminalId);
     log(`releaseTerminal: ${params.terminalId}`);
     if (!t.exited) {
-      try { t.process.kill('SIGTERM'); } catch { /* already gone */ }
+      try { terminateTree(t.process, 'SIGKILL'); } catch { /* already gone */ }
     }
     this.terminals.delete(params.terminalId);
+    this.retained.add(t.vsTerminal);
+    void t.exitPromise.then(() => t.writer.dispose());
     return {};
   }
 
   /** Stops running commands but leaves their VS Code terminals (and output) in place. */
   killAll(): void {
     for (const t of this.terminals.values()) {
-      if (t.exited) { continue; }
-      try { t.process.kill('SIGKILL'); } catch { /* already gone */ }
+      if (!t.exited) { try { terminateTree(t.process, 'SIGKILL'); } catch { /* already gone */ } }
+      this.retained.add(t.vsTerminal);
+      void t.exitPromise.then(() => t.writer.dispose());
     }
     this.terminals.clear();
   }
 
   dispose(): void {
+    if (this.disposed) { return; }
+    this.disposed = true;
     for (const t of this.terminals.values()) {
-      try {
-        if (!t.exited) { t.process.kill('SIGKILL'); }
-        t.vsTerminal.dispose();
-        t.writer.dispose();
-      } catch { /* best effort */ }
+      if (!t.exited) { try { terminateTree(t.process, 'SIGKILL'); } catch { /* best effort */ } }
+      try { t.vsTerminal.dispose(); } catch { /* best effort */ }
+      t.writer.dispose();
+    }
+    for (const terminal of this.retained) {
+      try { terminal.dispose(); } catch { /* best effort */ }
     }
     this.terminals.clear();
+    this.retained.clear();
   }
 
   private require(terminalId: string): ManagedTerminal {

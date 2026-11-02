@@ -31,6 +31,89 @@ export const transcriptViewClient = `
   var inFlight = {};
   var sessionId = null;
   var messagesEl = null;
+  // Weak keys do not retain evicted DOM nodes or session histories.
+  var renderedProseHtml = new WeakMap();
+  var streamFrames = {};
+  var streamDom = new WeakMap();
+  var streamTimer = null;
+
+  function scheduleStreamMarkdown() {
+    if (streamTimer !== null) { return; }
+    streamTimer = setTimeout(function () { streamTimer = null; flushPending(); }, 120);
+  }
+
+  /** Stable blocks retain their DOM; only the mutable final block is replaced. */
+  function applyStreamBody(body, entry) {
+    var frame = streamFrames[entry.id];
+    if ((!entry.streaming && entry.html) || !frame || String(entry.text || '').indexOf(frame.source) !== 0) { return false; }
+    delete tails[entry.id];
+    renderedProseHtml.delete(body);
+    var state = streamDom.get(body);
+    var compatible = !!state && state.blocks.length <= frame.blocks.length;
+    for (var i = 0; compatible && i < state.blocks.length; i++) {
+      if (state.blocks[i] !== frame.blocks[i]) { compatible = false; }
+    }
+    if (!compatible) {
+      NS.dom.clear(body);
+      state = { blocks: [], tail: NS.dom.el('div', 'stream-tail'), extra: NS.dom.el('div', 'stream-extra'), tailHtml: null };
+      body.appendChild(state.tail);
+      body.appendChild(state.extra);
+      streamDom.set(body, state);
+    }
+    var selection = window.getSelection ? window.getSelection() : null;
+    if (state.source && selection && String(selection.toString() || '')
+      && state.tail.contains && (state.tail.contains(selection.anchorNode) || state.tail.contains(selection.focusNode))) {
+      // The user is reading/selecting the mutable block. Keep it until release;
+      // newly appended text remains visible in the raw suffix, without duplication.
+      setStreamingText(state.extra, entry.id + ':stream-extra', String(entry.text || '').slice(state.source.length));
+      return true;
+    }
+    for (var b = state.blocks.length; b < frame.blocks.length; b++) {
+      var block = NS.dom.el('div', 'stream-block');
+      NS.dom.setSanitizedHtml(block, frame.blocks[b]);
+      NS.links.decorateScrollables(block);
+      body.insertBefore(block, state.tail);
+      state.blocks.push(frame.blocks[b]);
+    }
+    if (state.tailHtml !== frame.tailHtml) {
+      NS.dom.setSanitizedHtml(state.tail, frame.tailHtml);
+      NS.links.decorateScrollables(state.tail);
+      state.tailHtml = frame.tailHtml;
+    }
+    state.source = frame.source;
+    setStreamingText(state.extra, entry.id + ':stream-extra', String(entry.text || '').slice(frame.source.length));
+    return true;
+  }
+
+  function preserveCompletedStream(body, entry) {
+    var state = streamDom.get(body);
+    if (!entry.streaming && state && state.source === entry.text
+      && entry.html === state.blocks.join('') + state.tailHtml) {
+      renderedProseHtml.set(body, entry.html);
+    }
+  }
+
+  function applyStreamItem(item) {
+    var entry = objects[item.entryId];
+    var frame = item.stream;
+    var sent = inFlight[item.entryId];
+    // Never clear a newer settled request when an older streaming reply arrives.
+    if (sent && sent.streaming && sent.text === frame.source) { delete inFlight[item.entryId]; }
+    if (!entry || !entry.streaming || item.sessionId !== sessionId || typeof frame.source !== 'string'
+      || !Array.isArray(frame.blocks) || typeof frame.tailHtml !== 'string'
+      || String(entry.text || '').indexOf(frame.source) !== 0) { return; }
+    var old = streamFrames[item.entryId];
+    if (old && old.source.length > frame.source.length && frame.source.indexOf(old.source) !== 0) { return; }
+    streamFrames[item.entryId] = frame;
+    var node = nodes[item.entryId];
+    var body = node && node.querySelector(entry.kind === 'thought' ? '.thought-body' : '.bubble-body');
+    if (body) {
+      if (entry.kind === 'thought') { applyThoughtBody(body, entry); }
+      else { applyAssistant(body, entry, node); }
+    }
+    if (pending[item.entryId] === frame.source) { delete pending[item.entryId]; }
+    else { scheduleStreamMarkdown(); }
+  }
   // [CUSTOM- Explicit append order. Object key order is NOT usable
   // here: entry ids are strings but Object.keys ordering guarantees only cover
   // integer-like keys, and the outline must list turns in the order they were
@@ -261,6 +344,9 @@ export const transcriptViewClient = `
   }
 
   function reset() {
+    if (streamTimer !== null) { clearTimeout(streamTimer); streamTimer = null; }
+    streamFrames = {};
+    streamDom = new WeakMap();
     nodes = {};
     objects = {};
     pending = {};
@@ -302,7 +388,7 @@ export const transcriptViewClient = `
     var text = entry.text;
     if (!text) { return; }
     if (entry.html !== undefined && entry.html !== null && entry.html !== '') { return; }
-    if (entry.kind === 'assistant') { asked[entry.id] = text; pending[entry.id] = text; scheduleMarkdown(); return; }
+    if (entry.kind === 'assistant' || (entry.kind === 'thought' && entry.streaming)) { asked[entry.id] = text; pending[entry.id] = text; scheduleMarkdown(); return; }
     // [CUSTOM- A thought renders markdown through the same round-trip,
     // but only once it has SETTLED: html for a block that is still streaming would
     // freeze a prefix of the text while the stream keeps appending. A settled
@@ -357,6 +443,7 @@ export const transcriptViewClient = `
   /** 一条回填：工具正文按它的稳定 key，记录正文按 entryId（147：两者都不该按聚焦会话过滤）。 */
   function applyMarkdownItem(item) {
     if (item.key) { NS.toolCallView.applyMarkdown(item.key, item.html); }
+    else if (item.stream) { applyStreamItem(item); }
     else { patch(item.entryId, { html: item.html }); }
   }
 
@@ -465,16 +552,23 @@ export const transcriptViewClient = `
    * arrived yet - which is also what makes a stored snapshot without html render.
    */
   function applyThoughtBody(body, entry) {
+    if (applyStreamBody(body, entry)) { body.className = 'thought-body md'; return; }
+    preserveCompletedStream(body, entry);
+    streamDom.delete(body);
     var hasHtml = entry.html !== undefined && entry.html !== null && entry.html !== '';
     if (hasHtml) {
       // The bubble is now HTML: any text node we were appending to is gone, so the
       // delta bookkeeping must go with it (same rule as applyAssistant).
       delete tails[entry.id];
       body.className = 'thought-body md';
-      NS.dom.setSanitizedHtml(body, entry.html);
-      NS.links.decorateScrollables(body);
+      if (renderedProseHtml.get(body) !== entry.html) {
+        NS.dom.setSanitizedHtml(body, entry.html);
+        NS.links.decorateScrollables(body);
+        renderedProseHtml.set(body, entry.html);
+      }
       return;
     }
+    renderedProseHtml.delete(body);
     body.className = 'thought-body';
     setStreamingText(body, entry.id, entry.text || '');
   }
@@ -489,6 +583,12 @@ export const transcriptViewClient = `
    * ask for a thought's markdown at all.
    */
   function trackMarkdown(entryId, entry, changes) {
+    if (entry.streaming && entry.text && !entry.html) {
+      pending[entryId] = entry.text;
+      scheduleStreamMarkdown();
+      return;
+    }
+    if (entry.html) { delete streamFrames[entryId]; }
     // [CUSTOM- 只有"渲染的就是当前这段文本"的回填才算数（asked 没记录时按
     // 老规矩照收：那说明 html 不是这条请求要回来的）。旧文本的回填既不该落到正文上，
     // 也不该把我们新排的请求顶掉。
@@ -1017,18 +1117,28 @@ export const transcriptViewClient = `
    * the whole text node. One line, capped - the element is a one-line glimpse, and a copy of
    * a 64KB message would otherwise sit in the DOM a second time.
    */
-  function refreshPreview(record, body) {
+  function refreshPreview(record, body, rawText) {
     var preview = record && record.querySelector ? record.querySelector('.msg-preview') : null;
     if (!preview) { return; }
     var first = body.firstElementChild;
-    var text = String((first && first.textContent) || body.textContent || '');
+    // Streaming previews only need 240 chars; do not read the accumulated DOM text.
+    var text = rawText !== undefined ? String(rawText).slice(0, ASSISTANT_PREVIEW_CHARS)
+      : String((first && first.textContent) || body.textContent || '');
     var nl = text.indexOf('\\n');
     if (nl >= 0) { text = text.slice(0, nl); }
     if (text.length > ASSISTANT_PREVIEW_CHARS) { text = text.slice(0, ASSISTANT_PREVIEW_CHARS); }
-    preview.textContent = text.trim();
+    var nextPreview = text.trim();
+    if (preview.textContent !== nextPreview) { preview.textContent = nextPreview; }
   }
 
   function applyAssistant(body, entry, record) {
+    if (applyStreamBody(body, entry)) {
+      body.className = 'bubble-body md';
+      refreshPreview(record, body, entry.text || '');
+      return;
+    }
+    preserveCompletedStream(body, entry);
+    streamDom.delete(body);
     // [CUSTOM- An EMPTY html string is not a rendered message.
     // markdown.render() can return '' (blank-ish input), and treating that as
     // "we have HTML" turned the bubble into an empty bordered box - one of the
@@ -1042,14 +1152,21 @@ export const transcriptViewClient = `
       // lives in the summary now (icons.attach targets .msg-head), so rewriting the
       // body cannot touch it in the first place.
       body.className = 'bubble-body md';
-      NS.dom.setSanitizedHtml(body, entry.html);
-      NS.links.decorateScrollables(body);
+      // Finalize / elapsed-time patches frequently carry the same HTML. Preserve its
+      // DOM (selection, code-copy controls, scroll offsets), rather than sanitize twice.
+      if (renderedProseHtml.get(body) !== entry.html) {
+        NS.dom.setSanitizedHtml(body, entry.html);
+        NS.links.decorateScrollables(body);
+        renderedProseHtml.set(body, entry.html);
+        refreshPreview(record, body);
+      }
       refreshPreview(record, body);
       return;
     }
+    renderedProseHtml.delete(body);
     body.className = 'bubble-body';
     setStreamingText(body, entry.id, entry.text || '');
-    refreshPreview(record, body);
+    refreshPreview(record, body, entry.text || '');
   }
 
   /**
@@ -1124,6 +1241,16 @@ export const transcriptViewClient = `
     if (node && NS.rail && NS.rail.watch) { NS.rail.watch(node); }
   }
 
+  function syncNodeMetadata(node, entry) {
+    node.setAttribute('data-kind', entry.kind);
+    node.setAttribute('data-entry-id', entry.id);
+    node.setAttribute('data-streaming', entry.streaming ? 'true' : 'false');
+    if (entry.kind === 'assistant' || entry.kind === 'thought' || entry.kind === 'tool') {
+      node.setAttribute('data-render-window', 'true');
+    }
+    NS.icons.attach(node, entry);
+  }
+
   function place(entry, toolView) {
     var node;
     if (entry.kind === 'tool') {
@@ -1162,17 +1289,7 @@ export const transcriptViewClient = `
       }
       node.title = fullStamp(entry.at, elapsed);
     }
-    // Drives the three-tier spacing ladder in the stylesheet (same-kind blocks
-    // sit tight, cross-kind blocks get air, user messages start a new turn).
-    node.setAttribute('data-kind', entry.kind);
-    // [CUSTOM- Per-entry anchor. The outline (and anything that
-    // later needs to find a specific record's DOM node) keys off this instead
-    // of re-deriving positions from the entry list.
-    node.setAttribute('data-entry-id', entry.id);
-    // [CUSTOM- Type icon. Must happen here (not inside the build
-    // functions) so it covers hydrate and both append paths at once; attach is
-    // idempotent, so the rebuild paths can call it again safely.
-    NS.icons.attach(node, entry);
+    syncNodeMetadata(node, entry);
     objects[entry.id] = entry;
     nodes[entry.id] = node;
     order.push(entry.id);
@@ -1252,7 +1369,8 @@ export const transcriptViewClient = `
           // .tool-status/.tool-title/.tool-body, so it can NEVER repair a shell
           // -- which is why a shell used to be permanent. Rebuild instead.
           var rebuilt = NS.toolCallView.render(toolView, entry.id);
-          rebuilt.setAttribute('data-kind', 'tool');
+          objects[entry.id].toolView = toolView;
+          syncNodeMetadata(rebuilt, objects[entry.id]);
           existing.parentNode.replaceChild(rebuilt, existing);
           nodes[entry.id] = rebuilt;
           watchNode(rebuilt);
@@ -1367,14 +1485,13 @@ export const transcriptViewClient = `
       }
     } else if (entry.kind === 'plan') {
       var rebuilt = buildPlan(entry);
-      rebuilt.setAttribute('data-kind', entry.kind);
-      NS.icons.attach(rebuilt, entry);
+      syncNodeMetadata(rebuilt, entry);
       node.parentNode.replaceChild(rebuilt, node);
       nodes[entryId] = rebuilt;
       watchNode(rebuilt);
     } else if (entry.kind === 'content') {
       var rebuiltContent = buildContent(entry);
-      rebuiltContent.setAttribute('data-kind', entry.kind);
+      syncNodeMetadata(rebuiltContent, entry);
       node.parentNode.replaceChild(rebuiltContent, node);
       nodes[entryId] = rebuiltContent;
       watchNode(rebuiltContent);
@@ -1394,6 +1511,7 @@ export const transcriptViewClient = `
       // button must not move under the pointer when a state patch arrives.
       patchSubagent(node, entry);
     }
+    nodes[entryId].setAttribute('data-streaming', entry.streaming ? 'true' : 'false');
     NS.scroll.follow();
   }
 
@@ -1404,14 +1522,14 @@ export const transcriptViewClient = `
     // the conversation rail reads its status field to colour the dot, and tool
     // status is not part of PATCH_KEYS.
     if (entry) { entry.toolView = tool; }
-    if (!node) { return; }
+    if (!node || !entry) { return; }
     // [CUSTOM- A card that was placed before its view model existed
     // is a bare tool shell, and update can only patch an existing head. The
     // append path learned this in 018; this path was the remaining gap, which is
     // why such a card stayed empty forever.
     if (tool && !node.querySelector('.tool-head')) {
       var rebuilt = NS.toolCallView.render(tool, entryId);
-      rebuilt.setAttribute('data-kind', 'tool');
+      syncNodeMetadata(rebuilt, entry);
       if (node.parentNode) { node.parentNode.replaceChild(rebuilt, node); }
       nodes[entryId] = rebuilt;
       watchNode(rebuilt);
@@ -1435,9 +1553,10 @@ export const transcriptViewClient = `
       // 会话身份也算在内：带着 null sessionId 发出去的那次会被宿主整条丢掉，
       // setSessionId 校正之后必须允许用新身份重发（否则那条记录永远停在原文）。
       var sent = inFlight[id];
-      if (sent && sent.sessionId === sessionId && sent.text === pending[id]) { continue; }
-      inFlight[id] = { sessionId: sessionId, text: pending[id] };
-      out.push({ entryId: id, sessionId: sessionId, text: pending[id] });
+      var isStreaming = !!(objects[id] && objects[id].streaming);
+      if (sent && sent.sessionId === sessionId && (sent.text === pending[id] || (isStreaming && sent.streaming))) { continue; }
+      inFlight[id] = { sessionId: sessionId, text: pending[id], streaming: isStreaming };
+      out.push({ entryId: id, sessionId: sessionId, text: pending[id], streaming: isStreaming });
     }
     return out;
   }

@@ -242,7 +242,7 @@ agent 支持 `session/list` 时以 agent 为准；否则用本机缓存，而缓
 
 ### 技术栈
 
-TypeScript + VS Code Extension API，作为 ACP 客户端用 [`@agentclientprotocol/sdk`](https://www.npmjs.com/package/@agentclientprotocol/sdk) 走 stdio 上的 JSON-RPC；esbuild 打包成单文件 `dist/extension.js`。测试分两层：vitest 跑纯逻辑，`@vscode/test-cli` + mocha 跑真实 Extension Host。选型理由与组件分工见 [`docs/01-技术栈说明.md`](docs/01-技术栈说明.md)。
+开发/打包要求 Node.js ≥ 22.13；扩展使用 VS Code 自带运行时，默认 agent 的外部 Node/npx 要求见前置条件。TypeScript + VS Code Extension API，作为 ACP 客户端用 [`@agentclientprotocol/sdk`](https://www.npmjs.com/package/@agentclientprotocol/sdk) 走 stdio 上的 JSON-RPC；esbuild 打包成单文件 `dist/extension.js`。测试分两层：vitest 跑纯逻辑，`@vscode/test-electron` + Mocha API 跑真实 Extension Host。选型理由与组件分工见 [`docs/01-技术栈说明.md`](docs/01-技术栈说明.md)。
 
 ### 常用脚本
 

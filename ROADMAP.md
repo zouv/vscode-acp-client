@@ -11,7 +11,7 @@
 
 ---
 
-## 总进度（2026-10-28 更新）
+## 总进度（2026-11-02 更新）
 
 **M1 独立化重构已交付 ✅ + v1.0.1 已发布 ✅（2026-10-12）**；此后 M2/M3/M4/M5 均已完成，
 **v1.4.0 已发布（2026-10-21）**：设置面板、新输出自动展开、连接预热 + 本地运行时缓存、
@@ -29,10 +29,16 @@ Recently used 条数可配、tab/目录提示分色、Markdown 渲染预设。�
 **v1.8.2（2026-10-28）**：输入卡交互——空输入 / 纯空白时 **Send 灰置**、`/` 命令面板点空白即收起、
 **Effort 图标**换形放大；另修复地址栏开关会把设置面板刚写入的偏好重置回默认值。
 明细见 `CHANGELOG [1.8.2]`。
+**v1.9.0（2026-11-02）**：项目审查整改、连接恢复与长会话渲染优化；依赖审计清零，保持 VS Code 1.85 兼容。明细见 `CHANGELOG [1.9.0]`。
 
 ---
 
 ## ✅ 已交付里程碑
+
+### v1.9.0 · ~~项目审查整改~~ ✅（2026-11-02）
+
+本轮审查的 14 项缺陷完成修复与回归覆盖，并补最低宿主兼容构建和跨平台 CI 配置。P1-8 超时/有界 resume 恢复与配置提示已落地，真实 agent 与远程 CI 验收未视为完成。细节见 `CHANGELOG [1.9.0]`。
+
 
 ### v1.8.2 · 输入卡交互优化（2026-10-28）
 
@@ -122,12 +128,12 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 |---|------|------|
 | P1-1 | Codex 链路端到端验证 | 🚧 2026-10-25：换新包 `@agentclientprotocol/codex-acp`、握手探针实测能力、API Key 认证 + 登出、`_meta` 终端输出渲染已完成；**剩真机跑一轮带命令的会话**，并核对 `CodexUsageSource` 口径 |
 | P1-2 | 宿主实测验收 | `npm run dev:host` 目视验收 Dashboard 与聊天面板的渲染、统计数字是否对得上 |
-| P1-3 | 打包体积瘦身 | `dist/extension.js` 1.42 MB（压缩后），主要来自 ACP SDK 全量引入；评估按需引入或裁剪 |
+| P1-3 | 打包体积瘦身 | `dist/extension.js` 当前生产包约 1.71 MiB（2026-11-01），主要来自 ACP SDK 全量引入；评估按需引入或裁剪 |
 | ~~P1-4~~ | ~~首次发布~~ | ✅ 已完成（2026-10-12）：v1.0.1 已打 GitHub Release 并附 `.vsix`；市场发布见 P2-5 |
 | ~~P1-5~~ | ~~底层 P0 修复~~ | ✅ 2026-10-25：`session/new` 失败不再杀进程、布尔配置项按协议上线、认证重试覆盖 load/resume/prompt |
 | ~~P1-6~~ | ~~agent 差异收进 `AgentProfile`~~ | ✅ 2026-10-25：转录补全与嵌套策略按 kind（`transcriptStore` / `nesting`），不再按名字 |
-| P1-7 | 终端与写文件健壮性 | `TerminalHandler`：参数转义、`taskkill /T` 收子孙进程、release 后清 VS Code 终端、UTF-8 分片解码；`writeTextFile` 对已打开且有未保存修改的文档走 `WorkspaceEdit` |
-| P1-8 | 连接健壮性 | `initialize` 超时；agent 崩溃后自动重连并 resume 已打开会话；`vac.agents` 变更时提示重启；`logTraffic` 默认值复议 |
+| ~~P1-7~~ | ~~终端与写文件健壮性~~ | ✅ 2026-11-01：shell-free argv、进程树回收、UTF-8 解码、释放资源；dirty 文档拒绝写入，clean 文档 WorkspaceEdit + save。终端输出保留到扩展销毁 |
+| P1-8 | 连接健壮性 | ✅ 2026-11-02：initialize 超时、有界退避 resume 恢复（不重发 prompt）、手动恢复去重、配置重载提示；取消/晚到防护、销毁、两桥、ownership 与 traffic 默认关闭。仅 resume-capable agent 自动恢复，真实账号验收另做 |
 | P1-9 | SDK 新更新类型 | `plan_update` / `plan_removed`（声明 `plan`，Codex 才发结构化计划）、`notice`、`compaction_*`；评估 SDK 2.x 升级 |
 
 ### 🟢 远期 / 增强
@@ -137,7 +143,7 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 | P2-1 | Dashboard 第二轮 | 按 `docs/dashboard-design.md` 的扩展点补：按项目/模型的时间趋势、导出、更细的成本拆分 |
 | P2-2 | 价格表校验 | `dashboard/usage/pricing.ts` 的 `PRICING_AS_OF` 与各档价格需按官方口径复核 |
 | P2-3 | 更多 agent 接入 | 保持「加 agent 只动 `agents/AgentProfile.ts` + 配置」这一约束不被破坏 |
-| P2-4 | 记录区长对话性能 | 虚拟列表 / 流式 markdown 只重绘尾块（当前依赖合并 postMessage 缓解） |
+| P2-4 | ~~记录区长对话性能~~ | ✅ 2026-11-02：增量文本、合帧、预览与 prose 缓存、流式 Markdown 稳定块/尾块及原生正文渲染窗口；保留记录 DOM（非 DOM 卸载式虚拟列表），详见 `arch/chat-performance.md` |
 | P2-5 | 上架 VS Code Marketplace | 注册 publisher、准备图标与截图、按 vsce publish 流程发布。**图标已就绪**（2026-10-13，`resources/icon.{svg,png}` 由 `npm run icon` 生成）；截图待补 |
 | P2-6 | Diff 审阅 | 工具卡的 diff 用 VS Code diff 编辑器打开；接受 / 拒绝；按轮次回滚 |
 | P2-7 | 会话级 MCP 注入 | `vac.mcpServers` 配置 → `session/new` 的 `mcpServers`（按 agent 的 `mcpCapabilities` 过滤） |

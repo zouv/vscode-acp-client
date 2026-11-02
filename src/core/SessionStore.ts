@@ -39,6 +39,10 @@ export class SessionStore {
   }
 
   add(session: SessionInfo): void {
+    const existing = this.sessions.get(session.sessionId);
+    if (existing && (existing.agentName !== session.agentName || existing.agentId !== session.agentId)) {
+      throw new Error('Session id is already owned by another agent connection.');
+    }
     this.sessions.set(session.sessionId, session);
     let ids = this.byAgent.get(session.agentName);
     if (!ids) {
@@ -110,6 +114,20 @@ export class PendingSessionState {
   setConfig(sessionId: string, value: SessionConfigOption[]): void { this.configs.set(sessionId, value); }
   setTitle(sessionId: string, value: string): void { this.titles.set(sessionId, value); }
   setMode(sessionId: string, value: string): void { this.modes.set(sessionId, value); }
+
+  remove(sessionId: string): void {
+    this.commands.delete(sessionId);
+    this.configs.delete(sessionId);
+    this.titles.delete(sessionId);
+    this.modes.delete(sessionId);
+  }
+
+  clear(): void {
+    this.commands.clear();
+    this.configs.clear();
+    this.titles.clear();
+    this.modes.clear();
+  }
 
   drainInto(session: SessionInfo): void {
     const { sessionId } = session;

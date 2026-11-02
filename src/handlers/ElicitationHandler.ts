@@ -1,3 +1,4 @@
+import { withCancellationToken } from '../utils/CancellationToken';
 // elicitation 的策略层 + 弹框兜底：新增文件。
 //
 // 与 `PermissionHandler` 的两处差别（都是有意的）：
@@ -37,7 +38,7 @@ export class ElicitationHandler {
       return { action: 'cancel' };
     }
     if (this.bridge) {
-      return this.bridge.request(params, (p, label) => this.dialog(p, label));
+      return this.bridge.request(params, (p, label, signal) => this.dialog(p, label, signal));
     }
     return this.dialog(params, '');
   }
@@ -50,7 +51,7 @@ export class ElicitationHandler {
    * the agent is told the user skipped, which keeps the turn alive; the panel's
    * own Esc is what sends the harder `cancel`.
    */
-  private async dialog(params: CreateElicitationRequest, label: string): Promise<CreateElicitationResponse> {
+  private async dialog(params: CreateElicitationRequest, label: string, signal?: AbortSignal): Promise<CreateElicitationResponse> {
     const fields = fieldsOf((params as { requestedSchema?: unknown }).requestedSchema);
     if (fields.length === 0) {
       log(`${LOG_PREFIX}: a form arrived with no field this panel can render`);
@@ -59,7 +60,9 @@ export class ElicitationHandler {
     const message = typeof params.message === 'string' ? params.message : 'Input needed';
     const content: ElicitationContent = {};
     for (const field of fields) {
-      const value = await this.askField(field, message, label);
+      if (signal?.aborted) { return { action: 'cancel' }; }
+      const value = await withCancellationToken(signal, token => this.askField(field, message, label, token));
+      if (signal?.aborted) { return { action: 'cancel' }; }
       if (value === undefined) {
         log(`${LOG_PREFIX}: the dialog was dismissed at field ${field.name}`);
         return { action: 'decline' };
@@ -74,6 +77,7 @@ export class ElicitationHandler {
     field: ElicitationFieldView,
     message: string,
     label: string,
+    token: vscode.CancellationToken,
   ): Promise<string | number | boolean | string[] | null | undefined> {
     const title = [label, field.title || message].filter(Boolean).join(' · ');
     const place = field.description ? { placeHolder: field.description } : {};
@@ -88,7 +92,7 @@ export class ElicitationHandler {
         canPickMany: field.kind === 'multi',
         ignoreFocusOut: true,
         ...place,
-      });
+      }, token);
       if (picked === undefined) { return undefined; }
       return Array.isArray(picked) ? picked.map(p => p.value) : (picked?.value ?? null);
     }
@@ -96,6 +100,7 @@ export class ElicitationHandler {
       const picked = await vscode.window.showQuickPick(
         [{ label: 'Yes', value: true }, { label: 'No', value: false }],
         { title, ignoreFocusOut: true, ...place },
+        token,
       );
       if (picked === undefined) { return undefined; }
       return picked.value;
@@ -105,7 +110,7 @@ export class ElicitationHandler {
       ignoreFocusOut: true,
       prompt: field.description,
       ...(field.kind === 'number' ? { validateInput: (v: string) => (v.trim() === '' || !Number.isNaN(Number(v)) ? undefined : 'Enter a number') } : {}),
-    });
+    }, token);
     if (typed === undefined) { return undefined; }
     if (typed.trim() === '') { return null; }
     return field.kind === 'number' ? Number(typed) : typed;

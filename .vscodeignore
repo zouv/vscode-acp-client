@@ -22,7 +22,6 @@ check-docs.sh
 *.map
 *.ts
 tsconfig.json
-vitest.config.ts
+vitest.config.mts
 eslint.config.mjs
-.vscode-test.mjs
 dist/extension.js.map

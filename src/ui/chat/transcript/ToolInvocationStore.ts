@@ -5,30 +5,36 @@
 // 平坦映射（toolCallId → 调用）永远是地面真相；嵌套关系由 Phase 4 的 NestingStrategy 事后推断。
 import type { ToolCall, ToolCallStatus, ToolCallUpdate, ToolKind } from '@agentclientprotocol/sdk';
 
+import { boundedPayload } from '../../../utils/BoundedPayload';
+
 import { applyTerminalMeta } from './agentTerminals';
 import { isTerminalStatus, type SubagentInfo, type ToolInvocation } from './types';
+
+/** Keep explicit replacement fields even when their payload budget is exhausted. */
+function limitToolPayload<T extends ToolCall | ToolCallUpdate>(original: T): T {
+  const copy = boundedPayload(original, 128 * 1024);
+  const result = { ...copy, toolCallId: original.toolCallId, title: typeof original.title === 'string' ? boundedPayload(original.title, 4096) : original.title, kind: original.kind, status: original.status } as T;
+  if (original.content !== undefined) { result.content = Array.isArray(copy.content) ? copy.content : []; }
+  if (original.locations !== undefined) { result.locations = Array.isArray(copy.locations) ? copy.locations.filter(item => item && typeof item === 'object' && typeof item.path === 'string') : []; }
+  if ('rawInput' in original) { result.rawInput = copy.rawInput; }
+  if ('rawOutput' in original) { result.rawOutput = copy.rawOutput; }
+  return result;
+}
 
 /**
  * Per-session tool-call index. Flat by construction — ACP has no nesting
  * concept (verified: zero matches for parent/subagent/child across all 239
  * schema definitions), so any tree is an inference layered on top.
  *
- * [CUSTOM- There is deliberately **no per-session cap** here,
- * unlike `TranscriptStore` (500 entries / 24 sessions). A naive LRU would be a
- * visible regression: `ChatPanelHost.snapshotOf` hydrates every tool entry's
- * view model from this store, so evicting an invocation whose transcript row
- * still exists renders that row as exactly the "empty shell" that
- * was written to eliminate. A cap only becomes safe once
- * the store knows which ids the transcript still references — i.e. a reference
- * count pushed in from the host, mirroring `TranscriptStore.setLiveSessionIds`.
- * Until then growth is bounded in practice by the transcript cap × session
- * count; only a session with thousands of tool calls would notice.
+ * The host removes tool ids when their transcript entries are evicted. This
+ * reference-driven policy keeps visible cards intact without an independent LRU.
  */
 export class ToolInvocationStore {
   private bySession: Map<string, Map<string, ToolInvocation>> = new Map();
 
   /** Apply a `tool_call` notification (a full ToolCall). */
   upsertCall(sessionId: string, call: ToolCall): ToolInvocation {
+    call = limitToolPayload(call);
     const existing = this.get(sessionId, call.toolCallId);
     const now = Date.now();
     const inv: ToolInvocation = existing ?? {
@@ -65,6 +71,7 @@ export class ToolInvocationStore {
 
   /** Apply a `tool_call_update` notification (all fields except id optional). */
   upsertUpdate(sessionId: string, update: ToolCallUpdate): ToolInvocation | null {
+    update = limitToolPayload(update);
     const inv = this.get(sessionId, update.toolCallId);
     if (!inv) { return null; }
 
@@ -109,6 +116,12 @@ export class ToolInvocationStore {
   list(sessionId: string): ToolInvocation[] {
     const m = this.bySession.get(sessionId);
     return m ? Array.from(m.values()) : [];
+  }
+
+  remove(sessionId: string, toolCallId: string): void {
+    const tools = this.bySession.get(sessionId);
+    tools?.delete(toolCallId);
+    if (tools?.size === 0) { this.bySession.delete(sessionId); }
   }
 
   drop(sessionId: string): void {

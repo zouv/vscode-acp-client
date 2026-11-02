@@ -489,7 +489,7 @@ export type ChatToExt =
   | { type: 'setMode'; sessionId: string; modeId: string }
   | { type: 'setModel'; sessionId: string; modelId: string }
   | { type: 'setConfigOption'; sessionId: string; configId: string; value: string }
-  | { type: 'renderMarkdown'; items: Array<{ entryId: string; sessionId: string; text: string; key?: string }> }
+  | { type: 'renderMarkdown'; items: Array<{ entryId: string; sessionId: string; text: string; key?: string; streaming?: boolean }> }
   | { type: 'openLink'; href: string }
   // [CUSTOM- 2026-10-29：引用标签的跳转。`endLine` 有值时宿主框选整段行区间；
   // `sessionId` 可选 —— 草稿页还没有会话，点引用标签也要能打开文件（相对路径回退工作区）。
@@ -527,7 +527,8 @@ export type ChatToExt =
 /** extension → webview reply to `renderMarkdown`. */
 export interface MarkdownRendered {
   type: 'markdownRendered';
-  items: Array<{ entryId: string; sessionId: string; html: string; key?: string }>;
+  items: Array<{ entryId: string; sessionId: string; html: string; key?: string;
+    stream?: import('./MarkdownStream').MarkdownStreamFrame }>;
 }
 
 /** Anything the extension may post to the webview. */

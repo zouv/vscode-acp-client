@@ -26,6 +26,13 @@ afterEach(() => {
 });
 
 describe('npxSpecOf', () => {
+  it('does not cache npx layouts with package-selection flags', () => {
+    expect(npxSpecOf('npx', ['--package', 'typescript', 'tsc', '--version'])).toBeNull();
+    expect(npxSpecOf('npx', ['-p', 'typescript', 'tsc'])).toBeNull();
+    expect(npxSpecOf('npx', ['--yes', '--package=x', 'command'])).toBeNull();
+  });
+
+
   it('splits the package spec out of an npx command', () => {
     expect(npxSpecOf('npx', ['-y', 'github:zouv/claude-agent-acp']))
       .toEqual({ spec: 'github:zouv/claude-agent-acp', extraArgs: [] });
@@ -48,7 +55,9 @@ describe('npxSpecOf', () => {
 
 describe('installDirFor', () => {
   it('gives each agent one stable directory under agents/', () => {
-    expect(installDirFor('/storage', 'Claude Code')).toBe(join('/storage', 'agents', 'claude-code'));
+    expect(installDirFor('/storage', 'Claude Code')).toMatch(/claude-code-[a-f0-9]{16}$/);
+    expect(installDirFor('/storage', 'Agent X')).not.toBe(installDirFor('/storage', 'Agent-X'));
+    expect(installDirFor('/storage', '..')).toMatch(/agents[\\/]agent-[a-f0-9]{16}$/);
     expect(installDirFor('/storage', 'Claude Code')).toBe(installDirFor('/storage', 'Claude Code'));
   });
 });

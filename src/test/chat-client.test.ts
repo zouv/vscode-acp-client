@@ -135,6 +135,14 @@ class StubNode {
     return child;
   }
 
+  replaceChild<T extends StubNode>(child: StubNode, previous: T): T {
+    if (!this.childNodes.includes(previous)) { throw new Error('NotFoundError'); }
+    if (child === previous) { return previous; }
+    this.insertBefore(child, previous);
+    this.removeChild(previous);
+    return previous;
+  }
+
   removeChild(child: StubNode): void {
     const at = this.childNodes.indexOf(child);
     if (at >= 0) { this.childNodes.splice(at, 1); child.parentNode = null; }
@@ -743,6 +751,32 @@ suite('chat client logic: assistant message fold (stub DOM)', () => {
   // 永远不知道"这版 html 已经作废" —— 正文就冻在**第一段的渲染结果**上，后面收到的内容一个字
   // 都不显示。用户看到的正是这个形状：一条长回复只显示开头几个字，且 `**` 是字面量
   // （= 渲染的是不完整原文，markdown 里不成对的行内标记保持字面量）。
+  test('unchanged assistant HTML is sanitized once and survives metadata patches', () => {
+    const { NS } = loadClient();
+    let renders = 0;
+    NS.dom.setSanitizedHtml = (node: any, html: string) => { renders++; node.textContent = html; };
+    const root = renderEntry(NS, new StubNode('div'), { id: 'html-perf', kind: 'assistant', at: 1, streaming: true, text: 'reply' });
+    NS.transcriptView.patch('html-perf', { html: '<p>reply</p>' });
+    const body = root.querySelector('.bubble-body')!;
+    const content = body.firstChild;
+    NS.transcriptView.patch('html-perf', { streaming: false, elapsedMs: 100 });
+    NS.transcriptView.patch('html-perf', { elapsedMs: 200 });
+    assert.strictEqual(renders, 1);
+    assert.strictEqual(body.firstChild, content);
+    NS.transcriptView.patch('html-perf', { html: '<p>updated</p>' });
+    assert.strictEqual(renders, 2);
+  });
+
+  test('a long streaming reply previews its prefix without reading the full DOM text', () => {
+    const { NS } = loadClient();
+    const text = 'prefix '.repeat(9000);
+    const root = renderEntry(NS, new StubNode('div'), { id: 'preview-perf', kind: 'assistant', at: 1, streaming: true, text });
+    const body = root.querySelector('.bubble-body')!;
+    Object.defineProperty(body, 'textContent', { get() { throw new Error('full body read during streaming'); } });
+    NS.transcriptView.patch('preview-perf', { text: text + 'suffix' });
+    assert.strictEqual(root.querySelector('.msg-preview')!.textContent, text.slice(0, 240).trim());
+  });
+
   test('a record that rendered early does not freeze when its text grows (186)', () => {
     const { NS } = loadClient();
     NS.dom.setSanitizedHtml = (node: any, html: string) => { node.textContent = html; };
@@ -4934,19 +4968,22 @@ suite('chat client logic: markdown asks for itself (stub DOM, )', () => {
     assert.strictEqual(h.NS.transcriptView.pendingMarkdown().length, 1);
   });
 
-  test('a still-streaming thought waits for its finalize', () => {
+  test('a streaming thought requests a transient tail view, not settled HTML', () => {
     const h = withRequestLog();
     h.NS.transcriptView.append(
       { id: 't2', kind: 'thought', at: Date.now(), text: 'thinking...', streaming: true }, undefined);
-    assert.strictEqual(h.asked(), 0, 'html for a streaming block would freeze a prefix of it');
-    assert.strictEqual(h.NS.transcriptView.pendingMarkdown().length, 0);
+    assert.ok(h.asked() > 0);
+    const batch = h.NS.transcriptView.pendingMarkdown();
+    assert.strictEqual(batch.length, 1);
+    assert.strictEqual(batch[0].streaming, true);
   });
 
   test('and asks as soon as it settles', () => {
     const h = withRequestLog();
     h.NS.transcriptView.append(
       { id: 't3', kind: 'thought', at: Date.now(), text: '_hmm_', streaming: true }, undefined);
-    assert.strictEqual(h.asked(), 0);
+    assert.ok(h.asked() > 0);
+    h.NS.transcriptView.pendingMarkdown();
     h.NS.transcriptView.patch('t3', { streaming: false });
     assert.ok(h.asked() > 0, 'the finalize patch is what lets it ask');
     assert.strictEqual(h.NS.transcriptView.pendingMarkdown().length, 1);
@@ -5429,7 +5466,7 @@ suite('build fingerprint: 宿主 / 标记 / 客户端三处自报身份 ()', () 
 // 就是这一族：贴底的人被长高的浮层挤到后面，视口判定却停在旧值。修法是写入方喊一声 reflowNow()。
 suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', () => {
   function mountScroll(paddingBottom = '0px', composerVar?: string): {
-    NS: any; el: any; jump: any; docListeners: Record<string, Array<(event: any) => void>>;
+    NS: any; el: any; jump: any; doc: any; docListeners: Record<string, Array<(event: any) => void>>;
   } {
     const NS: Record<string, any> = {};
     const listeners: Record<string, Array<(event?: any) => void>> = {};
@@ -5468,7 +5505,7 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
     };
     new Function('window', 'document', scrollClient)(win, doc);
     NS.scroll.init(el, jump);
-    return { NS, el, jump, docListeners };
+    return { NS, el, jump, doc, docListeners };
   }
 
   /** Fire a document-level listener (the real gate lives on document, not on #messages). */
@@ -5477,6 +5514,90 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
   ): void {
     for (const fn of listeners[type] ?? []) { fn(event); }
   }
+
+  function anchorScroll() {
+    const mounted = mountScroll();
+    const { NS, el, doc } = mounted;
+    const frames: Array<() => void> = [];
+    let contentTop = 180;
+    let present = true;
+    const anchor: Record<string, any> = {
+      closest: () => anchor,
+      getAttribute: () => 'visible-entry',
+      getBoundingClientRect: () => ({ top: 20 + contentTop - el.scrollTop }),
+      offsetTop: 80,
+    };
+    el.offsetTop = 0;
+    el.getBoundingClientRect = () => ({ top: 20, left: 0, width: 380 });
+    el.contains = (node: any) => node === el || (present && node === anchor);
+    doc.elementsFromPoint = () => [anchor];
+    NS.transcriptView = { node: () => present ? anchor : null };
+    NS.dom = { schedule: (fn: () => void) => frames.push(fn) };
+    el.scrollTop = 100;
+    el.fire('scroll');
+    NS.scroll.remember('anchored');
+    return {
+      ...mounted, anchor,
+      setContentTop: (top: number) => { contentTop = top; },
+      removeAnchor: () => { present = false; },
+      flush: () => { while (frames.length) { frames.shift()!(); } },
+    };
+  }
+
+  test('visible entry anchors survive hydrate intrinsic-size changes and native materialization', () => {
+    const m = anchorScroll();
+    m.setContentTop(400);
+    m.el.scrollTop = 0;
+    m.NS.scroll.restore('anchored');
+    m.flush();
+    assert.strictEqual(m.el.scrollTop, 320, 'same record stays at its original viewport offset');
+    m.setContentTop(450);
+    m.el.fire('contentvisibilityautostatechange');
+    m.flush();
+    assert.strictEqual(m.el.scrollTop, 370, 'native body materialization reasserts the record anchor');
+  });
+
+  test('layout scroll preserves restoration, but real user scrolling cancels it', () => {
+    const m = anchorScroll();
+    m.NS.scroll.restore('anchored');
+    m.flush();
+    m.el.scrollTop = 140;
+    m.el.fire('scroll');
+    m.NS.scroll.reassert();
+    assert.strictEqual(m.el.scrollTop, 100, 'browser anchoring is not user intent');
+    fireDoc(m.docListeners, 'wheel', {
+      target: m.el, deltaY: -100, deltaX: 0, deltaMode: 0, cancelable: true,
+      ctrlKey: false, metaKey: false, preventDefault: () => {},
+    });
+    m.el.scrollTop = 40;
+    m.el.fire('scroll');
+    m.setContentTop(450);
+    m.NS.scroll.reassert();
+    assert.strictEqual(m.el.scrollTop, 40, 'restoration never fights the user');
+  });
+
+  test('an evicted or missing visible anchor falls back to the saved absolute offset', () => {
+    const m = anchorScroll();
+    m.removeAnchor();
+    m.el.scrollTop = 0;
+    m.NS.scroll.restore('anchored');
+    m.flush();
+    assert.strictEqual(m.el.scrollTop, 100);
+  });
+
+  test('outline jumps and new session restores cancel queued anchor work', () => {
+    const m = anchorScroll();
+    m.setContentTop(400);
+    m.NS.scroll.restore('anchored');
+    m.NS.scroll.jumpTo(m.anchor);
+    m.flush();
+    m.NS.scroll.reassert();
+    assert.strictEqual(m.el.scrollTop, 80, 'the outline jump supersedes pending restoration');
+    m.NS.scroll.restore('anchored');
+    m.NS.scroll.restore('new-session');
+    m.flush();
+    assert.strictEqual(m.el.scrollTop, 1000, 'old frame callbacks do not restore the outgoing session');
+  });
 
   test('padding 算进"内容末尾"：贴着留白区仍然算贴底，但翻出去就不算', () => {
     const { NS, el, jump } = mountScroll('300px');
@@ -7288,5 +7409,141 @@ suite('chat client logic: settings panel (stub DOM)', () => {
     NS.settingsPanel.open();
     els.settingsOverlay.dispatch('click', { target: els.settingsOverlay });
     assert.strictEqual((els.settingsOverlay as any).hidden, true, 'clicking the backdrop closes it');
+  });
+});
+
+
+suite('chat client logic: streaming markdown tails and native render windows', () => {
+  function fixture() {
+    const { NS } = loadClient({}, { syncFrames: true });
+    const container = new StubNode('div');
+    NS.transcriptView.init(container);
+    NS.transcriptView.hydrate({ sessionId: 'stream-session', entries: [] });
+    const sanitized: Array<{ node: StubNode; html: string }> = [];
+    NS.dom.setSanitizedHtml = (node: StubNode, html: string) => { sanitized.push({ node, html }); node.textContent = html; };
+    return { NS, container, sanitized };
+  }
+  function reply(NS: Record<string, any>, source: string, blocks: string[], tailHtml: string, sessionId = 'stream-session') {
+    NS.transcriptView.queueMarkdown([{ entryId: 'stream', sessionId, html: '', stream: { source, blocks, tailHtml } }]);
+  }
+
+  test('stable block nodes survive streamed chunks and only the tail is sanitized again', () => {
+    const { NS, sanitized } = fixture();
+    NS.transcriptView.append({ id: 'stream', kind: 'assistant', text: 'first\n\ntail', streaming: true });
+    NS.transcriptView.pendingMarkdown();
+    reply(NS, 'first\n\ntail', ['<p>first</p>'], '<p>tail</p>');
+    const body = NS.transcriptView.node('stream').querySelector('.bubble-body');
+    const stable = body.childNodes[0];
+    NS.transcriptView.patch('stream', { text: 'first\n\ntail grows' });
+    reply(NS, 'first\n\ntail grows', ['<p>first</p>'], '<p>tail grows</p>');
+    assert.strictEqual(body.childNodes[0], stable);
+    assert.strictEqual(sanitized.filter(c => c.html === '<p>first</p>').length, 1);
+    assert.strictEqual(NS.transcriptView.entry('stream').html, undefined, 'transient HTML must not enter snapshots');
+    NS.transcriptView.reset();
+  });
+
+  test('settlement preserves canonical streamed blocks instead of flashing raw text', () => {
+    const { NS, sanitized } = fixture();
+    NS.transcriptView.append({ id: 'stream', kind: 'assistant', text: 'first\n\ntail', streaming: true });
+    reply(NS, 'first\n\ntail', ['<p>first</p>'], '<p>tail</p>');
+    const body = NS.transcriptView.node('stream').querySelector('.bubble-body');
+    const stable = body.childNodes[0];
+    NS.transcriptView.patch('stream', { streaming: false });
+    assert.strictEqual(body.childNodes[0], stable, 'no raw-text flash while final render is in flight');
+    const count = sanitized.length;
+    NS.transcriptView.patch('stream', { html: '<p>first</p><p>tail</p>' });
+    assert.strictEqual(body.childNodes[0], stable);
+    assert.strictEqual(sanitized.length, count, 'canonical streamed HTML is already sanitized');
+    NS.transcriptView.reset();
+  });
+
+  test('an older source prefix shows the raw suffix without truncation', () => {
+    const { NS } = fixture();
+    NS.transcriptView.append({ id: 'stream', kind: 'assistant', text: 'prefix', streaming: true });
+    NS.transcriptView.pendingMarkdown();
+    NS.transcriptView.patch('stream', { text: 'prefix plus suffix' });
+    reply(NS, 'prefix', [], '<p>prefix</p>');
+    const extra = NS.transcriptView.node('stream').querySelector('.stream-extra');
+    assert.strictEqual(extra.textContent, ' plus suffix');
+    NS.transcriptView.reset();
+  });
+
+  test('wrong sessions and replaced text cannot apply a stale frame', () => {
+    const { NS, sanitized } = fixture();
+    NS.transcriptView.append({ id: 'stream', kind: 'assistant', text: 'current', streaming: true });
+    reply(NS, 'current', [], '<p>wrong-session</p>', 'elsewhere');
+    reply(NS, 'obsolete', [], '<p>obsolete</p>');
+    assert.strictEqual(sanitized.length, 0);
+    NS.transcriptView.reset();
+  });
+
+  test('late streaming replies do not overwrite finalized markdown or unlock its request', () => {
+    const { NS } = fixture();
+    NS.transcriptView.append({ id: 'stream', kind: 'assistant', text: 'answer', streaming: true });
+    NS.transcriptView.pendingMarkdown();
+    NS.transcriptView.patch('stream', { streaming: false });
+    const final = NS.transcriptView.pendingMarkdown();
+    assert.strictEqual(final[0].streaming, false);
+    reply(NS, 'answer', [], '<p>old</p>');
+    assert.strictEqual(NS.transcriptView.pendingMarkdown().length, 0, 'settled request stays in flight');
+    NS.transcriptView.patch('stream', { html: '<p>final</p>' });
+    assert.strictEqual(NS.transcriptView.node('stream').querySelector('.bubble-body').textContent, '<p>final</p>');
+    NS.transcriptView.reset();
+  });
+
+  test('rebuilt plan and content records retain their anchors and live state', () => {
+    const { NS } = fixture();
+    for (const kind of ['plan', 'content']) {
+      NS.transcriptView.append({ id: kind, kind, entries: [], blocks: [], streaming: true });
+      const previous = NS.transcriptView.node(kind);
+      NS.transcriptView.patch(kind, { entries: [], blocks: [], streaming: false });
+      const rebuilt = NS.transcriptView.node(kind);
+      assert.notStrictEqual(rebuilt, previous);
+      assert.strictEqual(rebuilt.getAttribute('data-entry-id'), kind);
+      assert.strictEqual(rebuilt.getAttribute('data-kind'), kind);
+      assert.strictEqual(rebuilt.getAttribute('data-streaming'), 'false');
+      assert.strictEqual(rebuilt.getAttribute('data-render-window'), null);
+    }
+    NS.transcriptView.reset();
+  });
+
+  test('both tool shell rebuild paths retain anchors, icons and render windows', () => {
+    const { NS } = fixture();
+    const tool = { toolCallId: 't', title: 'Tool', kind: 'execute', status: 'completed', command: null, locations: [], items: [] };
+    const attach = NS.icons.attach;
+    const attached: StubNode[] = [];
+    NS.icons.attach = (node: StubNode, entry: unknown) => { attached.push(node); attach(node, entry); };
+    for (const path of ['append', 'updateTool']) {
+      const entry = { id: path, kind: 'tool', toolCallId: 't', streaming: false };
+      NS.transcriptView.append(entry, tool);
+      const previous = NS.transcriptView.node(path);
+      const head = previous.querySelector('.tool-head');
+      head.parentNode.removeChild(head);
+      if (path === 'append') { NS.transcriptView.append(entry, tool); }
+      else { NS.transcriptView.updateTool(path, tool); }
+      const rebuilt = NS.transcriptView.node(path);
+      assert.notStrictEqual(rebuilt, previous);
+      assert.strictEqual(rebuilt.getAttribute('data-entry-id'), path);
+      assert.strictEqual(rebuilt.getAttribute('data-kind'), 'tool');
+      assert.strictEqual(rebuilt.getAttribute('data-streaming'), 'false');
+      assert.strictEqual(rebuilt.getAttribute('data-render-window'), 'true');
+      assert.strictEqual(NS.transcriptView.entry(path).toolView, tool);
+      assert.ok(attached.includes(rebuilt));
+    }
+    NS.transcriptView.reset();
+  });
+
+  test('render-window metadata keeps streaming bodies live and excludes permission/form cards', () => {
+    const { NS } = fixture();
+    NS.transcriptView.append({ id: 'stream', kind: 'assistant', text: 'x', streaming: true });
+    assert.strictEqual(NS.transcriptView.node('stream').getAttribute('data-render-window'), 'true');
+    assert.strictEqual(NS.transcriptView.node('stream').getAttribute('data-streaming'), 'true');
+    NS.transcriptView.patch('stream', { streaming: false });
+    assert.strictEqual(NS.transcriptView.node('stream').getAttribute('data-streaming'), 'false');
+    NS.transcriptView.append({ id: 'permission', kind: 'permission', permission: {} });
+    NS.transcriptView.append({ id: 'form', kind: 'elicitation', elicitation: {} });
+    assert.strictEqual(NS.transcriptView.node('permission').getAttribute('data-render-window'), null);
+    assert.strictEqual(NS.transcriptView.node('form').getAttribute('data-render-window'), null);
+    NS.transcriptView.reset();
   });
 });

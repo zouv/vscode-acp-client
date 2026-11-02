@@ -1,3 +1,4 @@
+import { terminateTree } from '../utils/ProcessTree';
 import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
@@ -85,21 +86,6 @@ function launch(config: AgentConfigEntry, cwd: string | undefined): ChildProcess
   );
 }
 
-function terminateTree(child: ChildProcess, signal: 'SIGTERM' | 'SIGKILL'): void {
-  const pid = child.pid;
-  if (pid === undefined) { return; }
-  if (process.platform === 'win32') {
-    // killing cmd.exe alone orphans the node process behind it
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-      .on('error', () => { child.kill(); });
-    return;
-  }
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    child.kill(signal);
-  }
-}
 
 /** Spawns and reaps ACP agent child processes. Events: agent-stderr, agent-error, agent-closed. */
 export class AgentManager extends EventEmitter {

@@ -61,6 +61,8 @@ export class TranscriptStore {
   /** Session ids exempt from LRU eviction (their process is running). */
   private liveSessionIds: Set<string> = new Set();
 
+  constructor(private readonly onRemove?: (sessionId: string, entries: TranscriptEntry[]) => void) {}
+
   /** Replace the live-session exemption set. Called by ChatPanelHost. */
   setLiveSessionIds(ids: Iterable<string>): void {
     this.liveSessionIds = new Set(ids);
@@ -102,7 +104,9 @@ export class TranscriptStore {
 
   /** Drop a session's transcript (session closed / agent disconnected). */
   drop(sessionId: string): void {
+    const removed = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);
+    if (removed) { this.onRemove?.(sessionId, removed.entries); }
     this.liveSessionIds.delete(sessionId);
   }
 
@@ -110,8 +114,7 @@ export class TranscriptStore {
   dropAgent(agentName: string): void {
     for (const [sessionId, t] of Array.from(this.sessions)) {
       if (t.agentName === agentName) {
-        this.sessions.delete(sessionId);
-        this.liveSessionIds.delete(sessionId);
+        this.drop(sessionId);
       }
     }
   }
@@ -438,7 +441,8 @@ export class TranscriptStore {
     t.entries.push(entry);
     t.touched = ++this.clock;
     if (t.entries.length > MAX_ENTRIES_PER_SESSION) {
-      t.entries.splice(0, t.entries.length - MAX_ENTRIES_PER_SESSION);
+      const removed = t.entries.splice(0, t.entries.length - MAX_ENTRIES_PER_SESSION);
+      this.onRemove?.(sessionId, removed);
     }
     return entry;
   }
@@ -452,7 +456,7 @@ export class TranscriptStore {
     let overflow = this.sessions.size - MAX_SESSIONS;
     for (const t of evictable) {
       if (overflow <= 0) { break; }
-      this.sessions.delete(t.sessionId);
+      this.drop(t.sessionId);
       overflow--;
     }
   }

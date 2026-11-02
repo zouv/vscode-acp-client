@@ -198,3 +198,68 @@ describe('UsageService', () => {
     expect(closed.sort()).toEqual(['/root/a', '/root/b']);
   });
 });
+
+describe('UsageService lifecycle gates', () => {
+  it('does not scan or watch while disabled, and can be enabled again', async () => {
+    const src = new FakeSource([[ev('enabled', NOW)]], ['/fake']);
+    let opened = 0;
+    let closed = 0;
+    const svc = new UsageService({ sources: [src], enabled: false, now: () => NOW, debounceMs: 1,
+      watchFactory: () => { opened++; return { close: () => closed++ }; } });
+    try {
+      svc.startWatching();
+      svc.scheduleRefresh();
+      await svc.load();
+      await svc.refresh();
+      await new Promise(r => setTimeout(r, 10));
+      expect(src.calls).toBe(0);
+      expect(opened).toBe(0);
+      svc.setEnabled(true);
+      svc.startWatching();
+      await svc.refresh();
+      expect(src.calls).toBe(1);
+      expect(opened).toBe(1);
+      svc.setEnabled(false);
+      expect(closed).toBe(1);
+      svc.scheduleRefresh();
+      await svc.refresh();
+      expect(src.calls).toBe(1);
+    } finally { svc.dispose(); }
+  });
+
+  it('aborts a scan, rejects late batches, and resumes with fresh sources', async () => {
+    let started!: () => void;
+    const ready = new Promise<void>(r => started = r);
+    let release!: () => void;
+    const gate = new Promise<void>(r => release = r);
+    let signal: AbortSignal | undefined;
+    const old: UsageSource = { agent: 'claude', watchRoots: () => [],
+      async scan(_state, options = {}) {
+        signal = options.signal;
+        started();
+        await gate; // deliberately ignores cancellation until released
+        options.onBatch?.([ev('old', NOW)]);
+        options.onProgress?.({ files: { old: { size: 1, mtimeMs: 1, offset: 1 } } });
+        return { events: [ev('old', NOW)], state: emptySourceState() };
+      } };
+    const svc = new UsageService({ sources: [old], now: () => NOW });
+    try {
+      const pending = svc.refresh();
+      await ready;
+      svc.setEnabled(false);
+      expect(signal?.aborted).toBe(true);
+      release();
+      await pending;
+      expect(svc.snapshot().scanning).toBe(false);
+      expect(svc.snapshot().firstScanDone).toBe(false);
+      expect(svc.snapshot().hasData).toBe(false);
+      const fresh = new FakeSource([[ev('new', NOW)]]);
+      await svc.replaceSources([fresh]);
+      svc.setEnabled(true);
+      await svc.refresh();
+      expect(fresh.calls).toBe(1);
+      expect(svc.snapshot().periods.today.tokens).toBe(1010);
+      expect(svc.snapshot().sources[0].files).toBe(1);
+    } finally { release(); svc.dispose(); }
+  });
+});

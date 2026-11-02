@@ -41,8 +41,17 @@ export class FileSystemHandler {
     log(`writeTextFile: ${params.path}`);
     try {
       const uri = vscode.Uri.file(params.path);
-      await vscode.workspace.fs.writeFile(uri, Buffer.from(params.content, 'utf-8'));
-      const doc = await vscode.workspace.openTextDocument(uri);
+      let doc = vscode.workspace.textDocuments.find(open => sameFile(open.uri.fsPath, uri.fsPath));
+      if (doc) {
+        if (doc.isDirty) { throw new Error('File has unsaved editor changes; save or revert before retrying.'); }
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), params.content);
+        if (!await vscode.workspace.applyEdit(edit)) { throw new Error('Editor rejected the file edit.'); }
+        if (!await doc.save()) { throw new Error('Could not save the edited document.'); }
+      } else {
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(params.content, 'utf-8'));
+        doc = await vscode.workspace.openTextDocument(uri);
+      }
       await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: true });
       return {};
     } catch (e) {

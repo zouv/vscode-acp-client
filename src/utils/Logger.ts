@@ -1,13 +1,13 @@
 import * as vscode from 'vscode';
-import { appendFile, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { FileLog } from './FileLog';
+import { redactTraffic } from './LogPrivacy';
 
 const OUTPUT_NAME = 'VAC';
 const TRAFFIC_NAME = 'VAC Traffic';
-const LOG_FILE_MAX_BYTES = 5 * 1024 * 1024;
 const FLUSH_INTERVAL_MS = 250;
-const TRAFFIC_STRING_LIMIT = 2000;
 
 let outputChannel: vscode.OutputChannel | undefined;
 let trafficChannel: vscode.OutputChannel | undefined;
@@ -15,9 +15,8 @@ let configListener: vscode.Disposable | undefined;
 let trafficEnabled: boolean | undefined;
 
 let logFile: string | null | undefined;
-let pending: string[] = [];
+let fileLog: FileLog | undefined;
 let flushTimer: NodeJS.Timeout | undefined;
-let flushing = false;
 
 export function logFilePath(): string | null {
   if (logFile !== undefined) { return logFile; }
@@ -26,43 +25,26 @@ export function logFilePath(): string | null {
     const dir = join(process.env.VAC_HOME || join(homedir(), '.vac'));
     mkdirSync(dir, { recursive: true });
     const file = join(dir, 'vac.log');
-    try {
-      if (statSync(file).size > LOG_FILE_MAX_BYTES) {
-        rmSync(`${file}.1`, { force: true });
-        renameSync(file, `${file}.1`);
-      }
-    } catch { /* missing file or failed rotation: keep appending */ }
     logFile = file;
+    fileLog = new FileLog(file, undefined, undefined, error => {
+      outputChannel?.appendLine('VAC log write failed: ' + String(error));
+    });
   } catch { /* no writable home: output channel only */ }
   return logFile;
 }
 
 function enqueue(text: string): void {
   if (!logFilePath()) { return; }
-  pending.push(text);
+  fileLog?.enqueue(text);
   if (!flushTimer) {
-    flushTimer = setTimeout(flushLogs, FLUSH_INTERVAL_MS);
+    flushTimer = setTimeout(() => { void flushLogs(); }, FLUSH_INTERVAL_MS);
     flushTimer.unref?.();
   }
 }
 
-export function flushLogs(): void {
-  if (flushTimer) {
-    clearTimeout(flushTimer);
-    flushTimer = undefined;
-  }
-  const file = logFile;
-  if (!file || flushing || pending.length === 0) { return; }
-  const payload = pending.join('\n') + '\n';
-  pending = [];
-  flushing = true;
-  appendFile(file, payload, () => {
-    flushing = false;
-    if (pending.length > 0 && !flushTimer) {
-      flushTimer = setTimeout(flushLogs, FLUSH_INTERVAL_MS);
-      flushTimer.unref?.();
-    }
-  });
+export async function flushLogs(): Promise<void> {
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = undefined; }
+  await fileLog?.flush();
 }
 
 export function getOutputChannel(): vscode.OutputChannel {
@@ -96,23 +78,12 @@ export function logError(message: string, error?: unknown): void {
 
 function isTrafficEnabled(): boolean {
   if (trafficEnabled === undefined) {
-    trafficEnabled = vscode.workspace.getConfiguration('vac').get<boolean>('logTraffic', true);
+    trafficEnabled = vscode.workspace.getConfiguration('vac').get<boolean>('logTraffic', false);
     configListener ??= vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('vac.logTraffic')) { trafficEnabled = undefined; }
     });
   }
   return trafficEnabled;
-}
-
-const SECRET_KEY = /^(api_?key|token|access_?token|password|secret|authorization)$/i;
-
-function clip(key: string, value: unknown): unknown {
-  // Credentials ride in requests too (e.g. `authenticate._meta['api-key'].apiKey`): never log them.
-  if (SECRET_KEY.test(key) && typeof value === 'string') { return '«redacted»'; }
-  if (typeof value === 'string' && value.length > TRAFFIC_STRING_LIMIT) {
-    return `${value.slice(0, TRAFFIC_STRING_LIMIT)}…(+${value.length - TRAFFIC_STRING_LIMIT} chars)`;
-  }
-  return value;
 }
 
 export function logTraffic(direction: 'send' | 'recv', data: unknown): void {
@@ -129,13 +100,13 @@ export function logTraffic(direction: 'send' | 'recv', data: unknown): void {
       label = ` [RESPONSE] id=${msg.id}`;
     }
   }
-  const text = `[${new Date().toISOString()}] ${arrow}${label}\n${JSON.stringify(data, clip, 2)}\n`;
+  const text = `[${new Date().toISOString()}] ${arrow}${label}\n${JSON.stringify(data, redactTraffic, 2)}\n`;
   getTrafficChannel().appendLine(text);
   enqueue(text);
 }
 
-export function disposeChannels(): void {
-  flushLogs();
+export async function disposeChannels(): Promise<void> {
+  await flushLogs();
   configListener?.dispose();
   configListener = undefined;
   trafficEnabled = undefined;

@@ -22,6 +22,7 @@ import { log, logFilePath } from '../../utils/Logger';
 import { buildStamp, readPackageVersion } from '../../utils/BuildInfo';
 import { renderChatHtml, createNonce } from './html';
 import { SafeMarkdown } from './markdown';
+import { MarkdownStreamCache, type MarkdownStreamFrame } from './MarkdownStream';
 // [CUSTOM- 回放里文件引用是一段文本（`[@名](file:///…)`），得先认出来。
 import { fileMentionViews } from './markdown';
 import { Outbox } from './Outbox';
@@ -188,9 +189,18 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    */
   private connecting = false;
 
-  private readonly transcripts = new TranscriptStore();
+  private readonly transcripts = new TranscriptStore((sessionId, entries) => {
+    for (const entry of entries) {
+      if (entry.kind !== 'tool') { continue; }
+      // Duplicate ids can still have a newer visible transcript row.
+      if (this.transcripts.snapshot(sessionId)?.entries.some(row => row.kind === 'tool' && row.toolCallId === entry.toolCallId)) { continue; }
+      this.tools.remove(sessionId, entry.toolCallId);
+      this.toolEntryIds.delete(toolKey(sessionId, entry.toolCallId));
+    }
+  });
   private readonly tools = new ToolInvocationStore();
   private readonly markdown = new SafeMarkdown();
+  private readonly markdownStreams = new MarkdownStreamCache(this.markdown);
 
   /** sessionId → pending attachments (resource_link blocks for the next prompt). */
   private readonly attachments: Map<string, Attachment[]> = new Map();
@@ -1771,6 +1781,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         this.finalizeEntries(sessionId, { only: 'assistant' });
         const inv = this.tools.upsertCall(sessionId, data);
         const entry = this.transcripts.appendTool(sessionId, inv.toolCallId);
+        if (!entry) { this.tools.remove(sessionId, inv.toolCallId); }
         if (entry) {
           this.toolEntryIds.set(toolKey(sessionId, inv.toolCallId), entry.id);
           // Nesting must run BEFORE rendering this card so it carries its
@@ -2014,7 +2025,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   // --- Markdown round-trip -------------------------------------------------
 
-  private handleRenderMarkdown(items: Array<{ entryId: string; sessionId: string; text: string; key?: string }>): void {
+  private handleRenderMarkdown(items: Array<{ entryId: string; sessionId: string; text: string; key?: string; streaming?: boolean }>): void {
     // [CUSTOM- A malformed item must never take the whole batch with it.
     //
     // 这条请求是一条**批**：客户端把"所有还缺 html 的记录"一次发来（大会话回放时
@@ -2026,7 +2037,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       log(`${LOG_PREFIX}: renderMarkdown without an items array ignored`);
       return;
     }
-    const rendered: Array<{ entryId: string; sessionId: string; html: string; key?: string }> = [];
+    const rendered: Array<{ entryId: string; sessionId: string; html: string; key?: string; stream?: MarkdownStreamFrame }> = [];
     let skipped = 0;
     for (const item of items) {
       if (!item || typeof item !== 'object' || typeof item.entryId !== 'string' || typeof item.text !== 'string') {
@@ -2042,6 +2053,19 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           log(`${LOG_PREFIX}: dropped markdown item ${item.entryId} (unknown session ${item.sessionId})`);
           continue;
         }
+        const streamKey = JSON.stringify([sessionId, item.entryId]);
+        // Streaming replies are transient views, never stored as settled HTML.
+        // Accept an older prefix so fast streams do not starve rendering.
+        if (!item.key && item.streaming === true) {
+          const current = this.transcripts.getEntry(sessionId, item.entryId);
+          if (current && (current.kind === 'assistant' || current.kind === 'thought')
+            && current.streaming && current.text.startsWith(item.text)) {
+            rendered.push({ entryId: item.entryId, sessionId, html: '',
+              stream: this.markdownStreams.render(streamKey, item.text) });
+          }
+          continue;
+        }
+        this.markdownStreams.delete(streamKey);
         const html = this.markdown.render(item.text);
         // [CUSTOM- A render only applies to the text it was made from.
         //

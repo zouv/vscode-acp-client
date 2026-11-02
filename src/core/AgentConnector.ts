@@ -1,5 +1,6 @@
 import type { AgentCapabilities } from '@agentclientprotocol/sdk';
 
+import { abortable } from '../utils/Abortable';
 import { getAgentConfigs } from '../config/AgentConfig';
 import type { AgentManager } from './AgentManager';
 import type { ConnectionInfo, ConnectionManager } from './ConnectionManager';
@@ -31,7 +32,8 @@ export function summarizeCapabilities(caps: AgentCapabilities | undefined | null
 export class AgentConnector {
   private readonly idByName = new Map<string, string>();
   private readonly nameById = new Map<string, string>();
-  private readonly connecting = new Map<string, Promise<ConnectionInfo>>();
+  private readonly connecting = new Map<string, { promise: Promise<ConnectionInfo>; controller: AbortController; agentId?: string }>();
+  private disposed = false;
   private readonly capabilityCache = new Map<string, AgentCapabilitySummary>();
   private readonly queues = new Map<string, Promise<unknown>>();
 
@@ -65,17 +67,40 @@ export class AgentConnector {
 
   /** Concurrent callers for one agent share a single spawn+handshake. */
   ensure(agentName: string, preferredCwd?: string): Promise<ConnectionInfo> {
+    if (this.disposed) { return Promise.reject(new Error('Agent connector is disposed.')); }
     const inFlight = this.connecting.get(agentName);
-    if (inFlight) { return inFlight; }
-    const attempt = this.ensureOnce(agentName, preferredCwd).finally(() => this.connecting.delete(agentName));
+    if (inFlight) { return inFlight.promise; }
+    const controller = new AbortController();
+    const attempt = { promise: undefined as unknown as Promise<ConnectionInfo>, controller, agentId: undefined as string | undefined };
     this.connecting.set(agentName, attempt);
-    return attempt;
+    attempt.promise = abortable(controller.signal, () => this.ensureOnce(agentName, preferredCwd, attempt)).finally(() => {
+      if (this.connecting.get(agentName) === attempt) { this.connecting.delete(agentName); }
+    });
+    return attempt.promise;
+  }
+
+  cancel(agentName: string): boolean {
+    const attempt = this.connecting.get(agentName);
+    if (!attempt) { return false; }
+    this.connecting.delete(agentName);
+    attempt.controller.abort();
+    if (attempt.agentId) {
+      this.connections.removeConnection(attempt.agentId);
+      this.agents.killAgent(attempt.agentId);
+    }
+    return true;
   }
 
   /** Control-plane RPCs (new/load/resume/close) run one at a time per connection; prompts stay concurrent. */
   enqueue<T>(agentId: string, task: () => Promise<T>): Promise<T> {
     const prev = this.queues.get(agentId) ?? Promise.resolve();
-    const next = prev.then(task, task);
+    const run = () => {
+      if (this.disposed || !this.nameById.has(agentId) || !this.connections.getConnection(agentId)) {
+        throw new Error('Agent connection cancelled.');
+      }
+      return task();
+    };
+    const next = prev.then(run, run);
     this.queues.set(agentId, next.catch(() => undefined));
     return next;
   }
@@ -83,11 +108,14 @@ export class AgentConnector {
   clear(): void {
     this.idByName.clear();
     this.nameById.clear();
+    this.disposed = true;
+    for (const name of Array.from(this.connecting.keys())) { this.cancel(name); }
     this.connecting.clear();
+    this.capabilityCache.clear();
     this.queues.clear();
   }
 
-  private async ensureOnce(agentName: string, preferredCwd?: string): Promise<ConnectionInfo> {
+  private async ensureOnce(agentName: string, preferredCwd: string | undefined, attempt: { controller: AbortController; agentId?: string }): Promise<ConnectionInfo> {
     const known = this.idByName.get(agentName);
     if (known) {
       const conn = this.connections.getConnection(known);
@@ -108,12 +136,18 @@ export class AgentConnector {
     if (!config) { throw new Error(`Unknown agent: ${agentName}.`); }
 
     const instance = this.agents.spawnAgent(agentName, config, preferredCwd || this.hooks.resolveCwd());
+    attempt.agentId = instance.id;
     let conn: ConnectionInfo;
     try {
-      conn = await this.connections.connect(instance.id, instance.process);
+      conn = await this.connections.connect(instance.id, instance.process, attempt.controller.signal);
     } catch (e) {
       this.agents.killAgent(instance.id);
       throw e;
+    }
+    if (attempt.controller.signal.aborted || this.disposed) {
+      this.connections.removeConnection(instance.id);
+      this.agents.killAgent(instance.id);
+      throw new Error('Agent connection cancelled.');
     }
     this.register(agentName, instance.id);
     this.remember(agentName, conn);

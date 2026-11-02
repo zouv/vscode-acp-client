@@ -11,20 +11,16 @@
 >
 > **维护约定**：本文件只留「**进行中**的临时状态」。**本文件超过 150 行即视为堆积超标。**
 
----
 
 ## 状态快照
 
-- **最近更新**：2026-10-30
-- **整体状态**：✅ **v1.8.5 已发布**（目录抽屉 0–30 / 新会话 tab 位置 / New session 草稿页 / 文件引用行区间）；自动测试全绿，**真机验收仍未做**。
-  v1.8.4 已发布（Tab 固定配色 / 右键菜单重排）；v1.8.3 已发布（弹框自绘 / 输入卡交互 / Tail 与卡片聚焦修复）；1.8.0 / 1.8.1 的面板交互、v1.5.0 的 Codex 支持仍在等真机验证（P1-1）。
-- **当前分支（必填）**：`main`（v1.8.5 发布提交，与 `origin/main` 同步）。
-- **最后验证状态**（2026-10-30）：`lint` ✅ · `typecheck` ✅ · `test:unit` ✅（120 项）·
-  `npm test`（真实宿主）✅ **580 项**（本轮新增 19 条：0/30 条数、tab 插入、New session、快照防抖、文件行区间与 chip 属性）· `check-docs` ✅ · 发布：`npm run vsix` → `gh release create v1.8.5`（资产 `vscode-acp-client-1.8.5.vsix`）。
-  滚动条层数用真 Chromium 量过：自动展开 / 手动展开卡各 **1 条**；把旧限高加回去是 3 条 / 2 条。
-  ⚠️ v1.8.0–v1.8.2、弹框改造与 2026-10-30 两批调整**都未做** `npm run dev:host` 真机验收（验收项见「下一步」1–2）。
+- **最近更新**：2026-11-02
+- **整体状态**：v1.9.0 审查整改完成本地验证并归档；无进行中编码任务。真实账号/旧 UI 验收待做，发布与远程 CI 状态以 GitHub 为准。
+- **当前分支（必填）**：`main`；用户已授权 v1.9.0 的 commit/push、打包与 GitHub Release 上传，不另建分支。
+- **最后验证状态**（2026-11-02，npm ci 后）：lint/typecheck ✅；unit **159 / 25 文件** ✅；Windows stable **1.144.0** 与最低 **1.85.0** 宿主各 **623** ✅；生产构建与 VSIX ✅（`release/vscode-acp-client-1.9.0.vsix`，10 文件）。
+  生产与全量 audit 均 **0**；文档体检、diff 空白、新增内容隐私与 LF 检查通过。npm ci 仍有两条传递依赖弃用提示；远程 Linux/Windows CI 由推送触发，结果以 GitHub Actions 为准，不以本地测试替代。
+  Windows 两宿主与 WSL Linux 的真实三代进程终止通过；WSL 仅源码探针，不算完整 Linux 宿主。流式稳定 DOM/选区、窄屏权限/表单与离屏正文预览已核；最终 Chromium 151 / Chrome 110 的 1000 条记录连续三次切换阅读锚点无漂移，均无 pageerror，桥接替身不代替账号验收。
 
----
 
 ## 当前任务（In Progress）
 
@@ -42,23 +38,23 @@
 - **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」5。
 - **「滚动条到底、消息仍被截断」待复现**（用户 2026-10-26 报，现场已消失）：日志 2300+ 条 `scroll#` 全部自洽（`cov=0`），现有判据打不到这种形态。**下次出现时先别关面板**，直接读 `~/.vac/vac.log` 抓现场。
 
----
 
 ## 待归档暂存区（仅本轮未归档的完成项）
 
-- （无。v1.8.5 成果已写入 `CHANGELOG [1.8.5]`。）
+- （无。）
 
 ## 进行中（半成品 / 未提交）
 
-- （无。v1.8.5 已提交并发布。）
+- 无半成品编码任务；审查整改细节归 `CHANGELOG [1.9.0]`。v1.9.0 发布与 CI 状态以 GitHub Release / Actions 为准。
 
 ## 阻塞 / 待决策（Blockers）
 
 - **上架前的截图**：README 与 Marketplace 列表都还没有截图（`ROADMAP.md` P2-5 待办项之一）。
 
----
 
 ## 下一步（Next Steps）
+
+- **审查修复验收（无需继续编码）**：真实 Claude/Codex 认证、崩溃后 resume/离线手动恢复、多会话草稿/焦点与权限/表单结算；确认远程 CI 结果。P2-4 已按原生正文渲染窗口方案完成（保留 DOM，不是卸载式虚拟列表）。
 
 1. **v1.8.5 真机验收（最高优先）**：`npm run dev:host` → 原生弹框批（Delete/关闭/Rename 浮层、sub-agent 抽屉、设置 Clear/Reset 确认、命令变非模态通知）+ 四项交互（mode picker 靠右；运行中 Esc/标题栏 Stop 出确认；无滚动条卡片滚轮滚面板；引用标签跳转并框选）+ Tail（流式/折叠时不动鼠标按钮不灭；真实滚轮/中键/拖条才关；Tail 关闭后 Jump 自动出现）+ 卡片聚焦（只认左键；再次左键取消；框选文本/拖动不取消）+ Tab（固定五色；右键 Rename 置顶 / Close 置底 / Mark as unread / Copy working directory）。
    回归：无 chat surface 时权限仍弹原生 QuickPick；`autoAcceptPermissions=allowAll` 仍自动允许；Esc 焦点在输入框与卡片各试一次；Tail 日志看 `tail:off scroll` 是否只出现在真实滚动之后；**目录抽屉**：条数 30/0/越界/清空回显、0 时无「Recently used」分组、已开始会话无说明、地址栏 tip 只留路径；**本轮三项**：新会话 tab 紧贴源 tab 右侧、New session 进草稿页且双面恢复卡片退场、附件 chip 有 hover、卡片文件引用（气泡/回放/markdown/locations）框选正确行区间。
@@ -94,9 +90,8 @@
 6. **滚动问题复现时抓现场**：`~/.vac/vac.log` 的 `scroll#` 行——`cov=1` 即定案；全是 `cov=0` 时优先看
    末条 `last`/`comp`、`#messages` 的 rect 与 `window.innerHeight`、以及抽屉变量（`ev=` / `pv=`）。
 7. **历史遗留验收（低优先）**：v1.4.0/M4、v1.3.1、v1.3.0 的验收清单仍挂着，先按 1–5 走。
-8. **之后按 ROADMAP**：P1-7 终端与写文件健壮性 → P1-8 连接健壮性 → P1-9 SDK 新更新类型 → P1-3 打包瘦身 → P2-*。
+8. **之后按 ROADMAP**：P1-8 连接健壮性 → P1-9 SDK 新更新类型 → P1-3 打包瘦身 → P2-*。
 
----
 
 ## 如何运行 / 测试（Quick Verify）
 
@@ -112,7 +107,6 @@
   （每次 `--session` 会在该 agent 的历史里留一个空会话；输出含本机模型配置，别提交）
 - 端到端：需本机可执行 `npx`（默认 agent 经 `npx` 拉起 Claude Code / Codex 的 ACP 适配器）
 
----
 
 ## 关键决策记录（Key Decisions）
 
@@ -139,7 +133,6 @@
 - **构建换成 esbuild**、**测试分两层**（vitest 纯逻辑 + mocha 真实宿主）。
 - **单价是估值**：Dashboard 的成本按等价 API 价格估算，未知模型计入 `unpriced`。
 
----
 
 ## 待解问题 / 给用户的提问（Open Questions）
 
@@ -147,4 +140,4 @@
 - 是否要在首个发布版本里保留 `vac.restoreSessionsOnOpen` 的默认 `ask` 行为。
 - `doc-audit` skill 的扫描范围仍是「5 份根文档 + `docs/00-目录.md`」，**未覆盖 `arch/*.md`**——
   上次分册的漂移正是靠人工扫出来的（此前用户选择先不改 skill）。
-- `vac.logTraffic` 默认 `true` 会把提示词与文件内容落盘到 `~/.vac/vac.log`（key 类字段已脱敏）——是否改默认关闭（P1-8）。
+- 活跃会话豁免 LRU；工具的 agentTerminal ID 总数仍无硬限。真实 agent 验收重点核对大结果截断与 Windows batch 保守参数限制。

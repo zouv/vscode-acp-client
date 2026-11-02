@@ -12,6 +12,7 @@ export interface WatchHandle {
 export type WatchFactory = (root: string, onChange: () => void, onError: () => void) => WatchHandle | undefined;
 
 export interface UsageServiceOptions {
+  enabled?: boolean;
   sources: UsageSource[];
   persistPath?: string;
   now?: () => number;
@@ -93,10 +94,13 @@ export class UsageService {
   private watchers = new Map<string, WatchHandle>();
   private watching = false;
   private disposed = false;
+  private enabled: boolean;
+  private scanController: AbortController | undefined;
   private version = 0;
   private cache: { key: string; snap: DashboardSnapshot } | undefined;
 
   constructor(private readonly opts: UsageServiceOptions) {
+    this.enabled = opts.enabled ?? true;
     this.now = opts.now ?? Date.now;
     this.debounceMs = opts.debounceMs ?? 2000;
     this.pollMs = opts.pollMs ?? 60000;
@@ -112,7 +116,34 @@ export class UsageService {
     return { dispose: () => this.listeners.delete(cb) };
   }
 
+  setEnabled(enabled: boolean): void {
+    if (this.disposed || this.enabled === enabled) { return; }
+    this.enabled = enabled;
+    if (!enabled) {
+      this.rerun = false;
+      this.scanController?.abort();
+      this.stopWatching();
+    } else if (this.inflight) { this.rerun = true; }
+  }
+
+  async replaceSources(sources: UsageSource[]): Promise<void> {
+    this.setEnabled(false);
+    await this.inflight;
+    await this.loaded;
+    await this.persistChain;
+    if (this.disposed) { return; }
+    this.opts.sources = sources;
+    this.index = new UsageIndex(this.indexOptions);
+    this.states.clear();
+    this.sourceErrors.clear();
+    this.firstScanDone = false;
+    this.loaded = Promise.resolve();
+    this.stateDirty = true;
+    this.cache = undefined;
+  }
+
   load(): Promise<void> {
+    if (!this.enabled || this.disposed) { return Promise.resolve(); }
     if (!this.loaded) {
       this.loaded = this.loadFromDisk();
     }
@@ -120,6 +151,7 @@ export class UsageService {
   }
 
   refresh(): Promise<void> {
+    if (!this.enabled || this.disposed) { return Promise.resolve(); }
     if (this.inflight) {
       return this.inflight;
     }
@@ -135,7 +167,7 @@ export class UsageService {
   }
 
   scheduleRefresh(): void {
-    if (this.disposed) {
+    if (!this.enabled || this.disposed) {
       return;
     }
     if (this.debounceTimer) {
@@ -153,7 +185,7 @@ export class UsageService {
   }
 
   startWatching(): void {
-    if (this.watching || this.disposed) {
+    if (!this.enabled || this.watching || this.disposed) {
       return;
     }
     this.watching = true;
@@ -169,6 +201,7 @@ export class UsageService {
 
   stopWatching(): void {
     this.watching = false;
+    if (this.debounceTimer) { clearTimeout(this.debounceTimer); this.debounceTimer = undefined; }
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = undefined;
@@ -184,6 +217,7 @@ export class UsageService {
   }
 
   dispose(): void {
+    this.scanController?.abort();
     this.disposed = true;
     this.stopWatching();
     if (this.debounceTimer) {
@@ -282,23 +316,35 @@ export class UsageService {
   }
 
   private async runRefresh(): Promise<void> {
-    await this.load();
-    do {
-      this.rerun = false;
-      await this.pass();
-    } while (this.rerun && !this.disposed);
+    try {
+      await this.load();
+      do {
+        this.rerun = false;
+        await this.pass();
+      } while (this.rerun && this.enabled && !this.disposed);
+    } finally {
+      this.scanning = false;
+      this.scanController = undefined;
+      this.emit(true);
+    }
   }
 
   private async pass(): Promise<void> {
+    if (!this.enabled || this.disposed) { return; }
+    const controller = new AbortController();
+    this.scanController = controller;
     try {
       for (const src of this.opts.sources) {
+        if (controller.signal.aborted) { break; }
         const prev = this.states.get(src.agent) ?? emptySourceState();
         try {
           const res = await src.scan(prev, {
+            signal: controller.signal,
             onBatch: (events) => {
-              this.index.apply(events, this.now());
+              if (!controller.signal.aborted) { this.index.apply(events, this.now()); }
             },
             onProgress: (state) => {
+              if (controller.signal.aborted) { return; }
               this.states.set(src.agent, state);
               this.stateDirty = true;
               this.emit();
@@ -307,6 +353,7 @@ export class UsageService {
               }
             },
           });
+          if (controller.signal.aborted) { break; }
           if (res.events.length > 0) {
             this.index.apply(res.events, this.now());
           }
@@ -316,6 +363,7 @@ export class UsageService {
           this.states.set(src.agent, res.state);
           this.sourceErrors.delete(src.agent);
         } catch (e) {
+          if (controller.signal.aborted) { break; }
           this.sourceErrors.set(src.agent, e instanceof Error ? e.message : String(e));
         }
       }
@@ -323,7 +371,7 @@ export class UsageService {
     } finally {
       if (!this.rerun) {
         this.scanning = false;
-        this.firstScanDone = true;
+        if (!controller.signal.aborted) { this.firstScanDone = true; }
         await this.persist(true);
         this.emit(true);
       }

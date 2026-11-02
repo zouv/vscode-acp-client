@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        vscode: ['1.85.0', stable]
+    runs-on: ${{ matrix.os }}
+    env:
+      VSCODE_TEST_VERSION: ${{ matrix.vscode }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - name: VS Code tests (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm test
+      - name: VS Code tests (Windows)
+        if: runner.os == 'Windows'
+        run: npm test
+      - run: npm run package
+      - run: npm audit
+      - name: Document checks
+        shell: bash
+        run: bash check-docs.sh
