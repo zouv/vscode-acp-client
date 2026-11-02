@@ -109,6 +109,7 @@ export const railClient = `
     if (entry.kind === 'plan') { return 'Plan'; }
     if (entry.kind === 'content') { return 'Content'; }
     if (entry.kind === 'notice') { return firstLine(entry.text); }
+    if (entry.kind === 'compact') { return 'Compacted conversation'; }
     if (entry.kind === 'permission') {
       return 'Permission: ' + ((entry.permission && entry.permission.title) || '');
     }

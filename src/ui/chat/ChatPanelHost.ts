@@ -72,6 +72,15 @@ import { PermissionBridge } from '../../handlers/PermissionBridge';
 import { ElicitationBridge } from '../../handlers/ElicitationBridge';
 import { TranscriptStore } from './transcript/TranscriptStore';
 import { ToolInvocationStore } from './transcript/ToolInvocationStore';
+// [CUSTOM- Claude 上下文压缩：摘要永远不进入用户消息/大纲，而是独立的 compact 记录。
+import {
+  compactSummaryBody,
+  compactionError,
+  compactionSummaryField,
+  compactionText,
+  isCompactSummaryText,
+  isTerminalCompaction,
+} from './transcript/compaction';
 import { toToolCallView } from './content/toolCalls';
 import { toContentView, hasVisibleContent } from './content/contentBlocks';
 import type { ContentBlockView } from './content/contentBlocks';
@@ -89,12 +98,15 @@ import {
 // `basename` (same "last path segment" idea the client's folderName implements, and
 // two copies of it here is exactly how they drift — pitfalls #19).
 import { directoryKey, directoryOptions, folderName as basename, recentDirectoryList } from './historyDirs';
-import { claudeTranscriptDir, readDiskSessions, readTranscriptTimes, readTranscriptUserAttachments } from './diskSessions';
-import type { TranscriptUserParts } from './diskSessions';
+import { claudeTranscriptDir, readDiskSessions, readTranscriptCompactions, readTranscriptTimes, readTranscriptUserAttachments } from './diskSessions';
+import type { TranscriptCompactionMeta, TranscriptUserParts } from './diskSessions';
 import type { HistorySessionSummary } from './protocol';
 
 /** Prefix of the output channel used for panel-level diagnostics. */
 const LOG_PREFIX = 'chat-panel';
+
+/** [CUSTOM- Aligned with TranscriptStore's per-entry text cap; a runaway agent must not grow it. */
+const MAX_COMPACTION_TEXT = 64 * 1024;
 
 /**
  * [CUSTOM- Message types that must NEVER be delayed or merged.
@@ -259,6 +271,20 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // [CUSTOM- 文件引用一并收在这里（它们连到同一批块），外加"这条消息有没有正文"
   // ——附件 chunk 该丢还是该自己渲染，判据是它（见 diskSessions.TranscriptUserParts）。
   private readonly replayUserParts: Map<string, Map<string, TranscriptUserParts>> = new Map();
+  /**
+   * [CUSTOM- `${sessionId}::${compactionId}` → 已流式收到的 summary 文本。
+   * `compaction_summary_chunk` 不逐块刷 UI；终态 `compaction_update` 没带 summary 时
+   * 用它补卡片正文（适配器在流式文本与清理后摘要相同时会省略 terminal summary）。
+   */
+  private readonly compactionSummaries: Map<string, string> = new Map();
+  /** [CUSTOM- sessionId → (summary uuid → compact boundary metadata from the transcript). */
+  private readonly replayCompactions: Map<string, Map<string, TranscriptCompactionMeta>> = new Map();
+  /** [CUSTOM- sessionId → fallback-replayed compact ids whose summary may span chunks. */
+  private readonly compactReplayIds: Map<string, Set<string>> = new Map();
+  /** [CUSTOM- sessionId → compact id currently open without a messageId (fallback). */
+  private readonly compactReplayOpen: Map<string, string> = new Map();
+  /** Monotonic suffix for a fallback compact id when the adapter gave no messageId. */
+  private compactFallbackSeq = 0;
   /**
    * [CUSTOM- IDE 上下文块（`<ide_opened_file>`）按「会话::messageId」暂存，
    * 等**同一条消息**的正文 chunk 到了再挂到那个气泡上（回放里两条 chunk 同 messageId，
@@ -441,6 +467,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       this.imageData.delete(sessionId);
       this.replayTimes.delete(sessionId);
       this.replayUserParts.delete(sessionId);
+      this.replayCompactions.delete(sessionId);
+      this.clearCompactReplayState(sessionId);
       for (const key of Array.from(this.ideFilesByMessage.keys())) {
         if (key.startsWith(`${sessionId}::`)) { this.ideFilesByMessage.delete(key); }
       }
@@ -480,11 +508,16 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // [CUSTOM- 回放开始：本会话 append 的记录改成 0 起的相对时刻（拿不到转录
       // 真实时刻时不再用 Date.now() 冒充墙钟），命中真实时刻的由 stampReplayTime 覆盖。
       this.transcripts.beginReplay(sessionId, agentName);
+      // [CUSTOM- 每次回放重新开始 compact 的 fallback 累计。**不要**清
+      // `replayCompactions`：它是 preloadTranscriptTimes 在 openExistingSession 之前读好的。
+      this.clearCompactReplayState(sessionId);
       refresh();
     });
     on('session-load-end', (sessionId: string) => {
       // [CUSTOM- 回放结束：之后的记录回到墙钟。
       this.transcripts.endReplay(sessionId);
+      // [CUSTOM- No-messageId fallback chunks belong to the replay that just ended.
+      this.compactReplayOpen.delete(sessionId);
       // [CUSTOM- A replay is a FINITE recorded stream, so once it
       // ends nothing can still be streaming — but nothing else closes the
       // entries it created: `finalizeTurn` only runs for a prompt WE sent, and a
@@ -1660,6 +1693,21 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       case 'user_message_chunk': {
         // Replay path (`session/load`).
         const text = textOf(data.content);
+        const parts = this.replayPartsFor(sessionId, data.messageId);
+        const messageId = typeof data.messageId === 'string' && data.messageId.length > 0
+          ? data.messageId
+          : undefined;
+        const inCompactReplay = !!messageId && (this.compactReplayIds.get(sessionId)?.has(messageId) ?? false);
+        const openCompactId = this.compactReplayOpen.get(sessionId);
+        const continuesOpenCompact = !messageId && !!openCompactId;
+        // [CUSTOM- 上下文压缩摘要（预读标记 / 已开始的 fallback 分片 / 续接前缀）。
+        // 它必须**先于** IDE / 附件 / 注入 / 正文判据分流，否则会变成蓝色用户气泡。
+        if (parts?.compactSummary || inCompactReplay || isCompactSummaryText(text) || continuesOpenCompact) {
+          this.handleCompactReplayChunk(sessionId, messageId, text);
+          return;
+        }
+        // A real user chunk ends any no-messageId compact fallback.
+        if (openCompactId) { this.compactReplayOpen.delete(sessionId); }
         // [CUSTOM- IDE 上下文块：**不建记录**，挂到同一条消息的用户气泡上。
         // 放在注入块判据之前 —— 它也是 `<ide_` 开头，但这里认得出来该做成 chip。
         const idePath = ideOpenedFilePath(text);
@@ -1667,11 +1715,6 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           this.rememberIdeFile(sessionId, data.messageId, ideFileChip(idePath));
           return;
         }
-        // [CUSTOM- Images of this user message (and, since 216, its FILE
-        // REFERENCES) were read from the transcript BEFORE replay started
-        // (preloadTranscriptTimes); merge them into the bubble. The separate chunks that
-        // follow (100) are dropped below so they do not become second rows.
-        const parts = this.replayPartsFor(sessionId, data.messageId);
         // [CUSTOM- 文件引用：agent 把 `resource_link` 块序列化成一段文本回放回来。
         // 这里必须**先于**注入块与正文判据认出它（它也长得像普通文本），否则它会变成一条
         // 蓝色气泡、把 `[@名](file:///…)` 原样显示出来（用户报的正是这个）。
@@ -1775,36 +1818,25 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       }
 
       case 'tool_call': {
-        // Prose that continues after a tool call belongs in a new bubble, so
-        // the transcript reads text → tool → text. (Only the assistant entry:
-        // the thought block was already closed by the first prose chunk.)
-        this.finalizeEntries(sessionId, { only: 'assistant' });
-        const inv = this.tools.upsertCall(sessionId, data);
-        const entry = this.transcripts.appendTool(sessionId, inv.toolCallId);
-        if (!entry) { this.tools.remove(sessionId, inv.toolCallId); }
-        if (entry) {
-          this.toolEntryIds.set(toolKey(sessionId, inv.toolCallId), entry.id);
-          // Nesting must run BEFORE rendering this card so it carries its
-          // parent link on first paint.
-          const changed = this.applyNesting(sessionId, session.agentName);
-          this.post({ type: 'append', sessionId, entries: [{ ...entry, toolView: toToolCallView(inv) }] });
-          this.pushNestingUpdates(sessionId, changed, inv.toolCallId);
-        }
+        this.applyToolCall(sessionId, session.agentName, data);
         return;
       }
 
       case 'tool_call_update': {
-        const inv = this.tools.upsertUpdate(sessionId, data);
-        if (!inv) { return; }
-        // A Task's output often arrives only at the END of the call, which is
-        // when an explicit parent link becomes discoverable — so re-run the
-        // strategy on every update, not just on first sight.
-        const changed = this.applyNesting(sessionId, session.agentName);
-        const entryId = this.toolEntryIds.get(toolKey(sessionId, inv.toolCallId));
-        if (entryId) {
-          this.post({ type: 'toolUpdate', sessionId, entryId, tool: toToolCallView(inv) });
-        }
-        this.pushNestingUpdates(sessionId, changed, inv.toolCallId);
+        this.applyToolCallUpdate(sessionId, session.agentName, data);
+        return;
+      }
+
+      // [CUSTOM- Claude Code 的上下文压缩（ACP `session.compaction`）。
+      // 回放时它代表旧转录里的 compact summary；实时则是 `/compact` 的生命周期。
+      // 两者都落成独立的 compact 记录，绝不进入用户消息与大纲。
+      case 'compaction_update': {
+        this.applyCompactionUpdate(sessionId, data);
+        return;
+      }
+
+      case 'compaction_summary_chunk': {
+        this.noteCompactionChunk(sessionId, data);
         return;
       }
 
@@ -1886,6 +1918,155 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     }
   }
 
+  /** Apply one ACP `tool_call`. */
+  private applyToolCall(sessionId: string, agentName: string, data: any): void {
+    // Prose that continues after a tool call belongs in a new bubble, so
+    // the transcript reads text → tool → text. (Only the assistant entry:
+    // the thought block was already closed by the first prose chunk.)
+    this.finalizeEntries(sessionId, { only: 'assistant' });
+    const inv = this.tools.upsertCall(sessionId, data);
+    const entry = this.transcripts.appendTool(sessionId, inv.toolCallId);
+    if (!entry) { this.tools.remove(sessionId, inv.toolCallId); }
+    if (entry) {
+      this.toolEntryIds.set(toolKey(sessionId, inv.toolCallId), entry.id);
+      // Nesting must run BEFORE rendering this card so it carries its
+      // parent link on first paint.
+      const changed = this.applyNesting(sessionId, agentName);
+      this.post({ type: 'append', sessionId, entries: [{ ...entry, toolView: toToolCallView(inv) }] });
+      this.pushNestingUpdates(sessionId, changed, inv.toolCallId);
+    }
+  }
+
+  /** Apply one ACP `tool_call_update`. */
+  private applyToolCallUpdate(sessionId: string, agentName: string, data: any): void {
+    const inv = this.tools.upsertUpdate(sessionId, data);
+    if (!inv) { return; }
+    // A Task's output often arrives only at the END of the call, which is
+    // when an explicit parent link becomes discoverable — so re-run the
+    // strategy on every update, not just on first sight.
+    const changed = this.applyNesting(sessionId, agentName);
+    const entryId = this.toolEntryIds.get(toolKey(sessionId, inv.toolCallId));
+    if (entryId) {
+      this.post({ type: 'toolUpdate', sessionId, entryId, tool: toToolCallView(inv) });
+    }
+    this.pushNestingUpdates(sessionId, changed, inv.toolCallId);
+  }
+
+  /** [CUSTOM- Compact boundary metadata for a compaction id, if the transcript knew it. */
+  private compactMetaFor(sessionId: string, compactionId: string): TranscriptCompactionMeta | undefined {
+    return this.replayCompactions.get(sessionId)?.get(compactionId);
+  }
+
+  /** [CUSTOM- Drop per-replay compact accumulation; never touches `replayCompactions`. */
+  private clearCompactReplayState(sessionId: string): void {
+    this.compactReplayIds.delete(sessionId);
+    this.compactReplayOpen.delete(sessionId);
+    for (const key of Array.from(this.compactionSummaries.keys())) {
+      if (key.startsWith(`${sessionId}::`)) { this.compactionSummaries.delete(key); }
+    }
+  }
+
+  /**
+   * [CUSTOM- One ACP `compaction_update`.
+   *
+   * In-progress updates only accumulate the streamed summary; the compact row is
+   * materialized at the terminal update, so there is no half-built row while
+   * `/compact` runs and replay lands it exactly at the boundary.
+   */
+  private applyCompactionUpdate(sessionId: string, data: any): void {
+    const compactionId = typeof data.compactionId === 'string' ? data.compactionId : '';
+    if (compactionId.length === 0) { return; }
+    const key = compactionKey(sessionId, compactionId);
+    const field = compactionSummaryField(data.summary);
+    if (!isTerminalCompaction(data.status)) {
+      if (field.provided) {
+        if (field.text.length > 0) { this.compactionSummaries.set(key, field.text); }
+        else { this.compactionSummaries.delete(key); }
+      }
+      return;
+    }
+    const text = compactionText(data, this.compactionSummaries.get(key));
+    this.compactionSummaries.delete(key);
+    const error = compactionError(data);
+    const meta = this.compactMetaFor(sessionId, compactionId);
+    this.finalizeEntries(sessionId, { only: 'assistant' });
+    const beforeText = this.transcripts.getCompact(sessionId, compactionId)?.text;
+    const result = this.transcripts.upsertCompact(sessionId, compactionId, {
+      text,
+      ...(meta?.trigger !== undefined ? { trigger: meta.trigger } : {}),
+      ...(typeof meta?.preTokens === 'number' ? { preTokens: meta.preTokens } : {}),
+      error: error ?? null,
+      status: data.status,
+    });
+    if (!result) { return; }
+    if (result.created) {
+      this.stampReplayTime(sessionId, result.entry, compactionId);
+      this.post({ type: 'append', sessionId, entries: [result.entry] });
+    } else if (beforeText !== result.entry.text) {
+      // A text change without html makes the client drop the stale rendering
+      // and ask for a fresh one (see transcriptView.patch).
+      this.post({ type: 'revise', sessionId, entryId: result.entry.id, patch: { text: result.entry.text } });
+    }
+  }
+
+  /**
+   * [CUSTOM- `compaction_summary_chunk` streams the raw summary text. Accumulate
+   * it; the terminal `compaction_update` renders the row once. Late chunks after a
+   * terminal entry are ignored.
+   */
+  private noteCompactionChunk(sessionId: string, data: any): void {
+    const compactionId = typeof data.compactionId === 'string' ? data.compactionId : '';
+    if (compactionId.length === 0) { return; }
+    if (this.transcripts.getCompact(sessionId, compactionId)?.status !== undefined) { return; }
+    const text = textOf(data.content);
+    if (text.length === 0) { return; }
+    const key = compactionKey(sessionId, compactionId);
+    const next = (this.compactionSummaries.get(key) ?? '') + text;
+    this.compactionSummaries.set(key, next.length > MAX_COMPACTION_TEXT ? next.slice(0, MAX_COMPACTION_TEXT) : next);
+  }
+
+  /**
+   * [CUSTOM- Fallback replay path: an older adapter (no `session.compaction`)
+   * sends the persisted compact summary as `user_message_chunk`. One summary may
+   * arrive in several chunks; `compactReplayIds` keeps them on one compact record
+   * instead of letting the tail leak as user bubbles.
+   */
+  private handleCompactReplayChunk(sessionId: string, messageId: string | undefined, text: string): void {
+    let compactionId = messageId;
+    if (!compactionId) {
+      compactionId = this.compactReplayOpen.get(sessionId)
+        ?? `replay-compact:${sessionId}:${++this.compactFallbackSeq}`;
+    }
+    if (messageId) {
+      let ids = this.compactReplayIds.get(sessionId);
+      if (!ids) { ids = new Set(); this.compactReplayIds.set(sessionId, ids); }
+      ids.add(messageId);
+    }
+    this.compactReplayOpen.set(sessionId, compactionId);
+    const existing = this.transcripts.getCompact(sessionId, compactionId);
+    if (existing?.status !== undefined) { return; }
+    this.finalizeEntries(sessionId, { only: 'assistant' });
+    if (text.length === 0) { return; }
+    const key = compactionKey(sessionId, compactionId);
+    const raw = (this.compactionSummaries.get(key) ?? '') + text;
+    const bounded = raw.length > MAX_COMPACTION_TEXT ? raw.slice(0, MAX_COMPACTION_TEXT) : raw;
+    this.compactionSummaries.set(key, bounded);
+    const meta = this.compactMetaFor(sessionId, compactionId);
+    const beforeText = existing?.text;
+    const result = this.transcripts.upsertCompact(sessionId, compactionId, {
+      text: compactSummaryBody(bounded),
+      ...(meta?.trigger !== undefined ? { trigger: meta.trigger } : {}),
+      ...(typeof meta?.preTokens === 'number' ? { preTokens: meta.preTokens } : {}),
+    });
+    if (!result) { return; }
+    if (result.created) {
+      this.stampReplayTime(sessionId, result.entry, messageId ?? compactionId);
+      this.post({ type: 'append', sessionId, entries: [result.entry] });
+    } else if (beforeText !== result.entry.text) {
+      this.post({ type: 'revise', sessionId, entryId: result.entry.id, patch: { text: result.entry.text } });
+    }
+  }
+
   /**
    * [CUSTOM- Read a session's real message times BEFORE replaying it.
    *
@@ -1910,22 +2091,28 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // Best effort: no times means the records keep the host clock, as before.
       log(`${LOG_PREFIX}: transcript times unavailable (${(e as Error)?.message ?? e})`);
     }
-    // [CUSTOM- Images of user messages too: the replay delivers them as
-    // separate chunks (100), so the bubble has nothing to merge with unless we read
-    // the transcript. Any failure is "no images", never an error.
-    // [CUSTOM- …and the message's FILE REFERENCES ride the same way (the agent
-    // serialises a `resource_link` block as a `[@name](file:///…)` text block). One scan now
-    // serves both, and it also reports whether each record has prose of its own — the
-    // discriminator that tells an attachment chunk "this already rode on the text chunk"
-    // from "you are the only carrier this message has".
-    try {
-      const parts = await readTranscriptUserAttachments(dir, sessionId);
-      if (parts.size > 0) {
-        this.replayUserParts.set(sessionId, parts);
-        log(`${LOG_PREFIX}: replayed user attachments available for ${sessionId} (${parts.size} messages)`);
+    // [CUSTOM- Images / file references / prose flags, plus compact summary markers
+    // and the boundary metadata for the "Compacted chat" header. One read each,
+    // in parallel; any failure is "no attachments / no metadata", never an error.
+    const [partsResult, compactionsResult] = await Promise.allSettled([
+      readTranscriptUserAttachments(dir, sessionId),
+      readTranscriptCompactions(dir, sessionId),
+    ]);
+    if (partsResult.status === 'fulfilled') {
+      if (partsResult.value.size > 0) {
+        this.replayUserParts.set(sessionId, partsResult.value);
+        log(`${LOG_PREFIX}: replayed user attachments available for ${sessionId} (${partsResult.value.size} messages)`);
       }
-    } catch (e) {
-      log(`${LOG_PREFIX}: transcript user attachments unavailable (${(e as Error)?.message ?? e})`);
+    } else {
+      log(`${LOG_PREFIX}: transcript user attachments unavailable (${(partsResult.reason as Error)?.message ?? partsResult.reason})`);
+    }
+    if (compactionsResult.status === 'fulfilled') {
+      if (compactionsResult.value.size > 0) {
+        this.replayCompactions.set(sessionId, compactionsResult.value);
+        log(`${LOG_PREFIX}: replayed compaction metadata available for ${sessionId} (${compactionsResult.value.size})`);
+      }
+    } else {
+      log(`${LOG_PREFIX}: transcript compaction metadata unavailable (${(compactionsResult.reason as Error)?.message ?? compactionsResult.reason})`);
     }
   }
 
@@ -2174,7 +2361,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.renderMarkdownBatch(sessionId, entries, true);
   }
 
-  /** 已收尾、有正文、还没有 html 的 assistant / thought 记录。 */
+  /** 已收尾、有正文、还没有 html 的 assistant / thought / compact 记录。 */
   private collectMissingMarkdown(
     sessionId: string,
     opts: { includeStreaming?: boolean } = {},
@@ -2182,7 +2369,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     const entries = this.transcripts.snapshot(sessionId)?.entries ?? [];
     const out: TranscriptEntry[] = [];
     for (const entry of entries) {
-      if (entry.kind !== 'assistant' && entry.kind !== 'thought') { continue; }
+      if (entry.kind !== 'assistant' && entry.kind !== 'thought' && entry.kind !== 'compact') { continue; }
       const prose = entry as { text?: string; html?: string; streaming?: boolean };
       if (prose.streaming && !opts.includeStreaming) { continue; }
       // 空白正文渲染出来是空串（客户端也当"没有 html"），会让安静窗口每 600ms 重试一次。
@@ -2212,7 +2399,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           type: 'revise',
           sessionId,
           entryId: entry.id,
-          patch: { text: prose.text, html, streaming: false },
+          // compact is not a streaming record; do not add a `streaming` field
+          // that its client object does not define.
+          patch: entry.kind === 'compact'
+            ? { text: prose.text, html }
+            : { text: prose.text, html, streaming: false },
         });
       }
     }
@@ -4905,6 +5096,11 @@ function toolKey(sessionId: string, toolCallId: string): string {
   return `${sessionId}::${toolCallId}`;
 }
 
+/** [CUSTOM- 压缩摘要的累计键：与 toolKey 同样的「会话 + 实体 id」形状。 */
+function compactionKey(sessionId: string, compactionId: string): string {
+  return `${sessionId}::${compactionId}`;
+}
+
 /**
  * [CUSTOM- Union the agent's history rows with the local cache's.
  *
@@ -5062,6 +5258,8 @@ function isWorkUpdate(update: { sessionUpdate?: string }): boolean {
     case 'agent_thought_chunk':
     case 'tool_call':
     case 'tool_call_update':
+    case 'compaction_update':
+    case 'compaction_summary_chunk':
       return true;
     default:
       return false;

@@ -286,7 +286,7 @@ export const transcriptViewClient = `
   // （patch() 不认识的那个键只是被拷进对象，没有任何报错）。
   // 改这里之前先对照 src/ui/chat/transcript/types.ts 的 EntryPatch。
   // [CUSTOM- 'elicitation' 与记录字段名逐字相同（表单卡的 patch）。
-  var PATCH_KEYS = ['text', 'html', 'streaming', 'elapsedMs', 'entries', 'blocks', 'permission', 'elicitation', 'title', 'description', 'state', 'canCancel'];
+  var PATCH_KEYS = ['text', 'html', 'streaming', 'elapsedMs', 'entries', 'blocks', 'permission', 'elicitation', 'title', 'description', 'state', 'canCancel', 'trigger', 'preTokens', 'error'];
 
   function init(container) {
     messagesEl = container;
@@ -388,6 +388,14 @@ export const transcriptViewClient = `
     var text = entry.text;
     if (!text) { return; }
     if (entry.html !== undefined && entry.html !== null && entry.html !== '') { return; }
+    // [CUSTOM- compact is already settled when it is created; it needs the same
+    // markdown round-trip as an assistant or thought body.
+    if (entry.kind === 'compact') {
+      asked[entry.id] = text;
+      pending[entry.id] = text;
+      scheduleMarkdown();
+      return;
+    }
     if (entry.kind === 'assistant' || (entry.kind === 'thought' && entry.streaming)) { asked[entry.id] = text; pending[entry.id] = text; scheduleMarkdown(); return; }
     // [CUSTOM- A thought renders markdown through the same round-trip,
     // but only once it has SETTLED: html for a block that is still streaming would
@@ -573,6 +581,68 @@ export const transcriptViewClient = `
     setStreamingText(body, entry.id, entry.text || '');
   }
 
+  // [CUSTOM- The official Claude plugin's compact row: a collapsed details
+  // block, muted and italic, with the summary markdown inside. It is its own
+  // record kind - not a tool card and not a user message.
+  function compactLabel(entry) {
+    var parts = ['Compacted chat'];
+    if (entry.trigger === 'manual' || entry.trigger === 'auto') { parts.push(entry.trigger); }
+    if (typeof entry.preTokens === 'number' && isFinite(entry.preTokens)) {
+      parts.push(Math.round(entry.preTokens / 1000) + 'k tokens freed');
+    }
+    return parts.join(' \\u00b7 ');
+  }
+
+  function applyCompactBody(body, entry) {
+    var hasHtml = entry.html !== undefined && entry.html !== null && entry.html !== '';
+    if (hasHtml) {
+      body.className = 'compact-body md';
+      if (renderedProseHtml.get(body) !== entry.html) {
+        NS.dom.setSanitizedHtml(body, entry.html);
+        NS.links.decorateScrollables(body);
+        renderedProseHtml.set(body, entry.html);
+      }
+      return;
+    }
+    renderedProseHtml.delete(body);
+    body.className = 'compact-body';
+    body.textContent = entry.text || (entry.error ? '' : 'Conversation was compacted to free up context.');
+  }
+
+  function buildCompact(entry) {
+    var wrap = NS.dom.el('div', 'entry entry-compact');
+    var details = document.createElement('details');
+    details.className = 'compact';
+    var summary = document.createElement('summary');
+    summary.className = 'compact-summary';
+    summary.appendChild(foldCaret());
+    summary.appendChild(NS.dom.el('span', 'compact-label', compactLabel(entry)));
+    details.appendChild(summary);
+    var body = NS.dom.el('div', 'compact-body');
+    applyCompactBody(body, entry);
+    details.appendChild(body);
+    if (entry.error) { details.appendChild(NS.dom.el('div', 'compact-error', entry.error)); }
+    wrap.appendChild(details);
+    return wrap;
+  }
+
+  function patchCompact(node, entry) {
+    var details = node.querySelector('.compact');
+    if (!details) { return; }
+    var label = details.querySelector('.compact-label');
+    var nextLabel = compactLabel(entry);
+    if (label && label.textContent !== nextLabel) { label.textContent = nextLabel; }
+    var body = details.querySelector('.compact-body');
+    if (body) { applyCompactBody(body, entry); }
+    var oldError = details.querySelector('.compact-error');
+    if (entry.error) {
+      if (oldError) { oldError.textContent = entry.error; }
+      else { details.appendChild(NS.dom.el('div', 'compact-error', entry.error)); }
+    } else if (oldError && oldError.parentNode) {
+      oldError.parentNode.removeChild(oldError);
+    }
+  }
+
   /**
    * [CUSTOM- Markdown bookkeeping for a record that renders through
    * the round-trip. Shared by the assistant and thought branches because they need
@@ -607,7 +677,7 @@ export const transcriptViewClient = `
     // （每条还同步 flush 一次），正是"最后一条永远轮不到"的放大器。
     // [CUSTOM- 用 scheduleMarkdown 而不是 flushPending：一次 finalize 批次可能有几百条，
     // 每条同步发一次请求 = 几百次整批往返。合到下一帧只发一次。
-    if (entry.streaming === false && entry.text && !entry.html) {
+    if ((entry.kind === 'compact' || entry.streaming === false) && entry.text && !entry.html) {
       // [CUSTOM- 定稿是一次天然的**重试点**：万一上次请求被宿主静默丢掉（未知会话 /
       // 单项异常），在飞记录会把它永远按住。这里清掉再排一次，重试次数被"每条记录
       // 定稿一次"天然限制住，不会打转。
@@ -1024,6 +1094,7 @@ export const transcriptViewClient = `
       return aEntry;
     }
     if (entry.kind === 'thought') { return buildThought(entry); }
+    if (entry.kind === 'compact') { return buildCompact(entry); }
     if (entry.kind === 'plan') { return buildPlan(entry); }
     if (entry.kind === 'content') { return buildContent(entry); }
     // [CUSTOM- Permission card (panel-side replacement for the
@@ -1495,6 +1566,11 @@ export const transcriptViewClient = `
       node.parentNode.replaceChild(rebuiltContent, node);
       nodes[entryId] = rebuiltContent;
       watchNode(rebuiltContent);
+    } else if (entry.kind === 'compact') {
+      patchCompact(node, entry);
+      // A text change clears the stored html; this re-requests the summary's
+      // markdown (markPending also handles the initial append).
+      trackMarkdown(entryId, entry, changes);
     } else if (entry.kind === 'elicitation') {
       // [CUSTOM- Patch the existing card in place, like the permission
       // card: the field the user is aiming at must not be replaced mid-answer.

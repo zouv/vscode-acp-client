@@ -107,7 +107,9 @@ export class ConnectionManager {
           // sub-agent as a child session (`subagent_update`), which we surface as a card.
           subagents: {},
           // The composer renders boolean options; without this agents must not send any.
-          session: { configOptions: { boolean: {} } },
+          // Declaring compaction makes Claude replay a compact summary as
+          // `compaction_update` instead of a user_message_chunk (a 64KB user bubble).
+          session: { configOptions: { boolean: {} }, compaction: {} },
         },
       }), timeoutMs, 'ACP initialize', signal);
       log(`ConnectionManager: initialized. Agent: ${initResponse.agentInfo?.name || 'unknown'} v${initResponse.agentInfo?.version || '?'}`);

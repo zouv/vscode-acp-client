@@ -134,7 +134,7 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 | ~~P1-6~~ | ~~agent 差异收进 `AgentProfile`~~ | ✅ 2026-10-25：转录补全与嵌套策略按 kind（`transcriptStore` / `nesting`），不再按名字 |
 | ~~P1-7~~ | ~~终端与写文件健壮性~~ | ✅ 2026-11-01：shell-free argv、进程树回收、UTF-8 解码、释放资源；dirty 文档拒绝写入，clean 文档 WorkspaceEdit + save。终端输出保留到扩展销毁 |
 | P1-8 | 连接健壮性 | ✅ 2026-11-02：initialize 超时、有界退避 resume 恢复（不重发 prompt）、手动恢复去重、配置重载提示；取消/晚到防护、销毁、两桥、ownership 与 traffic 默认关闭。仅 resume-capable agent 自动恢复，真实账号验收另做 |
-| P1-9 | SDK 新更新类型 | `plan_update` / `plan_removed`（声明 `plan`，Codex 才发结构化计划）、`notice`、`compaction_*`；评估 SDK 2.x 升级 |
+| P1-9 | SDK 新更新类型 | `plan_update` / `plan_removed`（声明 `plan`，Codex 才发结构化计划）、`notice`、`compaction_*`（compaction 已于 2026-11-02 接入为独立 compact 记录）；评估 SDK 2.x 升级 |
 
 ### 🟢 远期 / 增强
 

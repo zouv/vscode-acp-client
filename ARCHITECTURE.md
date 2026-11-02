@@ -75,7 +75,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/extension.ts` | 激活入口：装配全部服务与视图、把 SessionManager 事件接到 UI、dispose 编排；驱动 `vac.turnInProgress` 上下文键 | 新增服务 / 新增事件转发 / 改装配顺序 |
 | `src/commands.ts` | `vac.*` 命令注册表（一个 `handlers` 对象，命令 id → 处理函数，末尾统一 register） | 新增/改命令行为（同时改 `package.json`） |
 | `src/agents/AgentProfile.ts` | 按 `kind`（claude / codex / generic）分化的 agent 专有行为：会话请求的 `_meta`（自定义模型）、`transcriptStore`（能否读它的磁盘转录补全历史/回放）、`nesting`（工具调用嵌套策略 id）。**UI 侧的 agent 差异一律从这里按 kind 取，不按配置名** | 新增 agent 专有差异 |
-| `src/agents/AgentMigration.ts` | 已废弃适配器包的替换表 + `migrateAgents`（纯逻辑）；`AgentConfig.offerAgentMigration` 在激活时提示改写用户自己的 `vac.agents` | 上游适配器换包名 |
+| `src/agents/AgentMigration.ts` | 适配器包 / 版本表示的替换表 + `migrateAgents`（纯逻辑）；`AgentConfig.offerAgentMigration` 在激活时提示改写用户自己的 `vac.agents`（Codex 旧包、Claude 裸 spec → `#main`） | 上游适配器换包名 / 需要固定到修复分支 |
 | `src/config/AgentConfig.ts` | 读 `vac.agents`；`getAgentNames` 把第一个 Claude 排最前；`getAgentKind`；`offerAgentMigration`（旧包迁移提示，可“不再询问”） | agent 列表读取/排序 / 配置迁移 |
 | `src/config/CustomModels.ts` | `vac.customModels` 的读取（工作区 > 用户 > 跨 IDE 全局 > 默认）与规整；`resolveCustomModels()` 同时给出作用域信息 | 自定义模型配置 |
 | `src/config/GlobalSettings.ts` | **跨 IDE 全局配置** `VAC_HOME/config.json`（默认 `~/.vac`）：原子写、白名单（首期仅 `vac.customModels`）、`firstSetLayer` 解析；纯逻辑，禁 import vscode | 新增/改动全局层配置键 |
@@ -101,7 +101,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/handlers/ElicitationBridge.ts` | 表单请求（AskUserQuestion）的唯一出口，与权限桥同构；`fieldsOf()` 把 JSON Schema 扁平化成五种字段，`optionOf()` 保留选项的 description 与 preview；结算时写回 `summary` + **结构化的 `answers`**（回执卡据此标出所选） | 表单行为 / schema 形状 |
 | `src/handlers/ElicitationHandler.ts` | 表单策略层 + 逐字段弹框兜底 | 弹框兜底行为 |
 | `src/handlers/SessionUpdateHandler.ts` | `session/update` 通知扇出（单订阅者异常隔离） | 流式更新丢事件 |
-| `src/ui/chat/` | Chat 面板子系统（宿主侧 host/surface/transcript + webview 客户端脚本）；入口 `index.ts` 只导出 `ChatViewProvider`/`ChatPanelHost` | 聊天 UI / 渲染 |
+| `src/ui/chat/` | Chat 面板子系统（宿主侧 host/surface/transcript + webview 客户端脚本）；入口 `index.ts` 只导出 `ChatViewProvider`/`ChatPanelHost`；`transcript/compaction.ts` 负责压缩摘要解析 / compact 记录语义 | 聊天 UI / 渲染 |
 | `src/ui/chat/ChatPanelHost.ts` | 面板核心（**本仓库最大的文件，用 grep 定位、勿整读**）：记录、协议、标签、权限/表单呈现 | 面板行为 |
 | `src/ui/chat/ChatViewProvider.ts` | 侧边栏 `vac-chat` 视图 + 编辑区面板的归属与焦点同步（视图上唯一的消息监听器） | 视图注册 / 双面同步 |
 | `src/ui/chat/ChatEditorPanel.ts` | 编辑区标签页（第二个 surface） | 编辑区面行为 |
@@ -182,6 +182,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 侧边栏视图注册 / 双面焦点 | `ChatViewProvider.ts:resolveWebviewView` / `syncFocus` | 视图上**只能有一个** `onDidReceiveMessage` |
 | 编辑区面板 | `ChatEditorPanel.ts:open` / `focusMostRecentSession` | 与侧边栏共享同一个 host |
 | 记录区渲染 | `transcript/TranscriptStore.ts`、`content/*`、`html/client/transcriptView.ts` | 布局类问题见 §5 |
+| 上下文压缩回放 / 实时压缩 | `ChatPanelHost.onSessionUpdate` 的 `compaction_update` / `compaction_summary_chunk` 分支 + `TranscriptStore.upsertCompact` + `transcript/compaction.ts` + `diskSessions.readTranscriptCompactions` + `html/client/transcriptView.ts` 的 `buildCompact` | 三条来源（update / summary chunk / 旧适配器 user chunk）都落成独立的 compact 记录；完整历史由适配器从原始 JSONL 重建（0.91.0 的 `getSessionMessages` 只有压缩后链，首条会变成 summary） |
 | 进场 / 收尾时 markdown 没渲染 | `ChatPanelHost.prefillReplayMarkdown`（`session-load-end`）/ `prefillSnapshotMarkdown`（`snapshotOf`）/ `armSettlePrefill` → `settlePrefillMarkdown`（会话安静 600ms）+ 客户端 `transcriptView.patch` 的「带 text 的 html 照收」规则 | 宿主自己补渲染，不再依赖客户端那条往返（见 `arch/chat-panel.md` §5.7） |
 | 权限卡片 / 抽屉 | `html/client/permissionView.ts`、`permissionDrawer.ts` | 与 `PermissionBridge` 配对 |
 | 表单卡片 | `html/client/elicitationView.ts` | 与 `ElicitationBridge` 配对 |
@@ -304,7 +305,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 
 | 调用方 | 路由 / 入口 | 鉴权 | 关键字段 / 约定 |
 |---|---|---|---|
-| 扩展 ↔ agent 进程 | ACP over stdio JSON-RPC（`ClientSideConnection`） | `initialize` + `authenticate`（-32000） | 每个请求带 `sessionId`；`session/new\|load\|resume\|close` 串行，`prompt` 并发 |
+| 扩展 ↔ agent 进程 | ACP over stdio JSON-RPC（`ClientSideConnection`） | `initialize` + `authenticate`（-32000） | 每个请求带 `sessionId`；`session/new\|load\|resume\|close` 串行，`prompt` 并发；声明 `session.compaction` 后压缩摘要/实时压缩走 `compaction_update` 并渲染为 compact 记录 |
 | 宿主 ↔ Chat webview | `postMessage`（协议见 `ui/chat/protocol.ts`） | CSP + nonce，`localResourceRoots` 限定 | 一个视图只有一个 `onDidReceiveMessage` 监听器 |
 | 宿主 ↔ Dashboard webview | `postMessage`（见 `dashboard/DashboardModel.ts`） | CSP + nonce；命令走白名单 | 只投递 `snapshot`；不可见时不投 |
 | 会话缓存 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.sessionHistory.v1`，**改名即丢历史** |

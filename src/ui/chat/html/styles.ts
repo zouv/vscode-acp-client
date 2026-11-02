@@ -2122,6 +2122,54 @@ export function styles(): string {
   }
   @keyframes pulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
 
+  /* --- Compacted chat（上下文压缩）-------------------------------------
+     官方 Claude 插件的形态：一行安静的斜体摘要，点开才显示 retained summary。
+     它不是用户消息，也不是工具卡；不参与大纲 / 置顶 / 轮次计数。 */
+  .entry-compact { align-self: stretch; }
+  .compact {
+    margin: 4px 0;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 0.9em;
+  }
+  .compact-summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 2px;
+    border-radius: 3px;
+    font-style: italic;
+    opacity: 0.85;
+  }
+  .compact-summary::-webkit-details-marker { display: none; }
+  .compact-summary:hover { opacity: 1; }
+  .compact[open] {
+    background: var(--vscode-textCodeBlock-background);
+    border: 1px solid var(--vscode-panel-border);
+    padding: 2px 6px 6px;
+  }
+  .compact[open] .compact-summary { opacity: 1; color: var(--vscode-foreground); }
+  .compact-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compact-body {
+    margin-top: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--vscode-descriptionForeground);
+    font-weight: 400;
+  }
+  .compact-body.md { white-space: normal; }
+  .compact-body.md pre, .compact-body.md code, .compact-body.md table { font-style: normal; }
+  .compact-error {
+    margin-top: 6px;
+    color: var(--vscode-errorForeground, var(--vscode-inputValidation-errorForeground));
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
   /* --- Tool calls ------------------------------------------------------ */
   .tool {
     border: 1px solid var(--vscode-panel-border);

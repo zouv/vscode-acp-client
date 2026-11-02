@@ -612,3 +612,22 @@ applyAction 摘行换标签且不重置过滤）；真 Chromium 的 `#historyrow
 | 分组的来源 | 回执卡与抽屉**同一个 `groupsOf(state)`**（`fill` 里不再裸遍历 `state.fields`）—— 两处若用不同分组，自拟框的位置就会一边对一边错 |
 | 已知代价 | 折叠态**不持久**：`applyState` 对结算态每次 revise/快照都会 `fill` 重建，`open` 回到默认。要持久得仿 `userCollapsed` 按 entryId 记账 —— 目前不做（历史卡从简，默认态就是想要的态） |
 | 验收 | 无头档 `#elicsettled` / `#elicsettledfree` / `#elicsettledfolded`（`elic-settled*.png`）+ 探针 `elicprobe`。**折叠的判据只能是卡片自身的高度**（319 → 61）：折叠态下正文的 `getComputedStyle(...).display` 仍是作者写的 `flex`、`getBoundingClientRect()` 也照旧报 252 —— 浏览器在渲染层藏它，这两个读数都会骗人 |
+
+### 5.55 上下文压缩记录（compact，2026-11-02）
+
+**为什么需要**：Claude Code 压缩上下文后，转录里会留下一条 `isCompactSummary` 的 user 记录
+（`This session is being continued from a previous conversation…`）。它是给模型的续接摘要，
+**不是用户说过的话**。旧实现没有识别它：`session/load` 回放时它被当成 `user_message_chunk`，
+于是 Chat 顶部出现一条巨大的蓝色用户气泡、对话大纲首条也变成这段摘要。
+
+| 关注点 | 规则 |
+|---|---|
+| 三条来源 | ① ACP `compaction_update`（声明 `session.compaction` 的适配器）；② `compaction_summary_chunk`（实时 `/compact` 的流式摘要）；③ 旧适配器的 `user_message_chunk`（预读 `isCompactSummary` 标记 / 文本前缀 / 同一 messageId 的后续分片）。三条都汇到 `TranscriptStore.upsertCompact`，按 `compactionId` 幂等 |
+| 完整历史来源 | `session/load` 的压缩前历史由 `claude-agent-acp` 适配器从原始 JSONL 重建完整显示链后回放；VAC 只消费回放更新。0.91.0 的 `getSessionMessages()` 只返回压缩后链（首条是 summary），会让首条真实提问缺失 |
+| 记录形状 | `CompactEntry`：`compactionId` / `text` / `html?` / `trigger?` / `preTokens?` / `error?` / `status?`。`status` 只给宿主去重（终态后忽略迟到的 fallback 文本），不下发客户端 |
+| 元数据 | `diskSessions.readTranscriptCompactions` 从 `system/compact_boundary` 的 `compactMetadata.preservedSegment.anchorUuid` 取 summary uuid，映射 `{ trigger, preTokens }`；ACP 的非 AIR 客户端拿不到这两个字段 |
+| 渲染 | `transcriptView.buildCompact` → `<details class="compact">`，默认收起；summary 文案 `Compacted chat · auto · 176k tokens freed`；正文走与 assistant/thought 同一条 markdown 回填（`html`）；错误单独放 `.compact-error` |
+| 排除面 | 大纲只收 user/assistant、置顶条只收 user —— compact 自动排除；`place()` 的 `messageAnchorCount` 不把它算作消息锚点；rail 显式返回 `Compacted conversation`，不再 fallback 到摘要首行 |
+| 时序坑 | `replayCompactions` 在 `openExistingSession` 之前预读，**`session-load-start` 不能清它**；只清 `compactionSummaries` / `compactReplayIds` / `compactReplayOpen` |
+| 文本坑 | `summary: null` / `[]` 是显式清空，不能被累计分片复活；分片追加或 `text` 变化必须清 `html`；终态 text 没变时不要把 `text` 放进 revise（否则客户端会作废已渲染 html） |
+| 兜底边界 | 预读标记是可靠信号；前缀只认第一片；没有 messageId 时用 `compactReplayOpen` 续接，收到真实用户消息 / `session-load-end` 立即清除 |

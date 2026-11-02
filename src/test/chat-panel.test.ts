@@ -66,7 +66,7 @@ import type { SettingLayer, SettingSource, SettingWriteTarget } from '../config/
 import type { RestoreChoice } from '../ui/chat/protocol';
 import type { ActiveEditorLike } from '../ui/chat/ChatPanelHost';
 import type { ExtToChatMessage, TranscriptSnapshotWire } from '../ui/chat/protocol';
-import type { TranscriptEntry } from '../ui/chat/transcript/types';
+import type { EntryPatch, TranscriptEntry } from '../ui/chat/transcript/types';
 
 const FIXTURE_PATH = path.resolve(
   __dirname, '..', '..', 'src', 'test', 'fixtures', 'claude-code-session-load.json',
@@ -343,12 +343,12 @@ function phaseOf(fixture: Fixture, phase: string): FixtureNotification[] {
 
 interface TranscriptState {
   entries: TranscriptEntry[];
-  patched: Map<string, Partial<TranscriptEntry>>;
+  patched: Map<string, EntryPatch>;
 }
 
 function reduce(sent: readonly ExtToChatMessage[]): TranscriptState {
   let entries: TranscriptEntry[] = [];
-  const patched = new Map<string, Partial<TranscriptEntry>>();
+  const patched = new Map<string, EntryPatch>();
   for (const message of sent) {
     if (message.type === 'boot' || message.type === 'focus') {
       // A snapshot REPLACES the transcript (the client hydrates), so the model
@@ -2561,6 +2561,309 @@ suite('chat panel: replay fidelity ()', () => {
     const state = settle(harness, 'Claude Code', 'reminder');
     assert.strictEqual(state.entries.filter(e => e.kind === 'user').length, 0);
     assert.strictEqual(state.entries.filter(e => e.kind === 'notice').length, 1);
+  });
+
+  // [CUSTOM- Claude Code 的上下文压缩摘要（ACP `session.compaction`）不是用户输入：
+  // 它必须落成独立的 compact 记录，不能变成蓝色气泡、工具卡或大纲首条。
+  interface CompactState {
+    kind: 'compact';
+    compactionId: string;
+    text: string;
+    html?: string;
+    status?: string;
+    error?: string;
+    trigger?: string;
+    preTokens?: number;
+  }
+
+  function compactOf(state: TranscriptState): CompactState | undefined {
+    return state.entries.find(e => e.kind === 'compact') as CompactState | undefined;
+  }
+
+  test('a compaction update creates a compact row, not a user bubble or tool card', () => {
+    const harness = makeHarness('compact', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact',
+      update: {
+        sessionUpdate: 'compaction_update',
+        compactionId: 'c1',
+        status: 'completed',
+        summary: [{ type: 'text', text: 'earlier context' }],
+      },
+    } as any);
+
+    const state = settle(harness, 'Claude Code', 'compact');
+    assert.strictEqual(state.entries.filter(e => e.kind === 'user').length, 0,
+      'a compaction summary is not something the user said');
+    assert.strictEqual(state.entries.filter(e => e.kind === 'tool').length, 0,
+      'it is its own record, not a tool card');
+    const compact = compactOf(state);
+    assert.ok(compact, 'the compaction becomes a compact row');
+    assert.strictEqual(compact!.compactionId, 'c1');
+    assert.strictEqual(compact!.text, 'earlier context');
+    assert.strictEqual(compact!.status, 'completed');
+  });
+
+  test('an in-progress compaction does not create a row until it is terminal', () => {
+    const harness = makeHarness('compact-progress', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact-progress',
+      update: { sessionUpdate: 'compaction_update', compactionId: 'c2', status: 'in_progress' },
+    } as any);
+    let state = settle(harness, 'Claude Code', 'compact-progress');
+    assert.strictEqual(state.entries.filter(e => e.kind === 'compact').length, 0,
+      'no half-built row while /compact runs');
+
+    harness.handler.handleUpdate({
+      sessionId: 'compact-progress',
+      update: {
+        sessionUpdate: 'compaction_update', compactionId: 'c2', status: 'completed',
+        summary: [{ type: 'text', text: 'done' }],
+      },
+    } as any);
+    state = settle(harness, 'Claude Code', 'compact-progress');
+    assert.strictEqual(state.entries.filter(e => e.kind === 'compact').length, 1);
+  });
+
+  test('compaction summary chunks fill the row when the terminal update omits summary', () => {
+    const harness = makeHarness('compact-chunks', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact-chunks',
+      update: { sessionUpdate: 'compaction_update', compactionId: 'c3', status: 'in_progress' },
+    } as any);
+    harness.handler.handleUpdate({
+      sessionId: 'compact-chunks',
+      update: {
+        sessionUpdate: 'compaction_summary_chunk', compactionId: 'c3',
+        content: { type: 'text', text: 'streamed ' },
+      },
+    } as any);
+    harness.handler.handleUpdate({
+      sessionId: 'compact-chunks',
+      update: {
+        sessionUpdate: 'compaction_summary_chunk', compactionId: 'c3',
+        content: { type: 'text', text: 'summary' },
+      },
+    } as any);
+    harness.handler.handleUpdate({
+      sessionId: 'compact-chunks',
+      update: { sessionUpdate: 'compaction_update', compactionId: 'c3', status: 'completed' },
+    } as any);
+
+    const compact = compactOf(settle(harness, 'Claude Code', 'compact-chunks'));
+    assert.ok(compact);
+    assert.strictEqual(compact!.text, 'streamed summary');
+  });
+
+  test('an explicit empty summary does not resurrect accumulated chunks', () => {
+    const harness = makeHarness('compact-clear', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact-clear',
+      update: { sessionUpdate: 'compaction_update', compactionId: 'c4', status: 'in_progress' },
+    } as any);
+    harness.handler.handleUpdate({
+      sessionId: 'compact-clear',
+      update: {
+        sessionUpdate: 'compaction_summary_chunk', compactionId: 'c4',
+        content: { type: 'text', text: 'stale' },
+      },
+    } as any);
+    harness.handler.handleUpdate({
+      sessionId: 'compact-clear',
+      update: { sessionUpdate: 'compaction_update', compactionId: 'c4', status: 'completed', summary: [] },
+    } as any);
+
+    const compact = compactOf(settle(harness, 'Claude Code', 'compact-clear'));
+    assert.ok(compact);
+    assert.strictEqual(compact!.text, '');
+  });
+
+  test('a failed compaction records its readable error', () => {
+    const harness = makeHarness('compact-failed', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact-failed',
+      update: {
+        sessionUpdate: 'compaction_update', compactionId: 'c5', status: 'failed', error: 'out of room',
+      },
+    } as any);
+
+    const compact = compactOf(settle(harness, 'Claude Code', 'compact-failed'));
+    assert.ok(compact);
+    assert.strictEqual(compact!.status, 'failed');
+    assert.match(compact!.error ?? '', /Compaction failed: out of room/);
+  });
+
+  test('a compact-summary user chunk becomes a compact row, not a user bubble', () => {
+    const harness = makeHarness('compact-fallback', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact-fallback',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        messageId: 'm-compact',
+        content: {
+          type: 'text',
+          text: 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\nreal summary',
+        },
+      },
+    } as any);
+
+    const state = settle(harness, 'Claude Code', 'compact-fallback');
+    assert.strictEqual(state.entries.filter(e => e.kind === 'user').length, 0,
+      'the legacy adapter fallback must not create a user bubble');
+    assert.strictEqual(state.entries.filter(e => e.kind === 'notice').length, 0,
+      'it is a compact row, not a notice');
+    const compact = compactOf(state);
+    assert.ok(compact);
+    assert.strictEqual(compact!.compactionId, 'm-compact');
+    assert.strictEqual(compact!.text, 'real summary');
+  });
+
+  test('fallback chunks with the same messageId stay on one compact row', () => {
+    const harness = makeHarness('compact-fallback-chunks', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact-fallback-chunks',
+      update: {
+        sessionUpdate: 'user_message_chunk', messageId: 'm-compact-2',
+        content: {
+          type: 'text',
+          text: 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\nreal summary',
+        },
+      },
+    } as any);
+    harness.handler.handleUpdate({
+      sessionId: 'compact-fallback-chunks',
+      update: {
+        sessionUpdate: 'user_message_chunk', messageId: 'm-compact-2',
+        content: { type: 'text', text: ' and more' },
+      },
+    } as any);
+
+    const state = settle(harness, 'Claude Code', 'compact-fallback-chunks');
+    const rows = state.entries.filter(e => e.kind === 'compact') as CompactState[];
+    assert.strictEqual(rows.length, 1, 'one summary = one row');
+    assert.strictEqual(rows[0].text, 'real summary and more');
+  });
+
+  test('preloaded compact markers and metadata drive the row without the text prefix', () => {
+    const harness = makeHarness('compact-preload', 'Claude Code');
+    harness.surface.sent.length = 0;
+    (harness.host as any).replayUserParts.set('compact-preload', new Map([
+      ['sum-1', { images: [], files: [], hasProse: true, compactSummary: true }],
+    ]));
+    (harness.host as any).replayCompactions.set('compact-preload', new Map([
+      ['sum-1', { trigger: 'auto', preTokens: 176200 }],
+    ]));
+
+    harness.handler.handleUpdate({
+      sessionId: 'compact-preload',
+      update: {
+        sessionUpdate: 'user_message_chunk', messageId: 'sum-1',
+        content: { type: 'text', text: 'unframed summary' },
+      },
+    } as any);
+
+    const compact = compactOf(settle(harness, 'Claude Code', 'compact-preload'));
+    assert.ok(compact);
+    assert.strictEqual(compact!.text, 'unframed summary');
+    assert.strictEqual(compact!.trigger, 'auto');
+    assert.strictEqual(compact!.preTokens, 176200);
+  });
+
+  test('a terminal compaction wins over a later fallback user chunk', () => {
+    const harness = makeHarness('compact-dedupe', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact-dedupe',
+      update: {
+        sessionUpdate: 'compaction_update', compactionId: 'c6', status: 'completed',
+        summary: [{ type: 'text', text: 'authoritative' }],
+      },
+    } as any);
+    harness.handler.handleUpdate({
+      sessionId: 'compact-dedupe',
+      update: {
+        sessionUpdate: 'user_message_chunk', messageId: 'c6',
+        content: {
+          type: 'text',
+          text: 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\nfallback',
+        },
+      },
+    } as any);
+
+    const state = settle(harness, 'Claude Code', 'compact-dedupe');
+    const rows = state.entries.filter(e => e.kind === 'compact') as CompactState[];
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].text, 'authoritative');
+  });
+
+  test('compact summaries are part of the markdown prefill', () => {
+    const harness = makeHarness('compact-markdown', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact-markdown',
+      update: {
+        sessionUpdate: 'compaction_update', compactionId: 'c7', status: 'completed',
+        summary: [{ type: 'text', text: '**bold** summary' }],
+      },
+    } as any);
+
+    const compact = compactOf(settle(harness, 'Claude Code', 'compact-markdown'));
+    assert.ok(compact);
+    assert.ok(compact!.html && compact!.html.length > 0, 'the summary html is rendered before the snapshot');
+  });
+
+  test('a full-chain replay keeps the real first prompt before the compact row', () => {
+    // The adapter rebuilds the pre-compaction history from the raw transcript; the
+    // summary is then a compaction_update between old and new messages.
+    const harness = makeHarness('compact-full-chain', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'compact-full-chain',
+      update: {
+        sessionUpdate: 'user_message_chunk', messageId: 'u1',
+        content: { type: 'text', text: 'first question' },
+      },
+    } as any);
+    harness.handler.handleUpdate({
+      sessionId: 'compact-full-chain',
+      update: {
+        sessionUpdate: 'compaction_update', compactionId: 's1', status: 'completed',
+        summary: [{ type: 'text', text: 'summary body' }],
+      },
+    } as any);
+    harness.handler.handleUpdate({
+      sessionId: 'compact-full-chain',
+      update: {
+        sessionUpdate: 'user_message_chunk', messageId: 'u2',
+        content: { type: 'text', text: 'second question' },
+      },
+    } as any);
+
+    const state = settle(harness, 'Claude Code', 'compact-full-chain');
+    const first = state.entries[0] as { kind: string; text?: string };
+    assert.strictEqual(first.kind, 'user', 'the first record is the real prompt');
+    assert.strictEqual(first.text, 'first question');
+
+    const compactIndex = state.entries.findIndex(e => e.kind === 'compact');
+    const secondIndex = state.entries.findIndex(
+      e => e.kind === 'user' && (e as { text?: string }).text === 'second question',
+    );
+    assert.ok(compactIndex > 0, 'the compact row is after the pre-compaction history');
+    assert.ok(secondIndex > compactIndex, 'the post-compaction message is after the compact row');
+    assert.ok(
+      !state.entries.some(
+        e => e.kind === 'user'
+          && String((e as { text?: string }).text ?? '').startsWith('This session is being continued'),
+      ),
+      'the summary never becomes a user bubble',
+    );
   });
 
   // [CUSTOM- IDE 注入的"当前打开的文件"上下文（`<ide_opened_file>…</ide_opened_file>`）

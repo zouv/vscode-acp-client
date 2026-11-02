@@ -6,6 +6,8 @@ import { isBlankText } from '../content/contentBlocks';
 import type { ElicitationState } from '../../../handlers/ElicitationBridge';
 import type {
   AssistantEntry,
+  CompactEntry,
+  CompactStatus,
   ContentEntry,
   ElicitationEntry,
   EntryPatch,
@@ -174,6 +176,71 @@ export class TranscriptStore {
       at: Date.now(),
       entries,
     }));
+  }
+
+  /** [CUSTOM- The compact boundary for a compaction id, if it has been materialized. */
+  getCompact(sessionId: string, compactionId: string): CompactEntry | undefined {
+    const t = this.sessions.get(sessionId);
+    return t?.entries.find(
+      (e): e is CompactEntry => e.kind === 'compact' && e.compactionId === compactionId,
+    );
+  }
+
+  /**
+   * [CUSTOM- Create or update the "Compacted chat" row, keyed by the ACP
+   * compaction id (in replay this is the summary message's uuid).
+   *
+   * `text` replaces the summary, `appendText` adds a streamed fallback chunk;
+   * either way a text change clears `html` so a snapshot can never carry a
+   * rendering of an older prefix. `status` is host-side only (late fallback
+   * chunks are ignored once terminal), and is not patched to the client.
+   */
+  upsertCompact(
+    sessionId: string,
+    compactionId: string,
+    update: {
+      text?: string;
+      appendText?: string;
+      trigger?: string;
+      preTokens?: number;
+      error?: string | null;
+      status?: CompactStatus;
+    },
+  ): { entry: CompactEntry; created: boolean } | null {
+    const t = this.sessions.get(sessionId);
+    if (!t || compactionId.length === 0) { return null; }
+    const existing = t.entries.find(
+      (e): e is CompactEntry => e.kind === 'compact' && e.compactionId === compactionId,
+    );
+    if (existing) {
+      if (update.text !== undefined) {
+        const next = clampText(update.text);
+        if (next !== existing.text) { existing.text = next; existing.html = undefined; }
+      } else if (update.appendText !== undefined && update.appendText.length > 0) {
+        existing.text = clampText(existing.text + update.appendText);
+        existing.html = undefined;
+      }
+      if (update.trigger !== undefined) { existing.trigger = update.trigger; }
+      if (typeof update.preTokens === 'number') { existing.preTokens = update.preTokens; }
+      if (update.error === null) { delete existing.error; }
+      else if (update.error !== undefined) { existing.error = update.error; }
+      if (update.status !== undefined) { existing.status = update.status; }
+      t.touched = ++this.clock;
+      return { entry: existing, created: false };
+    }
+    const text = clampText(update.text ?? update.appendText ?? '');
+    const entry = this.append<CompactEntry>(sessionId, s => ({
+      id: this.nextEntryId(s),
+      kind: 'compact',
+      at: Date.now(),
+      compactionId,
+      text,
+      ...(update.trigger !== undefined ? { trigger: update.trigger } : {}),
+      ...(typeof update.preTokens === 'number' ? { preTokens: update.preTokens } : {}),
+      ...(typeof update.error === 'string' ? { error: update.error } : {}),
+      ...(update.status !== undefined ? { status: update.status } : {}),
+    }));
+    return entry ? { entry, created: true } : null;
   }
 
   /** Non-text content the agent attached to a message chunk. */
@@ -402,6 +469,20 @@ export class TranscriptStore {
     } else if (entry.kind === 'permission') {
       // [CUSTOM-
       if (patch.permission !== undefined) { entry.permission = patch.permission; }
+    } else if (entry.kind === 'compact') {
+      // [CUSTOM- The markdown round-trip lands here (`handleRenderMarkdown`),
+      // so without this branch the host renders the summary but the store keeps
+      // no html and a session switch shows the raw text again.
+      if (patch.text !== undefined) {
+        const next = clampText(patch.text);
+        if (next !== entry.text) { entry.html = undefined; }
+        entry.text = next;
+      }
+      if (patch.html !== undefined) { entry.html = patch.html; }
+      if (patch.trigger !== undefined) { entry.trigger = patch.trigger; }
+      if (patch.preTokens !== undefined) { entry.preTokens = patch.preTokens; }
+      if (patch.error === null) { delete entry.error; }
+      else if (patch.error !== undefined) { entry.error = patch.error; }
     }
     t.touched = ++this.clock;
     return entry;

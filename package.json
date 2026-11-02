@@ -338,7 +338,7 @@
               "command": "npx",
               "args": [
                 "-y",
-                "github:zouv/claude-agent-acp"
+                "github:zouv/claude-agent-acp#main"
               ],
               "env": {}
             },

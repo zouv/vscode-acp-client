@@ -22,6 +22,31 @@ describe('migrateAgentEntry', () => {
     expect(migrateAgentEntry({ command: 'npx', args: ['-y', '@agentclientprotocol/codex-acp'] })).toBeNull();
     expect(migrateAgentEntry({ command: 'codex-acp' })).toBeNull();
   });
+
+  it('points the bare Claude adapter fork at the full-history main branch', () => {
+    expect(migrateAgentEntry({ command: 'npx', args: ['-y', 'github:zouv/claude-agent-acp'] }))
+      .toEqual({
+        command: 'npx',
+        args: ['-y', 'github:zouv/claude-agent-acp#main'],
+      });
+  });
+
+  it('replaces the broken commit pin with the main branch', () => {
+    expect(migrateAgentEntry({
+      command: 'npx',
+      args: ['-y', 'github:zouv/claude-agent-acp#dfcefd33ff9ef785a6072f3f44eae1fe757038ca'],
+    })).toEqual({
+      command: 'npx',
+      args: ['-y', 'github:zouv/claude-agent-acp#main'],
+    });
+  });
+
+  it('does not rewrite a Claude adapter that is already pinned', () => {
+    expect(migrateAgentEntry({
+      command: 'npx',
+      args: ['-y', 'github:zouv/claude-agent-acp#some-other-commit'],
+    })).toBeNull();
+  });
 });
 
 describe('migrateAgents', () => {

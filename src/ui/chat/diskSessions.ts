@@ -23,6 +23,8 @@ import { toContentView, isBlankText } from './content/contentBlocks';
 import type { ContentBlockView } from './content/contentBlocks';
 // [CUSTOM- 同一段文本形状的判定（回放里引用是一段文本而不是块）。
 import { fileMentionViews } from './markdown';
+// [CUSTOM- 压缩续接摘要的判据与 ChatPanelHost / compact 记录共用，避免两份正则漂移。
+import { isCompactSummaryText } from './transcript/compaction';
 
 /** One row recovered from the transcript files. */
 export interface DiskSessionRow {
@@ -50,6 +52,8 @@ export function claudeTranscriptDir(cwd: string, env: NodeJS.ProcessEnv = proces
 /** The first visible user prompt of a transcript record, or undefined. */
 function titleOf(record: Record<string, unknown>): string | undefined {
   if (record.type !== 'user') { return undefined; }
+  // Compact summaries are model-facing continuation context, not user prompts.
+  if (record.isCompactSummary === true || record.isMeta === true) { return undefined; }
   const message = record.message as { content?: unknown } | undefined;
   const content = message?.content;
   const text = typeof content === 'string'
@@ -60,7 +64,11 @@ function titleOf(record: Record<string, unknown>): string | undefined {
   if (typeof text !== 'string') { return undefined; }
   const trimmed = text.replace(/\s+/g, ' ').trim();
   // Local command output is not a title anybody wants to see.
-  return trimmed.length > 0 && !trimmed.startsWith('<local-command') ? trimmed.slice(0, 80) : undefined;
+  return trimmed.length > 0
+    && !trimmed.startsWith('<local-command')
+    && !isCompactSummaryText(trimmed)
+    ? trimmed.slice(0, 80)
+    : undefined;
 }
 
 /**
@@ -186,6 +194,73 @@ export async function readTranscriptTimes(dir: string, sessionId: string): Promi
   return times;
 }
 
+/** [CUSTOM- Metadata for one context compaction, keyed by the summary message uuid. */
+export interface TranscriptCompactionMeta {
+  trigger?: string;
+  preTokens?: number;
+}
+
+/**
+ * [CUSTOM- `summary uuid → { trigger, preTokens }` from the transcript's
+ * `system/compact_boundary` records.
+ *
+ * ACP's `compaction_update` does not carry these facts for non-AIR clients, but
+ * the compact row wants the same header as the official Claude UI
+ * ("Compacted chat · auto · 176k tokens freed"). The boundary's own metadata has
+ * them; its `compactMetadata.preservedSegment.anchorUuid` is the uuid of the
+ * persisted summary message, which is exactly the replay `compactionId`.
+ *
+ * Never throws: a missing file or malformed line degrades to "no metadata" and
+ * the row still renders with just "Compacted chat".
+ */
+export async function readTranscriptCompactions(
+  dir: string,
+  sessionId: string,
+): Promise<Map<string, TranscriptCompactionMeta>> {
+  const out = new Map<string, TranscriptCompactionMeta>();
+  const file = join(dir, `${sessionId}.jsonl`);
+  if (!existsSync(file)) { return out; }
+
+  let lines = 0;
+  const input = createReadStream(file, { encoding: 'utf8' });
+  const reader = createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of reader) {
+      if (++lines > MAX_TIMELINE_LINES) { break; }
+      if (line.length > MAX_LINE_CHARS) { continue; }
+      let record: Record<string, unknown>;
+      try { record = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+      if (!record || record.type !== 'system' || record.subtype !== 'compact_boundary') { continue; }
+      const meta = (record.compactMetadata ?? record.compact_metadata) as {
+        trigger?: unknown;
+        preTokens?: unknown;
+        preservedSegment?: { anchorUuid?: unknown; anchor_uuid?: unknown };
+        preserved_segment?: { anchorUuid?: unknown; anchor_uuid?: unknown };
+        preservedMessages?: { anchorUuid?: unknown; anchor_uuid?: unknown };
+        preserved_messages?: { anchorUuid?: unknown; anchor_uuid?: unknown };
+      } | undefined;
+      if (!meta || typeof meta !== 'object') { continue; }
+      const segment = meta.preservedSegment ?? meta.preserved_segment;
+      const messages = meta.preservedMessages ?? meta.preserved_messages;
+      const anchor = segment?.anchorUuid ?? segment?.anchor_uuid
+        ?? messages?.anchorUuid ?? messages?.anchor_uuid;
+      if (typeof anchor !== 'string' || anchor.length === 0) { continue; }
+      const trigger = typeof meta.trigger === 'string' ? meta.trigger : undefined;
+      const preTokens = typeof meta.preTokens === 'number' && Number.isFinite(meta.preTokens)
+        ? meta.preTokens
+        : undefined;
+      out.set(anchor, {
+        ...(trigger !== undefined ? { trigger } : {}),
+        ...(preTokens !== undefined ? { preTokens } : {}),
+      });
+    }
+  } catch { /* unreadable transcript: no compaction metadata */ } finally {
+    reader.close();
+    input.destroy();
+  }
+  return out;
+}
+
 // 一条用户消息带的附件，以及"它有没有正文"。
 //
 // 为什么要有 `hasProse`（**不是**可有可无的补充字段）：回放时一条消息的正文、图片、文件引用
@@ -210,6 +285,12 @@ export interface TranscriptUserParts {
   files: ContentBlockView[];
   /** 这条消息除引用之外还有可见正文 ⇒ 回放会另发一条正文 chunk 承载这些附件。 */
   hasProse: boolean;
+  /**
+   * [CUSTOM- 这是上下文压缩续接摘要（转录里 `isCompactSummary: true` 的 user 行），
+   * 不是用户说过的话。ChatPanelHost 据此把它落成 compact 记录，而不是用户气泡。
+   * 真实转录的 `message.content` 是**字符串**，所以下面必须单独处理字符串分支。
+   */
+  compactSummary: boolean;
 }
 
 /**
@@ -239,9 +320,27 @@ export async function readTranscriptUserAttachments(
       if (!record || record.type !== 'user') { continue; }
       const uuid = typeof record.uuid === 'string' ? record.uuid : undefined;
       if (!uuid) { continue; }
+      const compactSummary = record.isCompactSummary === true;
       const message = record.message as { content?: unknown } | undefined;
       const content = message?.content;
-      if (!Array.isArray(content)) { continue; }
+      // [CUSTOM- A compact summary persists `message.content` as a STRING, not a
+      // block array. Skipping non-arrays here would leave `compactSummary` false
+      // forever, so the fallback could only rely on the text prefix.
+      if (typeof content === 'string') {
+        parts.set(uuid, {
+          images: [],
+          files: [],
+          hasProse: !isBlankText(content),
+          compactSummary,
+        });
+        continue;
+      }
+      if (!Array.isArray(content)) {
+        if (compactSummary) {
+          parts.set(uuid, { images: [], files: [], hasProse: false, compactSummary: true });
+        }
+        continue;
+      }
 
       const images: ContentBlockView[] = [];
       const files: ContentBlockView[] = [];
@@ -281,7 +380,7 @@ export async function readTranscriptUserAttachments(
           if (!isBlankText(text)) { hasProse = true; }
         }
       }
-      parts.set(uuid, { images, files, hasProse });
+      parts.set(uuid, { images, files, hasProse, compactSummary });
     }
   } catch { /* unreadable transcript: no attachments, the caller renders without them */ } finally {
     reader.close();

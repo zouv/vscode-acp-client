@@ -29,6 +29,8 @@
   `src/test/{handlers,recovery}-regression.test.ts` 已补齐最低宿主 run-as-node 参数，超时补 PID/stderr；lint/typecheck、unit 159、Windows 两宿主各 623 通过。
   下一步：等待用户确认移动 `v1.9.0` 到包含夹具修复的最新提交；获确认后再更新标签、干净提交重打包、替换附件并核摘要，最后公开 Release。
 
+- **压缩会话完整历史（2026-11-03，待真机验收）**：VAC compact 行改动完成；根因在 `claude-agent-acp` 0.91.0 只用 `getSessionMessages()`（压缩后链），已在 fork 实现完整显示链回放并推送 `dfcefd3`（`src/transcript-chain.ts` + `acp-agent.ts`，适配器单测 11 + 集成 2 通过）。VAC 默认 spec 用 `#main`（commit pin 会触发 npm 10.8.2 的 `GitFetcher requires an Arborist constructor` bug），`AgentMigration` 会把裸 spec 迁到它；下一步 `npm run dev:host` 打开本机一个已压缩的历史会话，验证首条真实提问。
+
 - **原生弹框改造（2026-10-29 完成 / 待真机验收）**：弹框/确认/重命名已改为面板内浮层，命令 modal 改非模态通知；见「下一步」1。
 - **Markdown style 预设重做（已随 v1.8.1 发布 / 待真机验收）**：Follow editor + GitHub / Obsidian / Typora / Atom / Minimal / Things 六套（排版 + `--vac-md-*` 明暗配色）；真 Chromium 已核，下一步见「下一步」4⑦。
 - **输入卡交互（已随 v1.8.2 发布 / 待真机验收）**：空输入 / 纯空白时 Send 灰置、`/` 命令面板点空白收起、Effort 图标换形；见「下一步」2 的补充项。

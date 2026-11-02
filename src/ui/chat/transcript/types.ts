@@ -166,6 +166,36 @@ export interface SubagentEntry extends EntryBase {
   canCancel: boolean;
 }
 
+/** [CUSTOM- Terminal states of an ACP `compaction_update` (the status string is open-ended). */
+export type CompactStatus = 'completed' | 'failed' | 'cancelled';
+
+/**
+ * [CUSTOM- A context compaction boundary (Claude Code's "Compacted chat" row).
+ *
+ * The summary is model context, not something the user typed: it must not become
+ * a `user` entry (that is the bug where a reopened session showed a 64KB blue
+ * bubble at the top and the outline's first item was the summary). It renders as
+ * its own collapsed row and is excluded from the outline, the pinned-user bar and
+ * the transcript turn count.
+ */
+export interface CompactEntry extends EntryBase {
+  kind: 'compact';
+  /** ACP compaction id (in replay this is the summary message's uuid). Upsert key. */
+  compactionId: string;
+  /** Summary markdown source. Empty when the compaction carried no summary. */
+  text: string;
+  /** Host-rendered markdown, same round-trip as assistant/thought. */
+  html?: string;
+  /** `compactMetadata.trigger` from the transcript (`manual` / `auto`). */
+  trigger?: string;
+  /** `compactMetadata.preTokens` from the transcript. */
+  preTokens?: number;
+  /** Human-readable failure/cancel reason. */
+  error?: string;
+  /** Terminal state; used by the host to ignore late fallback text. */
+  status?: CompactStatus;
+}
+
 export type TranscriptEntry =
   | UserEntry
   | AssistantEntry
@@ -176,7 +206,8 @@ export type TranscriptEntry =
   | NoticeEntry
   | PermissionEntry
   | ElicitationEntry
-  | SubagentEntry;
+  | SubagentEntry
+  | CompactEntry;
 
 /** Full snapshot of one session's transcript, sent on focus/boot. */
 export interface TranscriptSnapshot {
@@ -214,6 +245,11 @@ export interface EntryPatch {
   description?: string;
   state?: SubagentEntry['state'];
   canCancel?: boolean;
+  // [CUSTOM- compact 卡的元数据补丁（键名与 `CompactEntry` 的字段名逐字相同）。
+  trigger?: string;
+  preTokens?: number;
+  /** null clears the error. */
+  error?: string | null;
 }
 
 /**

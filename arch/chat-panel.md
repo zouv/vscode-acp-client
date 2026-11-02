@@ -10,7 +10,7 @@
 > | [chat-performance.md](./chat-performance.md) | 长会话、流式 Markdown 尾块与原生正文渲染窗口 | §5.10 |
 > | [chat-panel-audit.md](./chat-panel-audit.md) | 历史面板审计结论与风险 | §5.12 |
 > | [chat-panel-sessions.md](./chat-panel-sessions.md) | 会话目录与重开路径、历史选择器过滤、会话恢复 | §5.13–§5.15、§5.24、§5.48 |
-> | [chat-panel-records.md](./chat-panel-records.md) | 记录区：折叠 / 时间 / 渲染 / 右键 / 置顶 / 文件引用呈现 | §5.16–§5.23、§5.25–§5.26、§5.29–§5.30、§5.41、§5.47、§5.49–§5.51 |
+> | [chat-panel-records.md](./chat-panel-records.md) | 记录区：折叠 / 时间 / 渲染 / 右键 / 置顶 / 文件引用呈现 / 上下文压缩 compact 行 | §5.16–§5.23、§5.25–§5.26、§5.29–§5.30、§5.41、§5.47、§5.49–§5.51、§5.55 |
 > | [chat-panel-input.md](./chat-panel-input.md) | 输入侧与交互抽屉：输入卡 / 草稿页 / 表单与权限抽屉 / 回车语义 / steering | §5.27、§5.31–§5.33、§5.35–§5.36、§5.42–§5.44 |
 > | [chat-panel-state.md](./chat-panel-state.md) | 会话状态、诊断与几何：状态卡 / 通知 / 后台任务 / 日志与构建指纹 / 滚动诊断 / Tail 与会话级开关 | §5.28、§5.34、§5.37–§5.40、§5.45–§5.46、§5.53–§5.54 |
 >
@@ -43,13 +43,13 @@
 | `ChatEditorPanel.ts` | **019 新增**。编辑区面板生命周期：`open()` / `close(reason)`。视图类型 `vac-chat-editor`。**监听器必须先于 `attachSurface` 注册**（见 §5.7） | 编辑区面板行为 |
 | `panelContract.ts` | `IChatPanel` / `PanelContext` / `PanelId` 三个纯接口：宿主与 surface 之间的契约（宿主独占全部 transcript，所以 detach 一个 surface 不会丢内容；detach 后**允许**继续收到零星事件，宿主丢弃而不是抛错） | 面板接口变更 |
 | `SessionNotifier.ts` | **会话状态通知**（等待权限 / 等待表单 / 轮次完成）→ 右下角通知（带「打开会话」按钮）。去重键 `sessionId::kind::token` 由本模块拼，调用方只给 token。**不 import vscode**（UI 通道靠注入缝），可被 vitest 直接驱动（见 §5.34） | 改「哪个会话在等用户」的通知口径 |
-| `diskSessions.ts` | 从 Claude Code 自己的会话目录（`<config>/projects/<slug>/<sessionId>.jsonl`）**补全**历史列表：`session/list` 不是全集。厂商私有格式、只读每个文件的前若干行、只扫当前工作目录的 slug、**只对 profile 声明 `transcriptStore: 'claude'` 的 agent 生效**（按 kind，入口 `ChatPanelHost` 的 `transcriptDirFor`，目录取 agent 自己 env 里的 `CLAUDE_CONFIG_DIR`）；任何一步失败都只当作「没有补充」（见 §5.45） | 历史列表比官方少几条 / Claude 转录目录格式变更 |
+| `diskSessions.ts` | 从 Claude Code 自己的会话目录（`<config>/projects/<slug>/<sessionId>.jsonl`）**补全**历史列表：`session/list` 不是全集。厂商私有格式、只读每个文件的前若干行、只扫当前工作目录的 slug、**只对 profile 声明 `transcriptStore: 'claude'` 的 agent 生效**（按 kind，入口 `ChatPanelHost` 的 `transcriptDirFor`，目录取 agent 自己 env 里的 `CLAUDE_CONFIG_DIR`）；任何一步失败都只当作「没有补充」（见 §5.45）。另提供 `readTranscriptCompactions`（compact boundary → summary uuid 的 trigger/preTokens）与 `readTranscriptUserAttachments` 的 `compactSummary` 标记（见 §5.55） | 历史列表比官方少几条 / Claude 转录目录格式变更 / compact 行元数据 |
 | `protocol.ts` | postMessage 判别联合（`ExtToChat` / `ChatToExt`）+ `verifySession` 纪律 | 增删消息类型 |
 | `markdown.ts` | `SafeMarkdown`：覆盖 `marked` 的 `html`/`link`/`image` 三个渲染钩子。**必须用 `new Marked()`**（不能用全局单例，渲染钩子会被别处改掉） | markdown 安全策略变更 |
 | `sessionChoices.ts` | **073 新增**。切换状态（mode + config options）的**快照 / 按通知载荷打补丁 / 算差异 → 人类可读的一句话**。纯函数，宿主只做缓存与发帖（去重靠"缓存由宿主独占"，见 §5.22）。**128 起模式以 config option 为权威**：快照的 modeId 由它派生、mode payload 写回该副本——两通道各存一份副本且只写一份时，去重会静默失效（见 §5.22 末与 pitfalls #34） | 改切换提示的表述、或改"两条上报路径怎么去重" |
 | `historyDirs.ts` | **079 新增**。历史选择器的目录过滤器：`directoryKey`（目录同一性：平台大小写规则 + 尾分隔符）/ `directoryOptions`（候选目录与条数）/ `folderName`。纯函数，宿主算 key、客户端只比较（见 §5.24） | 改"两个路径算不算同一个目录"、或改候选目录的来源与排序 |
-| `transcript/types.ts` | transcript 记录模型（`user`/`assistant`/`thought`/`tool`/`plan`/**`content`**/`notice` 七类，`content` 承载非文本消息块）+ `ToolInvocation`。`EntryBase.atIsElapsed`：true 表示 `at` 是「回放起点 0 起的相对毫秒」而非墙钟（见 §5.17） | 记录结构变更 |
-| `transcript/TranscriptStore.ts` | 按会话存记录；`onRemove` 在条目/LRU/drop/dropAgent 淘汰时驱动工具引用回收；三重上限（500 条 / 24 会话 LRU / 64KB 每条）；活跃会话豁免 LRU。`finalizeStreaming` 带 `only` 过滤（**不要**在正文 chunk 上调用无参形式，那会把一次回复碎成 N 个气泡）。**`beginReplay`/`endReplay`**：回放计时态——期间 append 的记录 `at` 写成 0 起相对毫秒并打 `atIsElapsed`（拿不到转录真实时刻时不再用 `Date.now()` 冒充墙钟） | 容量策略 / 新记录类型 |
+| `transcript/types.ts` | transcript 记录模型（`user`/`assistant`/`thought`/`tool`/`plan`/**`content`**/`notice`/**`compact`** 八类，`content` 承载非文本消息块，`compact` 承载上下文压缩摘要）+ `ToolInvocation`。`EntryBase.atIsElapsed`：true 表示 `at` 是「回放起点 0 起的相对毫秒」而非墙钟（见 §5.17、§5.55） | 记录结构变更 |
+| `transcript/TranscriptStore.ts` | 按会话存记录；`onRemove` 在条目/LRU/drop/dropAgent 淘汰时驱动工具引用回收；三重上限（500 条 / 24 会话 LRU / 64KB 每条）；活跃会话豁免 LRU。`finalizeStreaming` 带 `only` 过滤（**不要**在正文 chunk 上调用无参形式，那会把一次回复碎成 N 个气泡）。**`beginReplay`/`endReplay`**：回放计时态——期间 append 的记录 `at` 写成 0 起相对毫秒并打 `atIsElapsed`（拿不到转录真实时刻时不再用 `Date.now()` 冒充墙钟）。`upsertCompact` 按 compactionId 幂等建/更新 compact 记录（见 §5.55） | 容量策略 / 新记录类型 |
 | `transcript/ToolInvocationStore.ts` | 工具调用索引；严格 ACP replace-collection；单消息 boundedPayload 限长；`remove` 由 TranscriptStore 淘汰后无剩余引用触发（不独立 LRU） | 工具字段 / 内存回收 |
 | `transcript/agentTerminals.ts` | **agent 自己跑的终端**（Zed 约定：`_meta.terminal_info` / `terminal_output(_delta)` / `terminal_exit`，codex-acp 用它）：`applyTerminalMeta` 按**每条更新自己的** `_meta` 累加进 `ToolInvocation.agentTerminals`（`_meta` 整体替换，不能读 `inv.meta`；尾部保留 256KB）；`agentTerminalMarkdown` 出 console 围栏。`toToolCallView` 据此把该 terminal 项换成文本，客户端自建的终端仍是 chip。纯逻辑，配 `.spec.ts` | Codex 命令输出不显示 / 新的终端 `_meta` 形状 |
 | `content/contentBlocks.ts` | ContentBlock（5 种）→ 可序列化视图模型；拒绝截断后必需字段缺失的块 | 内容类型 / 大结果截断 |

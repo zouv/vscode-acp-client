@@ -7547,3 +7547,67 @@ suite('chat client logic: streaming markdown tails and native render windows', (
     NS.transcriptView.reset();
   });
 });
+
+// [CUSTOM- 上下文压缩摘要：官方 Claude 插件同款的折叠行。
+// 它不是用户消息、不是工具卡；不进大纲 / 置顶 / 轮次计数。
+suite('chat client logic: compacted chat row (stub DOM)', () => {
+  function compactRow(NS: Record<string, any>, entry: Record<string, unknown>): {
+    record: StubNode; details: StubNode;
+  } {
+    const container = new StubNode('div');
+    renderEntry(NS, container, entry);
+    const record = container.querySelector('[data-kind]') as StubNode;
+    const details = (record.tagName === 'DETAILS' ? record : record.querySelector('details.compact')) as StubNode;
+    assert.ok(details, 'the compact row must render as a details element');
+    return { record, details };
+  }
+
+  test('renders a collapsed row with the official label and raw summary', () => {
+    const { NS } = loadClient();
+    const { details } = compactRow(NS, {
+      id: 'c1', kind: 'compact', at: Date.now(), compactionId: 'c1',
+      text: 'earlier context', trigger: 'auto', preTokens: 176200, status: 'completed',
+    });
+
+    assert.strictEqual(details.open, false, 'collapsed by default');
+    assert.strictEqual(details.querySelector('.compact-label')!.textContent,
+      'Compacted chat · auto · 176k tokens freed');
+    assert.strictEqual(details.querySelector('.compact-body')!.textContent, 'earlier context');
+  });
+
+  test('patch applies rendered html to the same details node', () => {
+    const { NS } = loadClient();
+    NS.dom.setSanitizedHtml = (node: StubNode, html: string) => { node.textContent = html; };
+    const { record, details } = compactRow(NS, {
+      id: 'c2', kind: 'compact', at: 1, compactionId: 'c2', text: 'summary',
+    });
+    const before = details;
+
+    NS.transcriptView.patch('c2', { html: '<p>rendered</p>' });
+    assert.strictEqual(record.querySelector('details.compact'), before,
+      'the details node must not be rebuilt (the user may have it open)');
+    assert.strictEqual(details.querySelector('.compact-body')!.textContent, '<p>rendered</p>');
+  });
+
+  test('patch updates the metadata label and error', () => {
+    const { NS } = loadClient();
+    const { details } = compactRow(NS, {
+      id: 'c3', kind: 'compact', at: 1, compactionId: 'c3', text: 'summary',
+    });
+
+    NS.transcriptView.patch('c3', { trigger: 'manual', preTokens: 2000, error: 'Compaction failed.' });
+    assert.strictEqual(details.querySelector('.compact-label')!.textContent,
+      'Compacted chat · manual · 2k tokens freed');
+    assert.strictEqual(details.querySelector('.compact-error')!.textContent, 'Compaction failed.');
+
+    NS.transcriptView.patch('c3', { error: null });
+    assert.strictEqual(details.querySelector('.compact-error'), null, 'null clears the error');
+  });
+
+  test('compact does not count as a message anchor', () => {
+    const { NS } = loadClient();
+    const before = NS.transcriptView.messageAnchorCount();
+    NS.transcriptView.append({ id: 'c4', kind: 'compact', at: 1, compactionId: 'c4', text: 'summary' });
+    assert.strictEqual(NS.transcriptView.messageAnchorCount(), before);
+  });
+});

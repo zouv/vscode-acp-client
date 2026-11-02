@@ -61,11 +61,11 @@ export async function offerAgentMigration(state: vscode.Memento): Promise<void> 
 
   const names = Array.from(new Set(pending.flatMap(p => p.result!.changed))).join(', ');
   const choice = await vscode.window.showInformationMessage(
-    `VAC: ${names} uses a deprecated ACP adapter (@zed-industries/codex-acp). Switch to @agentclientprotocol/codex-acp?`,
-    'Switch', 'Not now', "Don't ask again",
+    `VAC: ${names} uses an outdated ACP adapter configuration. Update it?`,
+    'Update', 'Not now', "Don't ask again",
   );
   if (choice === "Don't ask again") { await state.update(MIGRATION_DISMISSED_KEY, true); return; }
-  if (choice !== 'Switch') { return; }
+  if (choice !== 'Update') { return; }
   for (const { target, result } of pending) {
     await vscode.workspace.getConfiguration('vac').update('agents', result!.agents, target);
   }

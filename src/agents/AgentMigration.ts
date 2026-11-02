@@ -7,6 +7,18 @@ export interface MigratableAgentEntry {
 const REPLACEMENTS: ReadonlyArray<{ from: RegExp; to: string }> = [
   // Archived 2026-07; npm marks it deprecated and it is frozen at 0.16.0.
   { from: /^@zed-industries\/codex-acp(@.*)?$/, to: '@agentclientprotocol/codex-acp' },
+  // 0.91.0's session/load replays only the post-compaction effective chain, so a
+  // compacted session starts at the summary instead of the first real prompt.
+  // Use the fork's main branch rather than a commit pin: npm 10.8.2 fails to pack
+  // a github spec pinned to a commit ("GitFetcher requires an Arborist constructor").
+  {
+    from: /^github:zouv\/claude-agent-acp#dfcefd33ff9ef785a6072f3f44eae1fe757038ca$/,
+    to: 'github:zouv/claude-agent-acp#main',
+  },
+  {
+    from: /^github:zouv\/claude-agent-acp$/,
+    to: 'github:zouv/claude-agent-acp#main',
+  },
 ];
 
 const isNpx = (command: string | undefined): boolean =>
