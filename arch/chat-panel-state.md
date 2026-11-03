@@ -371,6 +371,9 @@ Outline 都是会话级**——在一个会话里拨它只影响这个会话，�
 | 滚轮门控与 Tail | 指针在**未聚焦**卡片的内层滚动区时，门控用 `writeTop(panel + delta)` 滚面板；它走的是程序写入口，所以该分支**显式** `cancelTail('scroll')`。滚**已聚焦**卡片的内部不关 Tail（面板没动，滚轮意图撤回）。 |
 | Markdown 异步回填 | `transcriptView.afterMarkdownSlice` 在 `reassert()` 后调一次 `follow()`，覆盖 stream / tool key / 普通 patch 三条路径；普通 patch 的重复通知由现有 rAF 合帧。恢复中间阅读位置已取消 Tail，所以不会与 `reassert()` 抢视口。 |
 | Tail 关闭时的 Jump | `follow()` 在 `!tail` 时每帧最多调度一次 `recompute()`（只读几何、更新 pinned/Jump，**不写 scrollTop**）。没有它，Tail 关闭后内容长高但无 scroll 事件，Jump 会一直不出现（真机日志出现过 `pin=1 dist=13327`）。 |
+| Jump 恢复追尾 | Jump click 先调 `tail.resumeFromJump()`：只把**当前会话**的 Tail 恢复为开并 `apply(false)`，不改 `tailDefault`，已开时不重复写偏好；随后由 Jump handler 走唯一一次同步 `writeTop(scrollHeight)`。不能用 Tail 按钮的 `apply(true)`，否则会重复置底。程序 scroll 不取消刚恢复的 Tail，后续 `follow()` 继续跟随。 |
+| 无会话焦点 | `focusDraft()` 与关闭聚焦会话的 `sessionClosed` 分支绕过 `applyFocus()`，因此在 `currentSessionId=null` 后都必须显式 `tail.setFocus(null)`；否则按钮仍显示并改写旧会话。 |
+| 启动偏好顺序 | `ChatPanelHost.pushBoot()` 对目标 surface 先发已有 `uiPrefs`、再发 `boot`。`boot → applyFocus → scroll.restore()` 恢复到中间位置会立即取消 Tail 并写回；偏好必须先到，否则会用未 hydrate 的整表覆盖其他会话记录。 |
 | 诊断 | `scroll#` 行带 `tail=0|1`；`setTail` / `cancelTail` 真正翻转时强制记 `tail:on` / `tail:off <scroll|restore>`；scroll 来源分 `user-scroll` / `layout-scroll` / `scroll-after-program`。 |
 
 **「落定」（`seedKnown`，四个模块同一件事）**：光有"按会话 + 默认值"还不够 —— 一个没有记录的

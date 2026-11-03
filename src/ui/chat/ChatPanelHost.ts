@@ -4520,6 +4520,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     const recoverable = this.recoverableSessions();
     const sessions = this.buildSummaries();
     const focused = this.focused.sessionId ? this.buildSummary(this.focused.sessionId) : null;
+    // Restore preferences before boot because scroll restoration can cancel Tail and persist immediately.
+    if (this.uiPrefs) {
+      this.post({ type: 'uiPrefs', ...this.uiPrefs }, to);
+    }
     this.post({
       type: 'boot',
       focused,
@@ -4539,11 +4543,6 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       ...(recoverable.length > 0 ? { recoverable } : {}),
       restorePref: this.prefs.getRestore(),
     }, to);
-    // [CUSTOM- Bring the outline pin/width prefs along with the boot,
-    // so a recreated webview (editor panel reopen / window reload) restores them.
-    if (this.uiPrefs) {
-      this.post({ type: 'uiPrefs', ...this.uiPrefs }, to);
-    }
   }
 
   private pushFocus(): void {

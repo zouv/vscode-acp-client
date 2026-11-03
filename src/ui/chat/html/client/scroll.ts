@@ -526,6 +526,7 @@ export const scrollClient = `
       pinned = true;
       hideJump();
       restoreTarget = null;
+      if (NS.tail && NS.tail.resumeFromJump) { NS.tail.resumeFromJump(); }
       // [CUSTOM- 这里原来是直写 scrollTop（绕过 writeTop）⇒ 它引发的 scroll 事件
       // 会被**误标**成 user-scroll（"用户自己滚的"）。读日志时那会把"我们把人送到人工位置"看成
       // 他的操作，这一格必须走同一个出口。

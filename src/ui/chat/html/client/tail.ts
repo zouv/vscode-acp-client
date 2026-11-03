@@ -125,6 +125,14 @@ export const tailClient = `
   /** 换会话时恢复到了用户自己选的中间位置（scroll.ts 调）：同上。 */
   function cancelFromRestore() { setOff(); }
 
+  function resumeFromJump() {
+    if (!currentSessionId) { return; }
+    var wasOn = enabledFor(currentSessionId);
+    if (!wasOn) { bySession[currentSessionId] = true; }
+    apply(false);
+    if (!wasOn) { persist(); }
+  }
+
   function setOff() {
     if (!currentSessionId) { return; }
     if (bySession[currentSessionId] === false) { return; }
@@ -162,6 +170,7 @@ export const tailClient = `
     noteSessions: noteSessions,
     cancelFromScroll: cancelFromScroll,
     cancelFromRestore: cancelFromRestore,
+    resumeFromJump: resumeFromJump,
     isOn: function () { return enabledFor(currentSessionId); }
   };
 })(window.__vac = window.__vac || {});

@@ -358,6 +358,7 @@ export const bootClient = `
     if (!draft) { return; }
     NS.scroll.remember(currentSessionId);
     currentSessionId = null;
+    if (NS.tail) { NS.tail.setFocus(null); }
     focusedDraftId = draftId;
     NS.tabs.setDraftFocus(draft);
     NS.composer.setDraft(draft);
@@ -654,6 +655,7 @@ export const bootClient = `
       case 'sessionClosed':
         if (message.sessionId === currentSessionId) {
           currentSessionId = null;
+          if (NS.tail) { NS.tail.setFocus(null); }
           resetTranscript();
           showEmpty(true);
           NS.outline.invalidate();

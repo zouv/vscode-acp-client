@@ -1737,6 +1737,131 @@ suite('chat client logic: Tail 开关（按会话记忆 + 滚动即取消）', (
     assert.strictEqual(els.tailBtn.className, 'nest-toggle on',
       'B 保持自己被落定的"开"，不受 A 的动作影响');
   });
+
+  test('Jump 恢复只开当前会话，不改默认值，也不重复立即置底', () => {
+    const { NS, posted, calls } = tailWith();
+    NS.tail.init();
+    NS.tail.noteSessions([{ sessionId: 'A' }, { sessionId: 'B' }]);
+    NS.tail.applyPrefs({ tailBySession: { A: false, B: false }, tailDefault: false });
+    NS.tail.setFocus('A');
+    posted.length = 0;
+
+    NS.tail.resumeFromJump();
+    assert.deepStrictEqual(lastCall(calls), { on: true, immediate: false });
+    assert.deepStrictEqual(posts(posted),
+      [{ type: 'setUiPref', tailBySession: { A: true, B: false }, tailDefault: false }]);
+
+    NS.tail.resumeFromJump();
+    assert.strictEqual(posts(posted).length, 1, '已经开启时不重复写偏好');
+  });
+
+  test('无会话焦点使用默认值，拨开关不会改写旧会话', () => {
+    const { NS, els, posted } = tailWith();
+    NS.tail.init();
+    NS.tail.noteSessions([{ sessionId: 'A' }]);
+    NS.tail.applyPrefs({ tailBySession: { A: false }, tailDefault: true });
+    NS.tail.setFocus('A');
+    assert.strictEqual(els.tailBtn.className, 'nest-toggle off');
+
+    NS.tail.setFocus(null);
+    assert.strictEqual(els.tailBtn.className, 'nest-toggle on');
+    posted.length = 0;
+    els.tailBtn.dispatch('click', {});
+    assert.deepStrictEqual(posts(posted),
+      [{ type: 'setUiPref', tailBySession: { A: false }, tailDefault: false }]);
+  });
+});
+
+suite('chat client logic: Tail 的无会话焦点同步', () => {
+  function bootWithTail() {
+    const focused: Array<string | null> = [];
+    const noop = () => { /* stub */ };
+    const elements: Record<string, StubNode> = {
+      emptyState: new StubNode('div'), loadOverlay: new StubNode('div'), messages: new StubNode('div'),
+    };
+    const NS: Record<string, any> = {
+      dom: { qs: (id: string) => elements[id] ?? null },
+      scroll: { init: noop, remember: noop, restore: noop, forget: noop },
+      transcriptView: { init: noop, reset: noop, pendingMarkdown: () => [] },
+      outline: { init: noop, close: noop, invalidate: noop, noteSessions: noop, setSession: noop },
+      rail: { init: noop, invalidate: noop },
+      sessionMenu: { init: noop, reset: noop },
+      directoryMenu: { init: noop, refresh: noop, reset: noop },
+      tabs: {
+        init: noop, setSessions: noop, setDefaultCwd: noop, setFocus: noop,
+        setDraftFocus: noop, setDrafts: noop,
+      },
+      composer: {
+        init: noop, setDraft: noop, setFocus: noop, setAttachments: noop, setLoading: noop,
+        setRunning: noop, installGlobalEscape: noop, isComposable: () => false,
+        focusInput: noop, forgetDraft: noop,
+      },
+      links: { installDelegatedHandlers: noop },
+      contextMenu: { install: noop },
+      tail: { init: noop, noteSessions: noop, setFocus: (id: string | null) => { focused.push(id); } },
+    };
+    const docListeners: Record<string, Array<(event: any) => void>> = {};
+    const winListeners: Record<string, Array<(event: any) => void>> = {};
+    const doc = {
+      readyState: 'loading', body: new StubNode('body'),
+      addEventListener: (type: string, fn: (event: any) => void) => {
+        (docListeners[type] = docListeners[type] ?? []).push(fn);
+      },
+    };
+    const win = {
+      __vac: NS,
+      addEventListener: (type: string, fn: (event: any) => void) => {
+        (winListeners[type] = winListeners[type] ?? []).push(fn);
+      },
+      removeEventListener: noop, setTimeout: () => 0,
+    };
+    const g = globalThis as Record<string, any>;
+    const hadAcquire = Object.prototype.hasOwnProperty.call(g, 'acquireVsCodeApi');
+    const previousAcquire = g.acquireVsCodeApi;
+    const previousWarn = console.warn;
+    const previousError = console.error;
+    g.acquireVsCodeApi = () => ({ postMessage: noop, getState: () => ({}), setState: noop });
+    new Function('window', 'document', bootClient)(win, doc);
+    for (const fn of docListeners.DOMContentLoaded ?? []) { fn({}); }
+
+    function send(message: Record<string, unknown>) {
+      for (const fn of winListeners.message ?? []) { fn({ data: message }); }
+    }
+    return {
+      NS, focused, send,
+      focusA: () => {
+        const summary = { sessionId: 'A', loading: false, running: false };
+        send({ type: 'boot', focused: summary, sessions: [summary], snapshot: null, meta: null, agentConnected: true });
+      },
+      restore: () => {
+        console.warn = previousWarn;
+        console.error = previousError;
+        if (hadAcquire) { g.acquireVsCodeApi = previousAcquire; } else { delete g.acquireVsCodeApi; }
+      },
+    };
+  }
+
+  test('进入草稿页会把 Tail 焦点从旧会话切到 null', () => {
+    const h = bootWithTail();
+    try {
+      h.focusA();
+      h.NS.draft.start();
+      assert.deepStrictEqual(h.focused, ['A', null]);
+    } finally {
+      h.restore();
+    }
+  });
+
+  test('关闭聚焦会话会把 Tail 焦点切到 null', () => {
+    const h = bootWithTail();
+    try {
+      h.focusA();
+      h.send({ type: 'sessionClosed', sessionId: 'A' });
+      assert.deepStrictEqual(h.focused, ['A', null]);
+    } finally {
+      h.restore();
+    }
+  });
 });
 
 suite('chat client logic: composer text ownership (stub DOM)', () => {
@@ -5468,7 +5593,8 @@ suite('build fingerprint: 宿主 / 标记 / 客户端三处自报身份 ()', () 
 // 就是这一族：贴底的人被长高的浮层挤到后面，视口判定却停在旧值。修法是写入方喊一声 reflowNow()。
 suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', () => {
   function mountScroll(paddingBottom = '0px', composerVar?: string): {
-    NS: any; el: any; jump: any; doc: any; docListeners: Record<string, Array<(event: any) => void>>;
+    NS: any; el: any; jump: StubNode; doc: any; win: any;
+    docListeners: Record<string, Array<(event: any) => void>>;
   } {
     const NS: Record<string, any> = {};
     const listeners: Record<string, Array<(event?: any) => void>> = {};
@@ -5486,7 +5612,8 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
       // pressLabel 会调 closest；桩里没有真实祖先链，返回 null 即可。
       closest: () => null,
     };
-    const jump: Record<string, any> = { hidden: true, addEventListener: () => {} };
+    const jump = new StubNode('button');
+    jump.hidden = true;
     const win: Record<string, any> = {
       __vac: NS,
       getComputedStyle: () => ({ paddingBottom }),
@@ -5507,7 +5634,28 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
     };
     new Function('window', 'document', scrollClient)(win, doc);
     NS.scroll.init(el, jump);
-    return { NS, el, jump, doc, docListeners };
+    return { NS, el, jump, doc, win, docListeners };
+  }
+
+  function mountJumpTail(prefs: { tailBySession: Record<string, boolean>; tailDefault: boolean }) {
+    const mounted = mountScroll();
+    const { NS, win, doc } = mounted;
+    const tailBtn = new StubNode('button');
+    const posted: Array<Record<string, unknown>> = [];
+    NS.dom = {
+      schedule: (fn: () => void) => { fn(); },
+      qs: (id: string) => id === 'tailBtn' ? tailBtn : null,
+      clear: (node: StubNode) => { node.childNodes.length = 0; },
+    };
+    NS.icons = { icon: () => new StubNode('span') };
+    NS.bridge = { post: (message: Record<string, unknown>) => { posted.push(message); } };
+    new Function('window', 'document', tailClient)(win, doc);
+    NS.tail.init();
+    NS.tail.noteSessions([{ sessionId: 'A' }, { sessionId: 'B' }]);
+    NS.tail.applyPrefs(prefs);
+    NS.tail.setFocus('A');
+    posted.length = 0;
+    return { ...mounted, tailBtn, posted };
   }
 
   /** Fire a document-level listener (the real gate lives on document, not on #messages). */
@@ -5717,6 +5865,49 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
     NS.scroll.follow();          // writeTop(1200)，会派发一次 scroll
     el.fire('scroll');
     assert.strictEqual(NS.scroll.isTail(), true, '程序写入不是用户滚动');
+  });
+
+  test('Tail 关闭时点击 Jump：置底并恢复当前会话追尾，不改默认值', () => {
+    const { NS, el, jump, tailBtn, posted } = mountJumpTail({
+      tailBySession: { A: false, B: false }, tailDefault: false,
+    });
+    el.scrollTop = 300;
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isTail(), false);
+    assert.strictEqual(jump.hidden, false);
+
+    jump.dispatch('click', {});
+    el.fire('scroll');
+    assert.strictEqual(el.scrollTop, 1000);
+    assert.strictEqual(jump.hidden, true);
+    assert.strictEqual(NS.scroll.isTail(), true, '程序 scroll 不会取消刚恢复的 Tail');
+    assert.strictEqual(tailBtn.className, 'nest-toggle on');
+    assert.deepStrictEqual(posted.filter(m => m.type === 'setUiPref'),
+      [{ type: 'setUiPref', tailBySession: { A: true, B: false }, tailDefault: false }]);
+
+    el.scrollHeight = 1400;
+    NS.scroll.follow();
+    assert.strictEqual(el.scrollTop, 1400, 'Jump 后的新输出继续跟随');
+  });
+
+  test('Tail 已开时点击 Jump：恢复置底且不重复写偏好', () => {
+    const { NS, el, jump, posted } = mountJumpTail({
+      tailBySession: { A: true, B: false }, tailDefault: false,
+    });
+    el.scrollTop = 300;
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isTail(), true);
+    assert.strictEqual(NS.scroll.isPinned(), false);
+
+    jump.dispatch('click', {});
+    el.fire('scroll');
+    assert.strictEqual(el.scrollTop, 1000);
+    assert.strictEqual(NS.scroll.isTail(), true);
+    assert.strictEqual(posted.filter(m => m.type === 'setUiPref').length, 0);
+
+    el.scrollHeight = 1400;
+    NS.scroll.follow();
+    assert.strictEqual(el.scrollTop, 1400);
   });
 
   test('无用户意图的 scroll（滚动锚定 / 内容夹紧）不取消 Tail，后续 follow 仍置底', () => {

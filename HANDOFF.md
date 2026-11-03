@@ -15,16 +15,15 @@
 ## 状态快照
 
 - **最近更新**：2026-11-03
-- **整体状态**：v1.9.1 已发布为 Latest（tag `bd1bfc6`）；VSIX 已上传并核对摘要。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
-- **当前分支（必填）**：`main`；v1.9.1 已按授权提交推送、打包并上传 GitHub Release，不另建分支。
-- **最后验证状态**（2026-11-03）：lint/typecheck ✅；unit **175 / 27 文件** ✅；完整宿主 **650 passing** ✅；完整 Chromium preview、横向 wheel 十档 + 横条点击 + diff 几何探针、中键六档探针均通过且无 pageerror。
-  GitHub Actions 四格 CI 通过；VSIX `vscode-acp-client-1.9.1.vsix`（510767 字节）SHA256 `67d646dbe1ef903aa58baa15a53d527febc07f9701470a3e20a36c44aa7463f1`，Release 附件摘要一致。
-  真实 agent 的 `npm run dev:host` 人工验收尚未执行；远程 CI 以 GitHub Actions 为准。
+- **整体状态**：v1.9.2 发布中（第一笔提交准备中；CI 通过后建 tag 与 GitHub Release）；v1.9.0 草稿仍留在 GitHub，未发布、未改动。
+- **当前分支（必填）**：`main`；v1.9.2 按授权直接提交推送、打包并上传 GitHub Release，不另建分支。
+- **最后验证状态**（2026-11-03）：lint/typecheck ✅；unit **175 / 27 文件** ✅；完整宿主 **657 passing** ✅；完整 Chromium preview ✅；check-docs ✅。
+  远程 CI 与 VSIX 摘要待推送后记录；真机验收 257–258 未执行，真实 agent 的 `npm run dev:host` 人工验收尚未执行。
 
 
 ## 当前任务（In Progress）
 
-- 无进行中编码任务；以下为既有待真机验收项。
+- **Jump / Tail 语义修正（已纳入 v1.9.2 / 待真机验收）**：Jump 置底并恢复当前会话追尾、不改 `tailDefault`；无会话焦点与 `uiPrefs → boot` 顺序已修，真实 Jump click / follow / 草稿与关闭会话 / 偏好顺序回归已补。lint/typecheck ✅、unit **175 / 27 文件** ✅、完整宿主 **657 passing** ✅、完整 Chromium preview ✅、check-docs ✅。下一步 `npm run dev:host` 按 `docs/03-验收清单.md` 257–258 验证持续跟随、新会话默认值、草稿/关闭会话归属与重载偏好；改动已纳入发布提交。以下为既有待真机验收项。
 
 - **原生弹框改造（2026-10-29 完成 / 待真机验收）**：弹框/确认/重命名已改为面板内浮层，命令 modal 改非模态通知；见「下一步」1。
 - **Markdown style 预设重做（已随 v1.8.1 发布 / 待真机验收）**：Follow editor + GitHub / Obsidian / Typora / Atom / Minimal / Things 六套（排版 + `--vac-md-*` 明暗配色）；真 Chromium 已核，下一步见「下一步」4⑦。
@@ -48,7 +47,7 @@
 
 ## 进行中（半成品 / 未提交）
 
-- 无半成品编码任务；审查整改细节归 `CHANGELOG [1.9.0]`。v1.9.0 发布与 CI 状态以 GitHub Release / Actions 为准。
+- 无半成品编码任务；本轮 Jump / Tail 改动已纳入 v1.9.2 发布提交，真机验收清单 257–258 未做。
 
 ## 阻塞 / 待决策（Blockers）
 

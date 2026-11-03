@@ -3708,6 +3708,24 @@ suite('chat panel: ui prefs merge ()', () => {
     assert.deepStrictEqual(prefsOf(harness).tailBySession, { s1: false });
   });
 
+  test('stored ui prefs arrive before boot restores the scroll position', async () => {
+    const globalState = new FakeMemento();
+    await globalState.update('vac.outlinePrefs.v1', {
+      outlineMode: 'sidebar', outlineWidth: 320,
+      tailBySession: { A: false, B: true }, tailDefault: false,
+    });
+    const harness = makeHarness('s-1', 'Claude Code', undefined, undefined, {}, globalState);
+    harness.surface.sent.length = 0;
+
+    harness.host.onMessage({ type: 'ready' });
+    const messages = harness.surface.sent.filter(m => m.type === 'uiPrefs' || m.type === 'boot');
+    assert.deepStrictEqual(messages.map(m => m.type), ['uiPrefs', 'boot']);
+    const prefs = messages[0];
+    assert.ok(prefs.type === 'uiPrefs');
+    assert.deepStrictEqual(prefs.tailBySession, { A: false, B: true });
+    assert.strictEqual(prefs.tailDefault, false);
+  });
+
   test('junk in the order never reaches globalState', async () => {
     const harness = makeHarness('s-1');
     harness.surface.sent.length = 0;
