@@ -38,7 +38,7 @@
 //   不显形，截出来的"改前/改后"会一模一样。
 // =============================================================================
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -81,6 +81,8 @@ const value = (name, fallback) => {
 
 const OUT_DIR = value('--out', join(tmpdir(), 'vac-preview'));
 const PRINT_ONLY = flag('--print');
+const MIDDLE_SCROLL_PROBE = flag('--middle-scroll-probe');
+const WHEEL_SCROLL_PROBE = flag('--wheel-scroll-probe');
 const KEEP = flag('--keep') || PRINT_ONLY;
 
 /**
@@ -284,7 +286,7 @@ function driver() {
   // hydrating is what gives the client its session id — the very thing the host
   // validates on every renderMarkdown item (see the reply below).
   var SESSION = 'preview-session';
-  if (!CARD_MODE) {
+  if (!CARD_MODE && hash.indexOf('middleautoscroll') < 0) {
     try { NS.transcriptView.hydrate({ sessionId: SESSION, entries: fixtures }); }
     catch (err) { failed++; console.warn('hydrate failed:', err); }
   }
@@ -1403,6 +1405,219 @@ function driver() {
     tailPre.textContent = tailLine;
     document.body.appendChild(tailPre);
   }
+  // Tail=true 时布局滚动会把 pinned 打成 false；随后只让最后一条 stream Markdown 长高，
+  // 不再发 append/patch。通过判据必须同时包含真实几何（末条在最高遮挡层之上）与 Tail 状态，
+  // 不能只看 atMax —— 没跟到底时 atMax=false，但用户看到的同样是被底栏遮住。
+  if (location.hash.indexOf('tailfollow') >= 0) { try {
+    NS.stateCard.init();
+    NS.stateCard.setConnected(true);
+    NS.composer.setFocus(
+      { sessionId: SESSION, agentName: 'Claude Code', running: false, loading: false },
+      { availableCommands: [], configOptions: [] });
+    NS.composer.refreshHeight();
+    NS.scroll.init(messages, document.getElementById('jumpToLatest'));
+    var followEntries = [];
+    for (var tf = 0; tf < 24; tf++) {
+      followEntries.push({
+        id: 'tail-fill-' + tf, kind: 'assistant', at: Date.now() + tf,
+        text: 'Tail filler ' + tf,
+        html: '<p>Tail filler ' + tf + '</p><p>Enough transcript height to keep the viewport scrollable.</p>'
+      });
+    }
+    var followRaw = 'TAIL-RAW-MARKER';
+    followEntries.push({ id: 'tail-stream', kind: 'assistant', at: Date.now() + 24, text: followRaw, streaming: true });
+    NS.transcriptView.hydrate({ sessionId: SESSION, entries: followEntries });
+    NS.scroll.setTail(true, false);
+    NS.scroll.toBottom();
+    messages.scrollTop = Math.max(0, messages.scrollTop - 600);
+    messages.dispatchEvent(new Event('scroll'));
+    var followPinnedBefore = NS.scroll.isPinned();
+    var followTailBefore = NS.scroll.isTail();
+    var followHeightBefore = messages.scrollHeight;
+    var followHtml = '';
+    for (var tp = 0; tp < 30; tp++) {
+      followHtml += '<p>Rendered markdown tail line ' + tp + '</p>';
+    }
+    followHtml += '<p>TAIL-RENDERED-MARKER</p>';
+    NS.transcriptView.queueMarkdown([{
+      entryId: 'tail-stream', sessionId: SESSION, html: '',
+      stream: { source: followRaw, blocks: [], tailHtml: followHtml }
+    }]);
+    window.setTimeout(function () {
+      var followLast = NS.transcriptView.node('tail-stream');
+      var followLastRect = followLast ? followLast.getBoundingClientRect() : null;
+      var followComposer = document.getElementById('composer');
+      var followComposerRect = followComposer ? followComposer.getBoundingClientRect() : null;
+      if (followComposerRect && followComposerRect.height <= 0) { followComposerRect = null; }
+      var followDrawer = document.getElementById('elicDrawer');
+      var followDrawerRect = followDrawer && !followDrawer.hidden
+        ? followDrawer.getBoundingClientRect() : null;
+      var followBlockerTop = followComposerRect ? followComposerRect.top : null;
+      if (followDrawerRect && followDrawerRect.height > 0) {
+        followBlockerTop = followBlockerTop === null
+          ? followDrawerRect.top : Math.min(followBlockerTop, followDrawerRect.top);
+      }
+      var followMax = messages.scrollHeight - messages.clientHeight;
+      var followAtMax = Math.abs(messages.scrollTop - followMax) < 1;
+      var followClear = !!(followLastRect && followBlockerTop !== null
+        && followLastRect.bottom <= followBlockerTop + 1);
+      var followTailAfter = NS.scroll.isTail();
+      var followGrew = messages.scrollHeight > followHeightBefore;
+      var followMarker = !!(followLast
+        && String(followLast.textContent || '').indexOf('TAIL-RENDERED-MARKER') >= 0);
+      var followReport = {
+        kind: 'tail-follow',
+        composerVisible: !!followComposerRect,
+        drawerVisible: !!(followDrawerRect && followDrawerRect.height > 0),
+        pinnedBefore: followPinnedBefore,
+        tailBefore: followTailBefore,
+        tailAfter: followTailAfter,
+        heightBefore: Math.round(followHeightBefore),
+        heightAfter: Math.round(messages.scrollHeight),
+        grew: followGrew,
+        renderedMarker: followMarker,
+        atMax: followAtMax,
+        lastRecordBottom: followLastRect ? Math.round(followLastRect.bottom) : null,
+        blockerTop: followBlockerTop === null ? null : Math.round(followBlockerTop),
+        coveredByComposer: !!(followLastRect && followComposerRect
+          && followLastRect.bottom > followComposerRect.top + 1),
+        coveredByDrawer: !!(followLastRect && followDrawerRect && followDrawerRect.height > 0
+          && followLastRect.bottom > followDrawerRect.top + 1),
+        clear: followClear,
+        passed: !!(followComposerRect && followDrawerRect && followDrawerRect.height > 0)
+          && followPinnedBefore === false && followTailBefore && followTailAfter
+          && followGrew && followMarker && followAtMax && followClear
+      };
+      var followPre = document.getElementById('probe') || (function () {
+        var el = document.createElement('pre'); el.id = 'probe'; document.body.appendChild(el); return el;
+      })();
+      followPre.textContent += String.fromCharCode(10) + JSON.stringify(followReport);
+    }, 160);
+  } catch (e) {
+    var followError = document.getElementById('probe') || (function () {
+      var el = document.createElement('pre'); el.id = 'probe'; document.body.appendChild(el); return el;
+    })();
+    followError.textContent += String.fromCharCode(10) + JSON.stringify({
+      kind: 'tail-follow-error', message: String((e && e.message) || e)
+    });
+  } }
+  // 原生中键自动滚动夹具。滚动容器与样式都是真实现，输入由 CDP 另发；
+  // 不在页面里合成 PointerEvent，因为那不会触发 Chromium 的 autoscroll 默认动作。
+  if (location.hash.indexOf('middleautoscroll') >= 0) {
+    NS.stateCard.init();
+    NS.stateCard.setConnected(true);
+    NS.transcriptView.reset();
+    document.getElementById('emptyState').style.display = 'none';
+    messages.innerHTML = '';
+    var middleCard = null;
+    var middleInner = null;
+    var middlePlain = null;
+    var middleWide = null;
+    var middleWideTool = null;
+    var middleNested = null;
+    for (var mi = 0; mi < 18; mi++) {
+      if (mi === 10) {
+        var wideToolCard = document.createElement('div');
+        wideToolCard.className = 'tool';
+        var wideToolBody = document.createElement('div');
+        wideToolBody.className = 'tool-body';
+        middleWideTool = document.createElement('div');
+        middleWideTool.id = 'middleWideTool';
+        middleWideTool.className = 'tool-seg-out';
+        var wideToolText = document.createElement('pre');
+        wideToolText.className = 'tool-text';
+        wideToolText.style.whiteSpace = 'pre';
+        wideToolText.style.wordBreak = 'normal';
+        wideToolText.textContent = 'Horizontal-only tool output ' + new Array(220).join('T');
+        middleWideTool.appendChild(wideToolText);
+        wideToolBody.appendChild(middleWideTool);
+        wideToolCard.appendChild(wideToolBody);
+        messages.appendChild(wideToolCard);
+        continue;
+      }
+      if (mi === 9) {
+        var wideCard = document.createElement('div');
+        wideCard.className = 'entry-assistant';
+        middleWide = document.createElement('pre');
+        middleWide.id = 'middleWide';
+        middleWide.style.overflowX = 'auto';
+        middleWide.style.whiteSpace = 'pre';
+        middleWide.style.maxWidth = '100%';
+        middleWide.style.margin = '0';
+        middleWide.textContent = 'Horizontal-only native scrollbar ' + new Array(220).join('W');
+        wideCard.appendChild(middleWide);
+        messages.appendChild(wideCard);
+        continue;
+      }
+      if (mi === 6) {
+        middleCard = document.createElement('div');
+        middleCard.id = 'middleCard';
+        middleCard.className = 'tool';
+        var middleBody = document.createElement('div');
+        middleBody.className = 'tool-body';
+        middleInner = document.createElement('div');
+        middleInner.id = 'middleInner';
+        middleInner.className = 'tool-seg-out';
+        var middleText = document.createElement('pre');
+        middleText.className = 'tool-text';
+        middleText.id = 'middleNested';
+        middleNested = middleText;
+        middleText.style.overflowX = 'auto';
+        middleText.style.width = '900px';
+        middleText.style.whiteSpace = 'pre';
+        middleText.style.wordBreak = 'normal';
+        var middleLines = [];
+        for (var ml = 0; ml < 100; ml++) {
+          middleLines.push('Middle autoscroll inner line ' + ml + (ml === 0 ? ' ' + new Array(180).join('X') : ''));
+        }
+        middleText.textContent = middleLines.join(String.fromCharCode(10));
+        middleInner.appendChild(middleText);
+        middleBody.appendChild(middleInner);
+        middleCard.appendChild(middleBody);
+        messages.appendChild(middleCard);
+        continue;
+      }
+      var middleFill = document.createElement('div');
+      middleFill.className = 'entry-assistant';
+      middleFill.style.height = '140px';
+      middleFill.style.boxSizing = 'border-box';
+      middleFill.style.padding = '16px';
+      middleFill.textContent = 'Middle autoscroll panel filler ' + mi;
+      if (mi === 3) { middlePlain = middleFill; middleFill.id = 'middlePlain'; }
+      messages.appendChild(middleFill);
+    }
+    function appendMiddleDiff(id, nested) {
+      var tool = document.createElement('div');
+      tool.className = 'tool auto-expanded';
+      var body = document.createElement('div');
+      body.className = 'tool-body';
+      var parent = body;
+      if (nested) {
+        parent = document.createElement('div');
+        parent.className = 'tool-seg-out';
+        body.appendChild(parent);
+      }
+      var diff = document.createElement('div');
+      diff.className = 'diff';
+      var diffBody = document.createElement('div');
+      diffBody.id = id;
+      diffBody.className = 'diff-body';
+      diffBody.textContent = 'diff viewport';
+      diff.appendChild(diffBody);
+      parent.appendChild(diff);
+      tool.appendChild(body);
+      messages.appendChild(tool);
+    }
+    appendMiddleDiff('middleDirectDiff', false);
+    appendMiddleDiff('middleNestedDiff', true);
+    // boot 会在随后的 DOMContentLoaded 初始化 scroll；这里再 init 会把首次左键误判成取消聚焦。
+    var middleTarget = location.hash.indexOf('plain') >= 0 ? middlePlain
+      : (location.hash.indexOf('horizontal') >= 0 ? middleWide : middleCard);
+    messages.scrollTop = Math.max(0, middleTarget.offsetTop - 80);
+    messages.dispatchEvent(new Event('scroll'));
+    NS.scroll.setTail(false, false);
+    document.body.setAttribute('data-middle-ready', 'true');
+  }
   // 端到端：boot 自己初始化（真机就是这么走的），再由本档**模拟宿主**
   // 把 renderMarkdown 渲染成 html 回填进来。这是"最后一条不渲染"唯一能在本地复现的姿势 ——
   // 以前预览里没有 vscode API，boot 模块一加载就抛错，整条链路从来没被覆盖。
@@ -2505,6 +2720,353 @@ function findBrowser() {
   return candidates.find((p) => existsSync(p)) || null;
 }
 
+async function runNativeScrollProbe(browser, htmlPath, inputKind) {
+  const profile = join(OUT_DIR, `${inputKind}-profile`);
+  rmSync(profile, { recursive: true, force: true });
+  const child = spawn(browser, [
+    '--headless=new',
+    '--disable-gpu',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--remote-debugging-port=0',
+    `--user-data-dir=${profile}`,
+    '--window-size=900,900',
+    'about:blank',
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  let socket = null;
+  try {
+    const endpoint = await new Promise((resolve, reject) => {
+      let stderr = '';
+      const timer = setTimeout(() => reject(new Error('等待 Chromium DevTools 端点超时')), 15000);
+      child.stderr.on('data', (chunk) => {
+        stderr += String(chunk);
+        const match = stderr.match(/DevTools listening on (ws:\/\/\S+)/);
+        if (match) { clearTimeout(timer); resolve(match[1]); }
+      });
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('exit', (code) => {
+        clearTimeout(timer);
+        reject(new Error(`Chromium 提前退出 (${code})：${stderr.split('\n')[0]}`));
+      });
+    });
+    const port = new URL(endpoint).port;
+    let page = null;
+    for (let attempt = 0; attempt < 100 && !page; attempt++) {
+      const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      page = pages.find((item) => item.type === 'page');
+      if (!page) { await sleep(50); }
+    }
+    if (!page) { throw new Error('找不到 Chromium page target'); }
+
+    socket = new WebSocket(page.webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => {
+      socket.addEventListener('open', resolve, { once: true });
+      socket.addEventListener('error', reject, { once: true });
+    });
+    let nextId = 0;
+    const pending = new Map();
+    const exceptions = [];
+    socket.addEventListener('message', (event) => {
+      const message = JSON.parse(String(event.data));
+      if (message.id) {
+        const request = pending.get(message.id);
+        if (!request) { return; }
+        pending.delete(message.id);
+        if (message.error) { request.reject(new Error(message.error.message)); }
+        else { request.resolve(message.result); }
+      } else if (message.method === 'Runtime.exceptionThrown') {
+        exceptions.push(message.params.exceptionDetails.text || 'pageerror');
+      }
+    });
+    const call = (method, params = {}) => new Promise((resolve, reject) => {
+      const id = ++nextId;
+      pending.set(id, { resolve, reject });
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+    const evaluate = async (expression) => {
+      const result = await call('Runtime.evaluate', { expression, returnByValue: true });
+      if (result.exceptionDetails) {
+        throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+      }
+      return result.result.value;
+    };
+    const mouse = (type, x, y, button = 'none', buttons = 0, clickCount = 0) => call(
+      'Input.dispatchMouseEvent', { type, x, y, button, buttons, clickCount },
+    );
+    const wheel = (x, y, deltaX, deltaY, modifiers = 0) => call(
+      'Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX, deltaY, modifiers },
+    );
+    await call('Page.enable');
+    await call('Runtime.enable');
+
+    const reports = [];
+    for (const mode of (inputKind === 'wheel' ? [] : ['unfocused', 'focused', 'plain', 'horizontal', 'horizontal-tool', 'nested'])) {
+      const errorStart = exceptions.length;
+      const hash = `#middleautoscroll-${mode}`;
+      await call('Page.navigate', { url: `${pathToFileURL(htmlPath).href}?middle=${mode}${hash}` });
+      let ready = false;
+      for (let attempt = 0; attempt < 200 && !ready; attempt++) {
+        ready = await evaluate(`location.hash === ${JSON.stringify(hash)}`
+          + ' && document.body && document.body.getAttribute("data-middle-ready") === "true"');
+        if (!ready) { await sleep(50); }
+      }
+      if (!ready) { throw new Error(`${mode} 夹具未就绪`); }
+      const selector = mode === 'plain' ? '#middlePlain'
+        : (mode === 'horizontal' ? '#middleWide'
+          : (mode === 'horizontal-tool' ? '#middleWideTool' : (mode === 'nested' ? '#middleNested' : '#middleInner')));
+      await sleep(100);
+      await evaluate(`(function () {
+        var panel = document.getElementById('messages');
+        var target = document.querySelector(${JSON.stringify(selector)});
+        panel.scrollTop += target.getBoundingClientRect().top - panel.getBoundingClientRect().top - 80;
+        panel.dispatchEvent(new Event('scroll'));
+        window.__vac.scroll.setTail(true, false);
+      })()`);
+      const point = await evaluate(`(function () {
+        var rect = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+        return { x: Math.round(rect.left + Math.min(60, rect.width / 2)),
+          y: Math.round(rect.top + Math.min(80, rect.height / 2)) };
+      })()`);
+      await evaluate(`(function () {
+        var panel = document.getElementById('messages');
+        var inner = document.getElementById('middleInner');
+        window.__middleScrollTargets = [];
+        document.addEventListener('scroll', function (event) {
+          var kind = event.target === panel ? 'outer' : (event.target === inner ? 'inner' : null);
+          if (kind && window.__middleScrollTargets.indexOf(kind) < 0) {
+            window.__middleScrollTargets.push(kind);
+          }
+        }, true);
+      })()`);
+      if (mode === 'focused') {
+        await mouse('mouseMoved', point.x, point.y);
+        await mouse('mousePressed', point.x, point.y, 'left', 1, 1);
+        await mouse('mouseReleased', point.x, point.y, 'left', 0, 1);
+        await sleep(50);
+      }
+      const stateExpression = `(function () {
+        var panel = document.getElementById('messages');
+        var inner = document.getElementById('middleInner');
+        var target = document.querySelector(${JSON.stringify(selector)});
+        var hit = document.elementFromPoint(${point.x}, ${point.y});
+        return {
+          outer: Math.round(panel.scrollTop), inner: Math.round(inner.scrollTop),
+          inlineOverflow: inner.style.overflow || '', computedOverflow: getComputedStyle(inner).overflow,
+          targetInlineOverflow: target.style.overflow || '', targetComputedOverflow: getComputedStyle(target).overflow,
+          active: !!document.querySelector('#messages .scroll-active'),
+          tail: window.__vac.scroll.isTail(), hitTarget: !!(hit && target.contains(hit)),
+          targets: (window.__middleScrollTargets || []).slice()
+        };
+      })()`;
+      const before = await evaluate(stateExpression);
+      await mouse('mouseMoved', point.x, point.y);
+      await mouse('mousePressed', point.x, point.y, 'middle', 4, 1);
+      await mouse('mouseMoved', point.x, point.y + 120, 'none', 4);
+      await sleep(700);
+      const after = await evaluate(stateExpression);
+      await mouse('mouseReleased', point.x, point.y + 120, 'middle', 0, 1);
+      const stopPoint = await evaluate(`(function () {
+        var rect = document.getElementById('messages').getBoundingClientRect();
+        return { x: Math.round(rect.left + 8), y: Math.round(rect.top + 8) };
+      })()`);
+      await mouse('mouseMoved', stopPoint.x, stopPoint.y);
+      await mouse('mousePressed', stopPoint.x, stopPoint.y, 'left', 1, 1);
+      await mouse('mouseReleased', stopPoint.x, stopPoint.y, 'left', 0, 1);
+      const restored = await evaluate(`(function () {
+        var inner = document.getElementById('middleInner');
+        var target = document.querySelector(${JSON.stringify(selector)});
+        return { inlineOverflow: inner.style.overflow || '', computedOverflow: getComputedStyle(inner).overflow,
+          targetInlineOverflow: target.style.overflow || '', targetComputedOverflow: getComputedStyle(target).overflow };
+      })()`);
+      const pageErrors = exceptions.slice(errorStart);
+      const outerDelta = after.outer - before.outer;
+      const innerDelta = after.inner - before.inner;
+      const expected = mode === 'focused' ? 'inner' : 'outer';
+      const guarded = mode === 'unfocused' || mode === 'horizontal' || mode === 'horizontal-tool' || mode === 'nested';
+      const innerGuarded = mode === 'unfocused' || mode === 'nested';
+      const base = before.hitTarget && restored.inlineOverflow === '' && restored.computedOverflow === 'auto'
+        && after.inlineOverflow === (innerGuarded ? 'clip' : '')
+        && after.targetInlineOverflow === (guarded ? 'clip' : '')
+        && (mode === 'plain' || (restored.targetInlineOverflow === '' && restored.targetComputedOverflow === 'auto'))
+        && after.targets.includes(expected) && pageErrors.length === 0;
+      const passed = mode === 'focused'
+        ? base && before.active && after.active && after.tail
+          && innerDelta > 20 && Math.abs(outerDelta) <= 1
+        : base && !before.active && !after.active && !after.tail
+          && outerDelta > 20 && innerDelta === 0;
+      reports.push({ kind: 'middle-autoscroll', mode, point, before, after, restored, outerDelta, innerDelta, pageErrors, passed });
+    }
+    if (inputKind === 'wheel') {
+      const scenarios = [
+        { mode: 'panel-content', selector: '#middleInner', kind: 'panel', dx: 0, dy: 120 },
+        { mode: 'panel-inner-hbar', selector: '#middleInner', kind: 'panel', point: 'hbar', dx: 0, dy: 120 },
+        { mode: 'panel-wide-content', selector: '#middleWide', kind: 'panel', dx: 0, dy: 120 },
+        { mode: 'panel-wide-hbar', selector: '#middleWide', kind: 'panel', point: 'hbar', dx: 0, dy: 120 },
+        { mode: 'panel-tool-wide-hbar', selector: '#middleWideTool', kind: 'panel', point: 'hbar', dx: 0, dy: 120 },
+        { mode: 'focused-content', selector: '#middleInner', kind: 'inner', focus: true, dx: 0, dy: 120 },
+        { mode: 'focused-hbar', selector: '#middleInner', kind: 'inner', focus: true, point: 'hbar', dx: 0, dy: 120 },
+        { mode: 'native-x', selector: '#middleWide', kind: 'native-x', dx: 100, dy: 0 },
+        { mode: 'native-shift', selector: '#middleWide', kind: 'native-x', dx: 0, dy: 100, modifiers: 8 },
+        { mode: 'mixed', selector: '#middleInner', kind: 'mixed', dx: 100, dy: 60 },
+      ];
+      for (const scenario of scenarios) {
+        const { mode, selector } = scenario;
+        const errorStart = exceptions.length;
+        const hash = `#middleautoscroll-wheel-${mode}`;
+        await call('Page.navigate', { url: `${pathToFileURL(htmlPath).href}?wheel=${mode}${hash}` });
+        let ready = false;
+        for (let attempt = 0; attempt < 200 && !ready; attempt++) {
+          ready = await evaluate(`location.hash === ${JSON.stringify(hash)}`
+            + ' && document.body && document.body.getAttribute("data-middle-ready") === "true"');
+          if (!ready) { await sleep(50); }
+        }
+        if (!ready) { throw new Error(`${mode} 夹具未就绪`); }
+        await sleep(100);
+        await evaluate(`(function () {
+          var panel = document.getElementById('messages');
+          var target = document.querySelector(${JSON.stringify(selector)});
+          panel.scrollTop += target.getBoundingClientRect().top - panel.getBoundingClientRect().top - 80;
+          panel.dispatchEvent(new Event('scroll'));
+          window.__vac.scroll.setTail(true, false);
+        })()`);
+        const point = await evaluate(`(function () {
+          var target = document.querySelector(${JSON.stringify(selector)});
+          var rect = target.getBoundingClientRect();
+          var contentX = Math.round(rect.left + Math.min(60, rect.width / 2));
+          var contentY = Math.round(rect.top + Math.min(80, rect.height / 2));
+          var band = Math.max(0, target.offsetHeight - target.clientHeight);
+          return { x: contentX, y: ${scenario.point === 'hbar' ? 'Math.round(rect.bottom - Math.max(2, band / 2))' : 'contentY'},
+            contentX: contentX, contentY: contentY, band: band };
+        })()`);
+        if (scenario.focus) {
+          await mouse('mouseMoved', point.contentX, point.contentY);
+          await mouse('mousePressed', point.contentX, point.contentY, 'left', 1, 1);
+          await mouse('mouseReleased', point.contentX, point.contentY, 'left', 0, 1);
+          await sleep(50);
+        }
+        await evaluate(`(function () {
+          var target = document.querySelector(${JSON.stringify(selector)});
+          window.__wheelEvents = [];
+          document.addEventListener('wheel', function (event) {
+            window.__wheelEvents.push({
+              onTarget: event.target === target || target.contains(event.target),
+              target: event.target.id || event.target.className || event.target.tagName,
+              deltaX: event.deltaX, deltaY: event.deltaY,
+              cancelable: event.cancelable, defaultPrevented: event.defaultPrevented
+            });
+          }, true);
+        })()`);
+        const stateExpression = `(function () {
+          var panel = document.getElementById('messages');
+          var inner = document.getElementById('middleInner');
+          var nested = document.getElementById('middleNested');
+          var wide = document.getElementById('middleWide');
+          var target = document.querySelector(${JSON.stringify(selector)});
+          var hit = document.elementFromPoint(${point.x}, ${point.y});
+          return {
+            outer: Math.round(panel.scrollTop), inner: Math.round(inner.scrollTop),
+            nestedTop: Math.round(nested.scrollTop), nestedLeft: Math.round(nested.scrollLeft),
+            wideLeft: Math.round(wide.scrollLeft), active: !!document.querySelector('#messages .scroll-active'),
+            tail: window.__vac.scroll.isTail(), hitTarget: !!(hit && target.contains(hit)),
+            band: ${point.band}, events: (window.__wheelEvents || []).slice()
+          };
+        })()`;
+        const before = await evaluate(stateExpression);
+        await mouse('mouseMoved', point.x, point.y);
+        await wheel(point.x, point.y, scenario.dx, scenario.dy, scenario.modifiers || 0);
+        await sleep(120);
+        const after = await evaluate(stateExpression);
+        const pageErrors = exceptions.slice(errorStart);
+        const outerDelta = after.outer - before.outer;
+        const innerDelta = after.inner - before.inner;
+        const nestedLeftDelta = after.nestedLeft - before.nestedLeft;
+        const wideLeftDelta = after.wideLeft - before.wideLeft;
+        const last = after.events[after.events.length - 1];
+        const native = scenario.kind === 'native-x';
+        const base = before.tail && last && last.onTarget && last.cancelable
+          && last.defaultPrevented === !native && before.active === !!scenario.focus
+          && after.active === !!scenario.focus && pageErrors.length === 0
+          && (scenario.point === 'hbar' ? before.band > 0 : before.hitTarget);
+        let passed = base;
+        if (scenario.kind === 'panel') {
+          passed = passed && outerDelta > 20 && innerDelta === 0 && after.nestedTop === before.nestedTop && !after.tail;
+        } else if (scenario.kind === 'inner') {
+          passed = passed && innerDelta > 20 && Math.abs(outerDelta) <= 1 && after.tail;
+        } else if (scenario.kind === 'native-x') {
+          passed = passed && wideLeftDelta > 20 && Math.abs(outerDelta) <= 1 && after.tail;
+        } else if (scenario.kind === 'mixed') {
+          passed = passed && outerDelta > 20 && nestedLeftDelta > 20 && innerDelta === 0 && !after.tail;
+        }
+        reports.push({ kind: 'wheel-scroll', mode, point, before, after, outerDelta, innerDelta,
+          nestedLeftDelta, wideLeftDelta, pageErrors, passed: !!passed });
+      }
+      const clickErrorStart = exceptions.length;
+      const clickHash = '#middleautoscroll-wheel-hbar-click';
+      await call('Page.navigate', { url: `${pathToFileURL(htmlPath).href}?wheel=hbar-click${clickHash}` });
+      let clickReady = false;
+      for (let attempt = 0; attempt < 200 && !clickReady; attempt++) {
+        clickReady = await evaluate(`location.hash === ${JSON.stringify(clickHash)}`
+          + ' && document.body && document.body.getAttribute("data-middle-ready") === "true"');
+        if (!clickReady) { await sleep(50); }
+      }
+      if (!clickReady) { throw new Error('横条点击夹具未就绪'); }
+      await sleep(100);
+      const clickPoint = await evaluate(`(function () {
+        var panel = document.getElementById('messages');
+        var target = document.getElementById('middleInner');
+        panel.scrollTop += target.getBoundingClientRect().top - panel.getBoundingClientRect().top - 80;
+        panel.dispatchEvent(new Event('scroll'));
+        window.__vac.scroll.setTail(true, false);
+        var rect = target.getBoundingClientRect();
+        var band = target.offsetHeight - target.clientHeight;
+        return { contentX: Math.round(rect.left + 60), contentY: Math.round(rect.top + 80),
+          x: Math.round(rect.left + 60), y: Math.round(rect.bottom - Math.max(2, band / 2)), band: band };
+      })()`);
+      await mouse('mouseMoved', clickPoint.contentX, clickPoint.contentY);
+      await mouse('mousePressed', clickPoint.contentX, clickPoint.contentY, 'left', 1, 1);
+      await mouse('mouseReleased', clickPoint.contentX, clickPoint.contentY, 'left', 0, 1);
+      await sleep(50);
+      await mouse('mouseMoved', clickPoint.x, clickPoint.y);
+      await mouse('mousePressed', clickPoint.x, clickPoint.y, 'left', 1, 1);
+      await mouse('mouseReleased', clickPoint.x, clickPoint.y, 'left', 0, 1);
+      await sleep(50);
+      const clickState = await evaluate(`(function () {
+        return { active: !!document.querySelector('#messages .scroll-active'), tail: window.__vac.scroll.isTail() };
+      })()`);
+      const clickErrors = exceptions.slice(clickErrorStart);
+      reports.push({ kind: 'horizontal-scrollbar-click', point: clickPoint, state: clickState,
+        pageErrors: clickErrors, passed: clickPoint.band > 0 && clickState.active && clickState.tail && !clickErrors.length });
+      const diff = await evaluate(`(function () {
+        var direct = getComputedStyle(document.getElementById('middleDirectDiff')).maxHeight;
+        var nested = getComputedStyle(document.getElementById('middleNestedDiff')).maxHeight;
+        var geometry = ['middleWide', 'middleWideTool'].map(function (id) {
+          var node = document.getElementById(id);
+          return { id: id, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight,
+            offsetHeight: node.offsetHeight, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth,
+            horizontalOnly: node.scrollHeight <= node.clientHeight + 1 && node.scrollWidth > node.clientWidth + 1
+              && node.offsetHeight > node.clientHeight };
+        });
+        return { direct: direct, nested: nested, geometry: geometry,
+          passed: direct === 'none' && nested === 'none' && geometry.every(function (item) { return item.horizontalOnly; }) };
+      })()`);
+      reports.push({ kind: 'diff-single-viewport', ...diff });
+    }
+    for (const report of reports) { console.log(JSON.stringify(report)); }
+    return reports.every((report) => report.passed);
+  } finally {
+    if (socket) { socket.close(); }
+    child.kill();
+    await Promise.race([exited, sleep(2000)]);
+    try {
+      rmSync(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    } catch (error) {
+      console.warn(`  [WARN] ${inputKind} 探针临时目录待系统释放：${error && error.message ? error.message : error}`);
+    }
+  }
+}
+
 // size 参数化。默认的 500 是**故意的窄档**：Chrome 有约 500px 的
 // 最小窗口宽度，给 430 时**布局视口仍是 500**、只有截图被裁到 430 —— 于是"卡片右边被切掉
 // 一块"看起来像溢出，其实是假象（实测：window-size=430 ⇒ innerWidth=500；window-size=900
@@ -2548,6 +3110,17 @@ if (!browser) {
   process.exit(0);
 }
 console.log(`  浏览器：${browser}`);
+if (MIDDLE_SCROLL_PROBE || WHEEL_SCROLL_PROBE) {
+  const inputKind = WHEEL_SCROLL_PROBE ? 'wheel' : 'middle';
+  let passed = false;
+  try {
+    passed = await runNativeScrollProbe(browser, htmlPath, inputKind);
+  } catch (error) {
+    console.error(`  [FAIL] ${inputKind} 探针：${error && error.stack ? error.stack : error}`);
+  }
+  if (!KEEP) { rmSync(htmlPath, { force: true }); }
+  process.exit(passed ? 0 : 1);
+}
 const shots = [];
 // 三个状态卡相位各截一张。窄侧边栏档用 #narrow（把消息区钉到
 // 260px）而不是 --window-size —— 后者只影响截图裁剪，测不出"卡片撑破容器没有"。
@@ -2674,6 +3247,9 @@ const SHOTS = [
   // 真机形状（照抄日志里那次请求）：选项带长描述、自拟框那题没有 _meta 标记。
   // 「贴底却看不全」的复现档（读的是几何与滚动状态，不是肉眼）。
   ['#elicbottomstuckprobe', 'bottom-stuck', '1440,1000'],
+  // Tail 开启 + 布局滚动留下 pinned=false + 最后一片 stream Markdown 长高；
+  // 同时摆出 composer 与表单抽屉，直接判末条是否仍在最高遮挡层之上。
+  ['#elictailfollowprobe', 'tail-follow', '1440,1000'],
   ['#elicreal', 'elic-real', '1440,1000'],
   ['#elicrealpick', 'elic-real-pick', '1440,1000'],
   // [CUSTOM-231 两个新面：**选项预览**（就地展开在被选行下方）与**已答回执卡**

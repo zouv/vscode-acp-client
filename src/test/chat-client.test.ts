@@ -97,6 +97,8 @@ class StubNode {
   scrollTop = 0;
   scrollHeight = 0;
   clientHeight = 0;
+  scrollLeft = 0;
+  scrollWidth = 0;
   offsetTop = 0;
   /** [CUSTOM- Their difference is the scrollbar the pinned bar has to clear. */
   offsetWidth = 0;
@@ -5670,10 +5672,10 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
       + ' 旧实现这里每次都读，那正是几百次强制重排的来源');
   });
 
-  // [CUSTOM- Tail 的运行时（2026-10-28）：**关掉 = 绝不自动滚**；开着且贴底才跟；
+  // [CUSTOM- Tail 的运行时（2026-10-28）：**关掉 = follow 绝不自动滚**；开着就持续跟；
   // 用户自己滚动（非程序写入的 scroll 事件）就地取消。pinned 仍然如实反映"是否贴底"
   // （大纲跳转 / 探针都读它），Tail 不许伪造它。
-  test('Tail 关掉 ⇒ 绝不自动跟；打开且贴底才跟到底；用户一滚就取消', () => {
+  test('Tail 关掉 ⇒ follow 绝不自动跟；打开即跟到底；用户一滚就取消', () => {
     const { NS, el, docListeners } = mountScroll();
     NS.dom = { schedule: (fn: () => void) => { fn(); } };
     el.scrollTop = 600;                      // max = 1000 − 400：贴底
@@ -5717,14 +5719,34 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
     assert.strictEqual(NS.scroll.isTail(), true, '程序写入不是用户滚动');
   });
 
-  test('无用户意图的 scroll（滚动锚定 / 内容夹紧）不取消 Tail', () => {
+  test('无用户意图的 scroll（滚动锚定 / 内容夹紧）不取消 Tail，后续 follow 仍置底', () => {
     const { NS, el, jump } = mountScroll();
+    NS.dom = { schedule: (fn: () => void) => { fn(); } };
     NS.scroll.setTail(true, false);
     el.scrollTop = 300;          // 浏览器自己改的位置
     el.fire('scroll');
     assert.strictEqual(NS.scroll.isTail(), true, '没有 wheel / pointer / keyboard 意图');
     assert.strictEqual(NS.scroll.isPinned(), false);
     assert.strictEqual(jump.hidden, false, 'pinned / Jump 仍如实更新');
+
+    el.scrollHeight = 1400;
+    NS.scroll.follow();
+    assert.strictEqual(el.scrollTop, 1400, 'Tail 开着时不能被布局滚动留下的 pinned=false 锁死');
+    assert.strictEqual(NS.scroll.isTail(), true);
+  });
+
+  test('布局滚动留下 pinned=false 后，Tail 开启的 reflowNow 仍跟着浮层留白走', () => {
+    const { NS, el } = mountScroll();
+    NS.scroll.setTail(true, false);
+    el.scrollTop = 300;
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isPinned(), false);
+    assert.strictEqual(NS.scroll.isTail(), true);
+
+    el.scrollHeight = 1400;
+    NS.scroll.reflowNow();
+    assert.strictEqual(el.scrollTop, 1400);
+    assert.strictEqual(NS.scroll.isPinned(), true);
   });
 
   test('中键自动滚动取消 Tail', () => {
@@ -5849,6 +5871,16 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
     return node;
   }
 
+  function clampedX(node: StubNode): StubNode {
+    let left = 0;
+    Object.defineProperty(node, 'scrollLeft', {
+      configurable: true,
+      get: () => left,
+      set: (value: number) => { left = Math.max(0, Math.min(value, node.scrollWidth - node.clientWidth)); },
+    });
+    return node;
+  }
+
   interface Panel {
     NS: Record<string, any>;
     messages: StubNode;
@@ -5882,9 +5914,10 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
 
     const win: Record<string, any> = {
       __vac: NS,
-      // scroll.ts 从计算样式里只读这两样。
+      // scroll.ts 从计算样式里读滚动方向与底部留白。
       getComputedStyle: (node: any) => ({
         paddingBottom: '0px',
+        overflowX: (node && node.style && node.style.overflowX) || 'visible',
         overflowY: (node && node.style && node.style.overflowY) || 'visible',
       }),
       setTimeout: () => 0,
@@ -5915,9 +5948,11 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
 
   function wheel(
     listeners: Record<string, Array<(event: any) => void>>, target: StubNode, deltaY: number,
+    opts: { deltaX?: number; deltaMode?: number; cancelable?: boolean; shiftKey?: boolean } = {},
   ): any {
     const event = {
-      target, deltaY, deltaX: 0, deltaMode: 0, cancelable: true, defaultPrevented: false,
+      target, deltaY, deltaX: opts.deltaX ?? 0, deltaMode: opts.deltaMode ?? 0,
+      cancelable: opts.cancelable ?? true, shiftKey: opts.shiftKey ?? false, defaultPrevented: false,
       preventDefault(): void { this.defaultPrevented = true; },
     };
     fireDoc(listeners, 'wheel', event);
@@ -5937,11 +5972,14 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
   });
 
   // [CUSTOM- 2026-10-29 用户报：卡片内没有滚动条时，滚轮被卡片截获，面板滚不动。
-  test('卡片内没有纵向滚动区 ⇒ 滚轮不拦截，面板照常滚', () => {
+  test('未聚焦卡片没有纵向滚动区 ⇒ 纵向滚轮仍显式滚面板', () => {
     const { messages, docListeners } = mountPanel();
     const plain = box('div', 'tool');
-    const pre = box('pre', 'bubble-pre', 203, 200);
+    const pre = box('pre', 'bubble-pre', 200, 200);
+    pre.style.overflowX = 'auto';
     pre.style.overflowY = 'auto';
+    pre.scrollWidth = 800;
+    pre.clientWidth = 200;
     plain.appendChild(pre);
     messages.appendChild(plain);
 
@@ -5950,22 +5988,44 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
       '没有可滚内容的卡片不该拿到焦点环');
 
     const event = wheel(docListeners, pre, 100);
-    assert.strictEqual(event.defaultPrevented, false,
-      '横向滚动条造成的 scrollHeight 假象不算纵向可滚 ⇒ 交给浏览器滚面板');
+    assert.strictEqual(event.defaultPrevented, true, '不能依赖横向容器的原生滚动链');
+    assert.strictEqual(messages.scrollTop, 100);
   });
 
-  test('INNER_SCROLL_SELECTOR 里的元素只有横向滚动条 ⇒ 也不算纵向可滚', () => {
+  test('INNER_SCROLL_SELECTOR 里的元素只有横向滚动条 ⇒ 纵向滚轮仍滚面板', () => {
     const { messages, docListeners } = mountPanel();
     const card = box('div', 'tool');
-    const hbar = box('div', 'tool-seg-out', 215, 200);
+    const hbar = box('div', 'tool-seg-out', 200, 200);
     hbar.offsetHeight = 215;    // 横向滚动条 15px（offsetHeight - clientHeight）
+    hbar.style.overflowX = 'auto';
     hbar.style.overflowY = 'auto';
+    hbar.scrollWidth = 800;
+    hbar.clientWidth = 200;
     card.appendChild(hbar);
     messages.appendChild(card);
 
     const event = wheel(docListeners, hbar, 100);
-    assert.strictEqual(event.defaultPrevented, false,
-      'scrollHeight 多出的 15px 只是横向滚动条，不是纵向内容');
+    assert.strictEqual(event.defaultPrevented, true);
+    assert.strictEqual(messages.scrollTop, 100);
+  });
+
+  test('横向滚动条与小幅真实纵向溢出并存 ⇒ 仍能聚焦并滚动这 5px', () => {
+    const { messages, docListeners } = mountPanel();
+    const card = box('div', 'tool');
+    const inner = clamped(box('div', 'tool-seg-out', 205, 200));
+    inner.offsetHeight = 215;
+    inner.style.overflowX = 'auto';
+    inner.style.overflowY = 'auto';
+    inner.scrollWidth = 800;
+    inner.clientWidth = 200;
+    card.appendChild(inner);
+    messages.appendChild(card);
+
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: inner });
+    assert.ok(String(inner.className).split(' ').includes('scroll-active'));
+    wheel(docListeners, inner, 100);
+    assert.strictEqual(inner.scrollTop, 5);
+    assert.strictEqual(messages.scrollTop, 0);
   });
 
   test('点进卡片之后滚轮才滚这张卡片；滚到它自己的末尾就停，面板原地不动', () => {
@@ -5984,6 +6044,18 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
     wheel(docListeners, card, 100);
     assert.strictEqual(inner.scrollTop, 400, '卡片到底了不再动');
     assert.strictEqual(messages.scrollTop, 0, '聚焦时面板必须原地不动（余量不再交给面板）');
+  });
+
+  test('聚焦内层重建后没有有效接替者 ⇒ 清掉半失效焦点并回落面板', () => {
+    const { messages, inner, card, docListeners, observers } = mountPanel();
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: inner });
+    card.removeChild(inner);
+    observers[0]([]);
+    assert.ok(!String(inner.className).split(' ').includes('scroll-active'));
+
+    const event = wheel(docListeners, card, 100);
+    assert.strictEqual(event.defaultPrevented, true);
+    assert.strictEqual(messages.scrollTop, 100);
   });
 
   test('聚焦卡片时指针移出卡片区域 ⇒ 不再拦截，交回浏览器滚面板', () => {
@@ -6015,6 +6087,106 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
     assert.strictEqual(active(), false, '中键（自动滚动）不聚焦');
     fireDoc(docListeners, 'pointerdown', { button: 0, target: card });
     assert.strictEqual(active(), true, '左键聚焦');
+  });
+
+  test('中键落在未聚焦内层 ⇒ 原生滚动期间排除内层，下一次按下恢复原样式', () => {
+    const { messages, inner, docListeners } = mountPanel();
+    inner.style.overflow = 'auto';
+    inner.style.overflowX = 'scroll';
+    inner.style.overflowY = 'auto';
+    const event = {
+      button: 1, target: inner, defaultPrevented: false,
+      preventDefault(): void { this.defaultPrevented = true; },
+    };
+
+    fireDoc(docListeners, 'pointerdown', event);
+    assert.strictEqual(event.defaultPrevented, false, '必须保留浏览器原生中键自动滚动');
+    assert.strictEqual(inner.style.overflow, 'clip');
+    assert.ok(!String(inner.className).split(' ').includes('scroll-active'), '中键不改变焦点');
+
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: messages });
+    assert.strictEqual(inner.style.overflow, 'auto');
+    assert.strictEqual(inner.style.overflowX, 'scroll');
+    assert.strictEqual(inner.style.overflowY, 'auto');
+  });
+
+  test('中键落在横向-only / 纵向嵌横向容器 ⇒ 保护完整候选链并逐一恢复', () => {
+    const nested = mountPanel();
+    nested.inner.style.overflow = 'auto';
+    const pre = clampedX(box('pre', '', 0, 0));
+    pre.style.overflow = 'auto';
+    pre.style.overflowX = 'auto';
+    pre.scrollWidth = 900;
+    pre.clientWidth = 200;
+    nested.inner.appendChild(pre);
+
+    fireDoc(nested.docListeners, 'pointerdown', { button: 1, target: pre });
+    assert.strictEqual(pre.style.overflow, 'clip');
+    assert.strictEqual(nested.inner.style.overflow, 'clip', '横向子容器外的纵向祖先也要退出候选');
+    fireDoc(nested.docListeners, 'pointerdown', { button: 0, target: nested.messages });
+    assert.strictEqual(pre.style.overflow, 'auto');
+    assert.strictEqual(pre.style.overflowX, 'auto');
+    assert.strictEqual(nested.inner.style.overflow, 'auto');
+
+    const horizontal = mountPanel();
+    const wide = box('pre', '');
+    wide.style.overflow = 'auto';
+    wide.style.overflowX = 'scroll';
+    wide.style.overflowY = 'visible';
+    wide.scrollWidth = 900;
+    wide.clientWidth = 200;
+    horizontal.card.appendChild(wide);
+    fireDoc(horizontal.docListeners, 'pointerdown', { button: 1, target: wide });
+    assert.strictEqual(wide.style.overflow, 'clip');
+    assert.strictEqual(horizontal.inner.style.overflow, undefined, '非祖先滚动区不受保护');
+    fireDoc(horizontal.docListeners, 'pointerdown', { button: 0, target: horizontal.messages });
+    assert.strictEqual(wide.style.overflow, 'auto');
+    assert.strictEqual(wide.style.overflowX, 'scroll');
+    assert.strictEqual(wide.style.overflowY, 'visible');
+  });
+
+  test('中键落在已聚焦内层 / 无内层滚动区 ⇒ 不做临时保护', () => {
+    const { messages, inner, card, docListeners } = mountPanel();
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: inner });
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: inner });
+    assert.strictEqual(inner.style.overflow, undefined);
+
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: messages });
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: card });
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: messages });
+    assert.strictEqual(inner.style.overflow, undefined);
+  });
+
+  test('连续中键后再左键 ⇒ 先恢复可滚判据再聚焦，保护不残留', () => {
+    const { messages, inner, docListeners } = mountPanel();
+    inner.style.overflow = 'auto';
+    inner.style.overflowY = 'auto';
+
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: inner });
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: inner });
+    assert.strictEqual(inner.style.overflow, 'clip');
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: inner });
+    assert.strictEqual(inner.style.overflow, 'auto');
+    assert.strictEqual(inner.style.overflowY, 'auto');
+    assert.ok(String(inner.className).split(' ').includes('scroll-active'),
+      '恢复必须早于本次左键的最近滚动区判断');
+
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: messages });
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: inner });
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: messages });
+    assert.strictEqual(inner.style.overflow, 'auto');
+  });
+
+  test('pointercancel / Escape ⇒ 取消中键手势时也恢复内层样式', () => {
+    const { messages, inner, docListeners } = mountPanel();
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: inner });
+    assert.strictEqual(inner.style.overflow, 'clip');
+    fireDoc(docListeners, 'pointercancel', {});
+    assert.strictEqual(inner.style.overflow, '');
+
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: inner });
+    fireDoc(docListeners, 'keydown', { key: 'Escape', target: messages });
+    assert.strictEqual(inner.style.overflow, '');
   });
 
   test('再次左键点击同一张卡片取消聚焦；拖动 / 框选文本 / 点控件时不取消', () => {
@@ -6056,15 +6228,100 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
     assert.strictEqual(activeOf(p4.inner), true, '点在卡片里的交互控件上 ⇒ 不取消聚焦（控件自己处理）');
   });
 
-  test('横向滚动（Shift+滚轮 / 触控板横滑）不拦，留给代码块与宽表格', () => {
-    const { messages, inner, docListeners } = mountPanel();
-    const event = {
-      target: inner, deltaX: 100, deltaY: 0, deltaMode: 0, cancelable: true, defaultPrevented: false,
-      preventDefault(): void { this.defaultPrevented = true; },
+  test('原生横向 / 纵向滚动条点击不参与卡片聚焦或取消聚焦', () => {
+    const p = mountPanel();
+    const click = (target: StubNode, x: number, y: number) => {
+      fireDoc(p.docListeners, 'pointerdown', { button: 0, target, clientX: x, clientY: y, pointerId: 1 });
+      fireDoc(p.docListeners, 'pointerup', { button: 0, target, clientX: x, clientY: y, pointerId: 1 });
     };
-    fireDoc(docListeners, 'wheel', event);
-    assert.strictEqual(event.defaultPrevented, false);
+    const active = () => String(p.inner.className).split(' ').includes('scroll-active');
+    click(p.card, 10, 10);
+    assert.strictEqual(active(), true);
+    p.NS.scroll.setTail(true, false);
+
+    p.inner.rectWidth = 200;
+    p.inner.rectHeight = 200;
+    p.inner.clientWidth = 180;
+    p.inner.clientHeight = 180;
+    click(p.inner, 50, 190);
+    assert.strictEqual(active(), true, '底部横条不是二次点击卡片');
+    click(p.inner, 190, 50);
+    assert.strictEqual(active(), true, '右侧纵条不是二次点击卡片');
+
+    p.messages.rectWidth = 400;
+    p.messages.rectHeight = 400;
+    p.messages.clientWidth = 380;
+    p.messages.clientHeight = 380;
+    click(p.messages, 390, 100);
+    assert.strictEqual(active(), true, '面板滚动条也不清空卡片焦点');
+    assert.strictEqual(p.NS.scroll.isTail(), true, '仅按下滚动条、尚未滚动时不误关 Tail');
+
+    const unfocused = mountPanel();
+    unfocused.inner.rectWidth = 200;
+    unfocused.inner.rectHeight = 200;
+    unfocused.inner.clientWidth = 180;
+    unfocused.inner.clientHeight = 180;
+    fireDoc(unfocused.docListeners, 'pointerdown', {
+      button: 0, target: unfocused.inner, clientX: 50, clientY: 190,
+    });
+    assert.ok(!String(unfocused.inner.className).split(' ').includes('scroll-active'));
+  });
+
+  test('纯横向 / Shift+滚轮保持原生；不可取消事件不做补偿性程序滚动', () => {
+    const { NS, messages, inner, docListeners } = mountPanel();
+    NS.scroll.setTail(true, false);
+    clampedX(inner);
+    inner.style.overflowX = 'auto';
+    inner.scrollWidth = 800;
+    inner.clientWidth = 200;
+
+    const horizontal = wheel(docListeners, inner, 0, { deltaX: 100 });
+    const shift = wheel(docListeners, inner, 100, { shiftKey: true });
+    const passive = wheel(docListeners, inner, 100, { deltaX: 50, cancelable: false });
+    assert.strictEqual(horizontal.defaultPrevented, false);
+    assert.strictEqual(shift.defaultPrevented, false);
+    assert.strictEqual(passive.defaultPrevented, false);
     assert.strictEqual(messages.scrollTop, 0);
+    assert.strictEqual(inner.scrollTop, 0);
+    assert.strictEqual(inner.scrollLeft, 0, '原生输入不由 handler 改写，真实位移由 Chromium 探针验收');
+    assert.strictEqual(NS.scroll.isTail(), true);
+  });
+
+  test('未聚焦卡片的斜向滚动 ⇒ 纵向滚面板、横向滚最近容器，等轴也不丢分量', () => {
+    const { NS, messages, inner, docListeners } = mountPanel();
+    NS.scroll.setTail(true, false);
+    clampedX(inner);
+    inner.style.overflowX = 'auto';
+    inner.scrollWidth = 800;
+    inner.clientWidth = 200;
+
+    const dominantX = wheel(docListeners, inner, 60, { deltaX: 100 });
+    assert.strictEqual(dominantX.defaultPrevented, true);
+    assert.strictEqual(messages.scrollTop, 60);
+    assert.strictEqual(inner.scrollTop, 0);
+    assert.strictEqual(inner.scrollLeft, 100);
+    assert.strictEqual(NS.scroll.isTail(), false);
+
+    wheel(docListeners, inner, 50, { deltaX: 50 });
+    assert.strictEqual(messages.scrollTop, 110);
+    assert.strictEqual(inner.scrollLeft, 150);
+  });
+
+  test('已聚焦卡片的斜向滚动 ⇒ 纵向只滚内层、横向只滚落点容器，Tail 保持', () => {
+    const { NS, messages, inner, docListeners } = mountPanel();
+    clampedX(inner);
+    inner.style.overflowX = 'auto';
+    inner.scrollWidth = 800;
+    inner.clientWidth = 200;
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: inner });
+    NS.scroll.setTail(true, false);
+
+    const event = wheel(docListeners, inner, 60, { deltaX: 100 });
+    assert.strictEqual(event.defaultPrevented, true);
+    assert.strictEqual(messages.scrollTop, 0);
+    assert.strictEqual(inner.scrollTop, 60);
+    assert.strictEqual(inner.scrollLeft, 100);
+    assert.strictEqual(NS.scroll.isTail(), true);
   });
 
   test('流式卡片的内层滚动区自动跟到最后一行；已完成的卡片不追', () => {
@@ -7426,6 +7683,24 @@ suite('chat client logic: streaming markdown tails and native render windows', (
   function reply(NS: Record<string, any>, source: string, blocks: string[], tailHtml: string, sessionId = 'stream-session') {
     NS.transcriptView.queueMarkdown([{ entryId: 'stream', sessionId, html: '', stream: { source, blocks, tailHtml } }]);
   }
+
+  test('stream and tool markdown slices both request panel follow', () => {
+    const { NS } = fixture();
+    let follows = 0;
+    NS.scroll.follow = () => { follows++; };
+    NS.transcriptView.append({ id: 'stream', kind: 'assistant', text: 'raw tail', streaming: true });
+    follows = 0;
+    reply(NS, 'raw tail', [], '<p>rendered tail</p>');
+    assert.strictEqual(follows, 1, 'stream DOM growth must notify Tail after the markdown slice');
+
+    let toolApplications = 0;
+    NS.toolCallView.applyMarkdown = () => { toolApplications++; };
+    follows = 0;
+    NS.transcriptView.queueMarkdown([{ key: 'tool-key', html: '<p>tool output</p>' }]);
+    assert.strictEqual(toolApplications, 1);
+    assert.strictEqual(follows, 1, 'tool DOM growth must notify Tail after the markdown slice');
+    NS.transcriptView.reset();
+  });
 
   test('stable block nodes survive streamed chunks and only the tail is sanitized again', () => {
     const { NS, sanitized } = fixture();

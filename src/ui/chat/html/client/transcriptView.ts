@@ -456,8 +456,9 @@ export const transcriptViewClient = `
   }
 
   /**
-   * 一片落完之后的收尾。**刻意只有那两个"排到下一帧、可重复调用"的便宜货**：
+   * 一片落完之后的收尾。**刻意只有这三个"排到下一帧、可重复调用"的便宜货**：
    * · reassert —— restoreTarget 为空时是空操作；
+   * · follow —— 只置脏位 + 排帧；stream/tool 正文长高后靠它继续保持 Tail 置底；
    * · stickyUser.schedule —— 置标志 + 排帧。
    * 'rail.reflow()' **不在这里**：它会让 rail 在**每一帧**做一遍全量量测，而这条链本来就由 070 的
    * ResizeObserver 盯着每个记录节点（内容变高它自己会重排）—— 每片再点名一次等于把同一件事做两遍。
@@ -468,6 +469,7 @@ export const transcriptViewClient = `
     // [CUSTOM- Markdown grew the transcript, so a restored scroll position
     // has to be re-applied (no-op once the user scrolled).
     NS.scroll.reassert();
+    NS.scroll.follow();
     // [CUSTOM- 回填 markdown 会长高下方内容 ⇒ 置顶卡的位置要重算。
     NS.stickyUser.schedule();
   }

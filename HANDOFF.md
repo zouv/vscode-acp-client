@@ -14,32 +14,27 @@
 
 ## 状态快照
 
-- **最近更新**：2026-11-02
-- **整体状态**：v1.9.0 已提交推送并上传 Release 草稿；最低宿主夹具已修复，四格 CI 通过。待用户确认移动已推送标签后重新打包并公开发布。
-- **当前分支（必填）**：`main`；用户已授权 v1.9.0 的 commit/push、打包与 GitHub Release 上传，不另建分支。
-- **最后验证状态**（2026-11-02，npm ci 后）：lint/typecheck ✅；unit **159 / 25 文件** ✅；Windows stable **1.144.0** 与最低 **1.85.0** 宿主各 **623** ✅；生产构建与 VSIX ✅（`release/vscode-acp-client-1.9.0.vsix`，10 文件）。
-  生产与全量 audit 均 **0**；文档体检、diff 空白、新增内容隐私与 LF 检查通过。npm ci 仍有两条传递依赖弃用提示；远程 Linux/Windows CI 由推送触发，结果以 GitHub Actions 为准，不以本地测试替代。
-  Windows 两宿主与 WSL Linux 的真实三代进程终止通过；WSL 仅源码探针，不算完整 Linux 宿主。流式稳定 DOM/选区、窄屏权限/表单与离屏正文预览已核；最终 Chromium 151 / Chrome 110 的 1000 条记录连续三次切换阅读锚点无漂移，均无 pageerror，桥接替身不代替账号验收。
+- **最近更新**：2026-11-03
+- **整体状态**：v1.9.1 发布中；当前改动包含消息区滚动修复与压缩会话完整历史回放。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
+- **当前分支（必填）**：`main`；用户已授权 v1.9.1 的 commit/push、打包与 GitHub Release 上传，不另建分支。
+- **最后验证状态**（2026-11-03）：lint/typecheck ✅；unit **175 / 27 文件** ✅；完整宿主 **650 passing** ✅；完整 Chromium preview、横向 wheel 十档 + 横条点击 + diff 几何探针、中键六档探针均通过且无 pageerror。
+  真实 agent 的 `npm run dev:host` 人工验收尚未执行；远程 CI 以 GitHub Actions 为准。
 
 
 ## 当前任务（In Progress）
 
-- **v1.9.0 发布复核**：tag 仍为 `40d2e35`；草稿附件 SHA256 `62c89e9aa8a4241ca21c5d2f45925a8468e1de57309cb5c08dc1f6266b009dcd`，506800 字节，上传已核。
-  修复提交 `f008f66` 的 CI `41381469820` 四格全通过；旧 tag 的 Linux 1.85 夹具仍失败，不能用新 CI 冒充旧标签验证。
-  `src/test/{handlers,recovery}-regression.test.ts` 已补齐最低宿主 run-as-node 参数，超时补 PID/stderr；lint/typecheck、unit 159、Windows 两宿主各 623 通过。
-  下一步：等待用户确认移动 `v1.9.0` 到包含夹具修复的最新提交；获确认后再更新标签、干净提交重打包、替换附件并核摘要，最后公开 Release。
-
-- **压缩会话完整历史（2026-11-03，待真机验收）**：VAC compact 行改动完成；根因在 `claude-agent-acp` 0.91.0 只用 `getSessionMessages()`（压缩后链），已在 fork 实现完整显示链回放并推送 `dfcefd3`（`src/transcript-chain.ts` + `acp-agent.ts`，适配器单测 11 + 集成 2 通过）。VAC 默认 spec 用 `#main`（commit pin 会触发 npm 10.8.2 的 `GitFetcher requires an Arborist constructor` bug），`AgentMigration` 会把裸 spec 迁到它；下一步 `npm run dev:host` 打开本机一个已压缩的历史会话，验证首条真实提问。
+- 无进行中编码任务；以下为既有待真机验收项。
 
 - **原生弹框改造（2026-10-29 完成 / 待真机验收）**：弹框/确认/重命名已改为面板内浮层，命令 modal 改非模态通知；见「下一步」1。
 - **Markdown style 预设重做（已随 v1.8.1 发布 / 待真机验收）**：Follow editor + GitHub / Obsidian / Typora / Atom / Minimal / Things 六套（排版 + `--vac-md-*` 明暗配色）；真 Chromium 已核，下一步见「下一步」4⑦。
 - **输入卡交互（已随 v1.8.2 发布 / 待真机验收）**：空输入 / 纯空白时 Send 灰置、`/` 命令面板点空白收起、Effort 图标换形；见「下一步」2 的补充项。
-- **滚轮：内层卡片焦点门控 + 自动追尾（已随 v1.8.0 发布 / 待真机验收）**：滚轮默认滚面板；**点进**卡片（`.scroll-active` 焦点环）才滚卡片内部，指针在卡片内只滚卡片；流式卡片的内层滚动区自动跟到最后一行（用户上滚即停）。顺带修掉「一张卡叠 2–3 条纵向滚动条」（细档、与面板同宽）。代码见 `html/client/scroll.ts` + `styles.ts`，诊断见 §5.53。
+- **滚轮 / 中键：内层卡片焦点门控 + 自动追尾（2026-11-03 代码与自动验证完成）**：横向-only 内容与原生横条上的纵向 wheel 已显式路由到面板；聚焦内层、双轴输入、完整中键候选链、滚动条焦点隔离与直接 diff 单视口均已修复。宿主 650、unit 175、真实 wheel/middle 探针通过；待真机按 `docs/03-验收清单.md` 246–249、256 验收。
+- **压缩会话完整历史（2026-11-03，已纳入 v1.9.1 / 待真机验收）**：VAC compact 行改动完成；根因在 `claude-agent-acp` 0.91.0 只用 `getSessionMessages()`（压缩后链），已在 fork 实现完整显示链回放并推送 `dfcefd3`（`src/transcript-chain.ts` + `acp-agent.ts`，适配器单测 11 + 集成 2 通过）。VAC 默认 spec 用 `#main`（commit pin 会触发 npm 10.8.2 的 `GitFetcher requires an Arborist constructor` bug），`AgentMigration` 会把裸 spec 迁到它；下一步 `npm run dev:host` 打开本机一个已压缩的历史会话，验证首条真实提问。
 - **Tail / 会话级开关 / 最近目录删除（已随 v1.8.0 发布 / 待真机验收）**：新增 `client/tail.ts`（地址栏
   Tail 按钮 = 自动追尾，滚动即取消）；Times / 自动展开 / 大纲 / Tail 改为「已开启会话落定」
   （拨开关只影响当前会话，新会话才继承新值）；地址栏两图标对调（Tail = 同向下尖角、
   自动展开 = 朝外尖角）；目录抽屉「Recently used」行加删除并按目录同一性去重。细节见 §5.54。
-  **待真机：`docs/03-验收清单.md` 246–252。**
+  **2026-11-03 遮挡修复代码完成**：follow/reflow 不再被布局滚动留下的 `pinned=false` 锁死，stream/tool Markdown 每片收尾补 follow；宿主 650、unit 175、完整 Chromium preview 与双遮挡层聚焦探针通过（末条 382 < 顶边 536）。**待真机：`docs/03-验收清单.md` 246–249 + 最后一片 Markdown 撑高、composer/抽屉变高不遮末条。**
 - **v1.7.0 真机验收（待做）**：自动检查全绿，具体项见「下一步」4–5。
 - **目录抽屉三项 + 本轮三项（已随 v1.8.5 发布 / 待真机验收）**：Recently used 0–30（0 隐藏分组、清空回 8）、已开始会话抽屉去说明、地址栏目录 tip 只留路径；New Session in This Folder 的新 tab 落在源 tab 右侧；恢复提示 Start fresh → New session（进入草稿页）；输入框附件 chip 悬停反馈 + 消息卡片文件引用框选行区间。见「下一步」1。
 - **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」5。
@@ -63,11 +58,11 @@
 
 - **审查修复验收（无需继续编码）**：真实 Claude/Codex 认证、崩溃后 resume/离线手动恢复、多会话草稿/焦点与权限/表单结算；确认远程 CI 结果。P2-4 已按原生正文渲染窗口方案完成（保留 DOM，不是卸载式虚拟列表）。
 
-1. **v1.8.5 真机验收（最高优先）**：`npm run dev:host` → 原生弹框批（Delete/关闭/Rename 浮层、sub-agent 抽屉、设置 Clear/Reset 确认、命令变非模态通知）+ 四项交互（mode picker 靠右；运行中 Esc/标题栏 Stop 出确认；无滚动条卡片滚轮滚面板；引用标签跳转并框选）+ Tail（流式/折叠时不动鼠标按钮不灭；真实滚轮/中键/拖条才关；Tail 关闭后 Jump 自动出现）+ 卡片聚焦（只认左键；再次左键取消；框选文本/拖动不取消）+ Tab（固定五色；右键 Rename 置顶 / Close 置底 / Mark as unread / Copy working directory）。
+1. **v1.8.5 真机验收（最高优先）**：`npm run dev:host` → 原生弹框批（Delete/关闭/Rename 浮层、sub-agent 抽屉、设置 Clear/Reset 确认、命令变非模态通知）+ 四项交互（mode picker 靠右；运行中 Esc/标题栏 Stop 出确认；无滚动条卡片滚轮滚面板；引用标签跳转并框选）+ Tail（流式/折叠时不动鼠标按钮不灭；真实滚轮/中键/拖条才关；Tail 关闭后 Jump 自动出现；布局滚动后最后一片 stream/tool Markdown 长高、composer/抽屉变高仍不遮末条）+ 中键（未聚焦长卡片内启动后持续越过卡片滚面板；聚焦后只滚内层；普通区域仍滚面板）+ 卡片聚焦（只认左键；再次左键取消；框选文本/拖动不取消）+ Tab（固定五色；右键 Rename 置顶 / Close 置底 / Mark as unread / Copy working directory）。
    回归：无 chat surface 时权限仍弹原生 QuickPick；`autoAcceptPermissions=allowAll` 仍自动允许；Esc 焦点在输入框与卡片各试一次；Tail 日志看 `tail:off scroll` 是否只出现在真实滚动之后；**目录抽屉**：条数 30/0/越界/清空回显、0 时无「Recently used」分组、已开始会话无说明、地址栏 tip 只留路径；**本轮三项**：新会话 tab 紧贴源 tab 右侧、New session 进草稿页且双面恢复卡片退场、附件 chip 有 hover、卡片文件引用（气泡/回放/markdown/locations）框选正确行区间。
 2. **面板交互真机验收（本轮改动，最高优先）**：`npm run dev:host` → 按 `docs/03-验收清单.md`
-   **246–252** 逐条确认（滚轮门控与一张卡一条滚动条；Tail 打开即跟随、一滚就取消；四个开关
-   只影响当前会话而新会话继承；自动展开的新图标；最近目录的删除）。
+   **246–256** 逐条确认（滚轮门控、横向/中键嵌套与一张卡一条滚动条；Tail 打开即跟随、一滚就取消；四个开关
+   只影响当前会话而新会话继承；自动展开的新图标；最近目录删除及后续面板交互）。
    日志关键字：`focus:` / `wheel-card:` / `wheel-gate:` / `tail:`。
    **v1.8.2 补充**：空输入时 Send 灰、打字即亮；输入纯空白/换行仍灰；带附件可发；轮次中 Stop 可点。
    `/` 面板点面板空白处收起、点输入框不收起；Effort 按钮图标是三根递增信号条且与同排图标对齐。
@@ -107,7 +102,6 @@
 - **图标**：`npm run icon`（改 `scripts/make-icon.mjs` 顶部的 `MARKS` 几何后重跑；
   `--preview` 另出多尺寸预览图到系统临时目录）。`resources/icon.*` 是生成物，不要手改。
 - 校验/测试：`npm run test:unit`（vitest，秒级）· `npm test`（编译 + lint + 真实宿主测试）
-- 只跑部分宿主测试：`npm run pretest` 后 `npx vscode-test --grep "session manager"`
 - lint / 类型：`npm run lint` · `npm run typecheck`
 - 文档体检：`sh check-docs.sh`
 - agent 能力探针：`node scripts/probe-agent-init.mjs --agent "npx -y @agentclientprotocol/codex-acp" --session`

@@ -43,6 +43,7 @@ export const scrollClient = `
   var INNER_SCROLL_SELECTOR = '.thought-body, .tool-body, .tool-seg-out, .diff-body, .elic-preview';
   var activeScroller = null;
   var activeCard = null;
+  var middleGuard = null;
   // [CUSTOM- 2026-10-29] 在已聚焦卡片上按下左键：等 pointerup 确认"这是一次点击"
   // （没拖动、没框选文本、没点在按钮/链接上）后再取消聚焦。
   var pendingUnfocus = null;
@@ -77,11 +78,24 @@ export const scrollClient = `
     if (!window.getComputedStyle) { return false; }
     var cs = window.getComputedStyle(node);
     if (!cs || (cs.overflowY !== 'auto' && cs.overflowY !== 'scroll')) { return false; }
-    // [CUSTOM- 2026-10-29] 横向滚动条占掉 clientHeight，会让 scrollHeight 看起来
-    // 比 clientHeight 大（offsetHeight - clientHeight = 边框 + 横向滚动条的高度）。
-    // 不扣掉这一段，只有横向滚动条的 pre / table 会被误判成纵向可滚、吞掉面板滚轮。
-    var chrome = Math.max(0, (node.offsetHeight || 0) - (node.clientHeight || 0));
-    return node.scrollHeight > node.clientHeight + chrome + 1;
+    return node.scrollHeight > node.clientHeight + 1;
+  }
+
+  function isHorizScrollable(node) {
+    if (!node || node === container || node.nodeType !== 1) { return false; }
+    if (!window.getComputedStyle) { return false; }
+    var cs = window.getComputedStyle(node);
+    if (!cs || (cs.overflowX !== 'auto' && cs.overflowX !== 'scroll')) { return false; }
+    return node.scrollWidth > node.clientWidth + 1;
+  }
+
+  function nearestHorizScroller(node) {
+    var current = node;
+    while (current && current !== container) {
+      if (isHorizScrollable(current)) { return current; }
+      current = current.parentNode;
+    }
+    return null;
   }
 
   /**
@@ -129,20 +143,62 @@ export const scrollClient = `
     logScrollState('focus:' + (activeScroller ? classNameOf(activeScroller) : 'panel'), true);
   }
 
+  function restoreMiddleGuard() {
+    var guards = middleGuard;
+    if (!guards) { return; }
+    middleGuard = null;
+    for (var i = 0; i < guards.length; i++) {
+      var guard = guards[i];
+      guard.node.style.overflow = guard.overflow;
+      guard.node.style.overflowX = guard.overflowX;
+      guard.node.style.overflowY = guard.overflowY;
+    }
+  }
+
+  function guardMiddleAutoScroll(event) {
+    restoreMiddleGuard();
+    if (!container || !event || event.button !== 1 || !event.target
+        || !container.contains || !container.contains(event.target)) { return; }
+    var card = topCardOf(event.target);
+    if (card && card === activeCard) { return; }
+    var guards = [];
+    var current = event.target;
+    while (current && current !== container) {
+      if (current.nodeType === 1 && current.style
+          && ((current.matches && current.matches(INNER_SCROLL_SELECTOR) && isVertScrollable(current))
+            || isHorizScrollable(current))) {
+        guards.push({
+          node: current,
+          overflow: current.style.overflow || '',
+          overflowX: current.style.overflowX || '',
+          overflowY: current.style.overflowY || '',
+        });
+      }
+      current = current.parentNode;
+    }
+    if (!guards.length) { return; }
+    middleGuard = guards;
+    for (var i = 0; i < guards.length; i++) { guards[i].node.style.overflow = 'clip'; }
+  }
+
   /** 卡片重建（工具输出每个 chunk 都会重建 body）后，把焦点环挂到新容器上。 */
   function reclaimActive() {
-    if (!activeCard || !activeScroller) { return; }
-    var attached = document.contains ? document.contains(activeScroller) : !!activeScroller.parentNode;
+    if (!activeCard) { return; }
+    var attached = activeScroller
+      && (document.contains ? document.contains(activeScroller) : !!activeScroller.parentNode);
     if (attached) { return; }
-    if (document.contains && !document.contains(activeCard)) { activeScroller = null; activeCard = null; return; }
-    activeScroller = firstInnerScroller(activeCard);
-    if (activeScroller && activeScroller.classList) { activeScroller.classList.add(ACTIVE_CLASS); }
+    if (document.contains && !document.contains(activeCard)) { setActive(null); return; }
+    var next = firstInnerScroller(activeCard);
+    if (next) { setActive(next, activeCard); } else { setActive(null); }
   }
 
   function wheelDelta(event) {
-    var delta = event.deltaY || 0;
-    if (event.deltaMode === 1) { delta = delta * 16; }
-    else if (event.deltaMode === 2) { delta = delta * (container ? container.clientHeight : 400); }
+    var delta = { x: event.deltaX || 0, y: event.deltaY || 0 };
+    if (event.deltaMode === 1) { delta.x = delta.x * 16; delta.y = delta.y * 16; }
+    else if (event.deltaMode === 2) {
+      delta.x = delta.x * (container ? container.clientWidth : 400);
+      delta.y = delta.y * (container ? container.clientHeight : 400);
+    }
     return delta;
   }
 
@@ -158,6 +214,14 @@ export const scrollClient = `
     if (next < 0) { next = 0; }
     if (next > max) { next = max; }
     node.scrollTop = next;
+  }
+
+  function scrollHorizontal(node, delta) {
+    var max = node.scrollWidth - node.clientWidth;
+    var next = node.scrollLeft + delta;
+    if (next < 0) { next = 0; }
+    if (next > max) { next = max; }
+    node.scrollLeft = next;
   }
 
   /** 这张卡片现在还在长内容吗？（流式推理 / 运行中的工具 / 运行中的子 agent） */
@@ -258,14 +322,18 @@ export const scrollClient = `
     // [CUSTOM- 2026-10-29] 只有左键（button 0）会改变焦点；右键（上下文菜单）与中键
     // （自动滚动）都不碰它。合成事件没有 button 字段时按左键处理（预览探针 / 桩测试）。
     if (document.addEventListener) { document.addEventListener('pointerdown', function (event) {
+      guardMiddleAutoScroll(event);
       if (!container) { return; }
       if (event && typeof event.button === 'number' && event.button !== 0) { return; }
       var target = event && event.target;
-      if (!target || !container.contains || !container.contains(target) || target === container) {
+      if (!target || !container.contains || !container.contains(target)) {
         pendingUnfocus = null;
         setActive(null);
         return;
       }
+      var label = pressLabel(event);
+      if (label === 'messages-bar' || label === 'inner-bar') { pendingUnfocus = null; return; }
+      if (target === container) { pendingUnfocus = null; setActive(null); return; }
       var card = topCardOf(target);
       if (!card) { pendingUnfocus = null; setActive(null); return; }
       // [CUSTOM- 2026-10-29] 再次左键点击已聚焦的卡片 ⇒ 先记一笔，等 pointerup 判断
@@ -296,7 +364,8 @@ export const scrollClient = `
       if (!target || !container.contains || !container.contains(target)) { return; }
       if (topCardOf(target) !== pending.card) { return; }
       // 点在滚动条上不是"点卡片"。
-      if (pressLabel(event) === 'messages-bar') { return; }
+      var label = pressLabel(event);
+      if (label === 'messages-bar' || label === 'inner-bar') { return; }
       var x = typeof event.clientX === 'number' ? event.clientX : pending.x;
       var y = typeof event.clientY === 'number' ? event.clientY : pending.y;
       var dx = x - pending.x;
@@ -314,49 +383,46 @@ export const scrollClient = `
     // [CUSTOM- 2026-10-29] 手势被取消 / 窗口失焦：别让陈旧的 pendingUnfocus 影响下一次点击。
     if (document.addEventListener) { document.addEventListener('pointercancel', function () {
       pendingUnfocus = null;
+      restoreMiddleGuard();
     }, true); }
-    // [CUSTOM- 滚轮门控（capture + 非 passive）——按**指针位置**分流，两边互不牵连：
-    // · 指针落在**已聚焦卡片**里 ⇒ 只滚这张卡的内层滚动区（到边界就停，面板原地不动）；
-    // · 指针落在**未聚焦卡片**里、且那里确实有内层滚动区 ⇒ preventDefault 后滚面板 ——
-    //   这正是"卡片里的滚动条打断整块面板滚动"的病灶；
-    // · 指针离开卡片（面板空白 / 别的卡片 / 浮层）⇒ 走浏览器默认，滚的是面板；
-    // · 横向滚动（Shift+滚轮 / 触控板横滑）与 Ctrl/Cmd+滚轮（IDE 缩放）一律放行。
+    // [CUSTOM- 滚轮门控（capture + 非 passive）：纵向分量按焦点路由，横向分量独立处理。
+    // 未聚焦卡片不能再依赖原生滚动链，否则横向-only 容器与原生横条会吃掉纵向 wheel。
     if (document.addEventListener) { document.addEventListener('wheel', function (event) {
       if (!container || !event || !container.contains) { return; }
       var target = event.target;
       if (!target || !container.contains(target)) { return; }
-      if (event.ctrlKey || event.metaKey) { return; }
-      if (!event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)) { return; }
-      if (event.cancelable === false) { return; }
-      // [CUSTOM- 2026-10-29] 真实滚轮：先记下"用户意图"。必须在 topCardOf 的早退之前 ——
-      // 面板空白处的滚轮也走浏览器默认滚动，同样应该关掉 Tail。
+      if (event.ctrlKey || event.metaKey || event.shiftKey) { return; }
+      if ((!event.deltaY && !event.deltaX) || event.cancelable === false) { return; }
+      var delta = wheelDelta(event);
+      if (!delta.y) { return; }
+      // [CUSTOM- 2026-10-29] 面板空白处的滚轮也走浏览器默认滚动，同样应该关掉 Tail。
       userScrollAt = Date.now();
       var card = topCardOf(target);
       if (!card) { return; }
-      var delta = wheelDelta(event);
-      if (!delta) { return; }
       var focused = !!(activeCard && card === activeCard);
       // 聚焦卡片的滚动目标是"它自己的滚动区"；滚动区被重建（工具 body 每个 chunk 都会重建）
-      // 或内容缩到装不下时，退回落点所在的那一个。两者都没有 ⇒ 交回默认（面板自己滚）。
+      // 或内容缩到装不下时，退回落点所在的那一个。
       var own = focused && activeScroller
         && (document.contains ? document.contains(activeScroller) : !!activeScroller.parentNode)
         && isVertScrollable(activeScroller);
       var scroller = own ? activeScroller : nearestVertScroller(target);
-      if (!scroller) { return; }
+      var horizontal = delta.x ? nearestHorizScroller(target) : null;
       event.preventDefault();
-      if (focused) {
+      if (horizontal) { scrollHorizontal(horizontal, delta.x); }
+      if (focused && scroller) {
         // 卡片内部滚，面板没动：撤回刚才的"滚面板"意图，不关 Tail。
         userScrollAt = 0;
-        scrollInner(scroller, delta);
+        scrollInner(scroller, delta.y);
       } else {
-        writeTop(container.scrollTop + delta);
-        // [CUSTOM- 2026-10-29] 门控滚面板走的是程序写入口，scroll 事件会被标成程序写入；
-        // 但用户确实用滚轮滚了面板，按"一滚就关"显式取消 Tail。
+        if (focused) { setActive(null); }
+        writeTop(container.scrollTop + delta.y);
+        // 门控滚面板走程序写入口，但用户确实滚了面板，显式取消 Tail。
         cancelTail('scroll');
       }
       if (card !== lastGateCard) {
         lastGateCard = card;
-        logScrollState((focused ? 'wheel-card:' : 'wheel-gate:') + classNameOf(scroller), false);
+        logScrollState((focused && scroller ? 'wheel-card:' : 'wheel-gate:')
+          + classNameOf(scroller || horizontal || card), false);
       }
     }, { passive: false, capture: true }); }
     // [CUSTOM- 用户在内层容器里自己滚开 ⇒ 不再追尾（判据与面板的 pinned 相同）。
@@ -418,6 +484,7 @@ export const scrollClient = `
       document.addEventListener('mouseup', endUserScroll, true);
       // 键盘翻页也是用户滚动（焦点在输入卡/表单控件里时不算）。
       document.addEventListener('keydown', function (event) {
+        if (event && event.key === 'Escape') { restoreMiddleGuard(); }
         var key = event && event.key;
         if (key !== 'PageUp' && key !== 'PageDown' && key !== 'Home' && key !== 'End'
             && key !== 'ArrowUp' && key !== 'ArrowDown'
@@ -442,6 +509,7 @@ export const scrollClient = `
           barDragging = false;
           middleScrolling = false;
           pendingUnfocus = null;
+          restoreMiddleGuard();
           return;
         }
         reflow();
@@ -452,6 +520,7 @@ export const scrollClient = `
       barDragging = false;
       middleScrolling = false;
       pendingUnfocus = null;
+      restoreMiddleGuard();
     }); }
     jumpBtn.addEventListener('click', function () {
       pinned = true;
@@ -507,8 +576,8 @@ export const scrollClient = `
   /**
    * [CUSTOM- 一次按下落在哪一类控件上（粗粒度，够定位就行）。
    *
-   * -bar 后缀 = 落在**滚动条那条带子上**（offsetX 超出该元素的 clientWidth；Chromium 上
-   * 点滚动条的事件确实以元素本身为 target）。这一格就是"他拖的是不是这个条"的判据。
+   * -bar 后缀 = 落在**滚动条那条带子上**（事件坐标超出该元素的 clientWidth/clientHeight；
+   * Chromium 上点滚动条的事件确实以元素本身为 target）。这一格就是"他拖的是不是这个条"的判据。
    */
   function pressLabel(event) {
     var target = event && event.target;
@@ -516,17 +585,20 @@ export const scrollClient = `
     if (target.closest('.outline-sidebar')) { return 'outline'; }
     if (target.closest('#composer')) { return 'composer'; }
     if (container.contains(target)) {
-      // 「落在滚动条那条带子上」两种判据并用：offsetX > clientWidth 是 Chromium 上点自身滚动条
-      // 的特征；再用 clientX 与容器的右边界比一次 —— 合成事件（预览探针）没有 offsetX，但能给
-      // clientX，于是这一格**在探针里也验得了**（不能验的判据等于没写）。
-      var byOffset = typeof target.offsetX === 'number' && target.clientWidth
-        && target.offsetX > target.clientWidth;
+      // Chromium 点原生滚动条时以所属元素为 target；坐标落在 client 框之外就是滚动条带。
+      var byOffset = (typeof event.offsetX === 'number' && target.clientWidth
+          && event.offsetX > target.clientWidth)
+        || (typeof event.offsetY === 'number' && target.clientHeight
+          && event.offsetY > target.clientHeight);
       var byClient = false;
-      if (!byOffset && typeof event.clientX === 'number' && target.getBoundingClientRect) {
+      if (!byOffset && typeof event.clientX === 'number' && typeof event.clientY === 'number'
+          && target.getBoundingClientRect) {
         var rect = target.getBoundingClientRect();
-        byClient = rect.width > 0 && event.clientX > rect.left + target.clientWidth;
+        byClient = rect.width > 0 && (event.clientX > rect.left + target.clientWidth
+          || event.clientY > rect.top + target.clientHeight);
       }
-      return (byOffset || byClient) ? 'messages-bar' : 'messages';
+      if (byOffset || byClient) { return target === container ? 'messages-bar' : 'inner-bar'; }
+      return 'messages';
     }
     return 'outside';
   }
@@ -615,7 +687,8 @@ export const scrollClient = `
     var composerRect = composer && composer.getBoundingClientRect ? composer.getBoundingClientRect() : null;
     // [CUSTOM- 这次报障的**直接观测量**：滚动条已在末尾、末条记录的底边却还在输入卡底下。
     // cov=1 就是用户看到的那个画面；gap 是被盖住的像素（负数 = 尾巴在卡片上方，健康）。
-    // 有了它，下次不用再从 st/max/pad/last 里推——「日志里 cov 全是 0」即可排除这条链。
+    // cov=1 可以直接定案；cov=0 只代表没命中"接近底部且重叠"，内容长高后停在上方时
+    // 仍可能被盖住，所以还要结合 last/comp 与 pin/tail/dist 读。
     var atMax = container.scrollTop >= max - PIN_THRESHOLD;
     var visible = !!(lastRect && composerRect && composerRect.height > 0);
     var covered = !!(atMax && visible && lastRect.bottom > composerRect.top + 1);
@@ -736,13 +809,13 @@ export const scrollClient = `
    * · 反过来，内容被压缩到不再需要滚动时，Jump 还挂在屏幕上。
    * 所以三个写高度的模块（composer / elicitationView / permissionDrawer）改完变量就喊一声。
    *
-   * 贴底时**顺手跟到底**（含刚长出来的那段留白）：这正是「贴着底部」该有的样子，
-   * 也是用户明确要过的语义（"消息区的触底判断保持在输入框上面"）。上翻看历史的人不受影响 ——
-   * keepBottom 取的是变化**之前**的 pinned。
+   * 贴底或 Tail 开启时**顺手跟到底**（含刚长出来的那段留白）。pinned 只描述几何，
+   * tail 才是持续跟随授权；真实用户滚动会先取消 Tail，所以 pinned || tail 不会抢阅读视口。
+   * keepBottom 必须取变化**之前**的值。
    */
   function reflow() {
     if (!container) { return; }
-    var keepBottom = pinned;
+    var keepBottom = pinned || tail;
     recompute();
     if (keepBottom) {
       // [CUSTOM- 原来这里直写 scrollTop（绕过 writeTop）⇒ 它引发的 scroll 事件会被
@@ -779,14 +852,13 @@ export const scrollClient = `
     });
   }
 
-  /** Scroll to the bottom, but only when the user has not scrolled away. */
+  /** Tail 开启时持续置底；关闭时只重算 pinned / Jump，绝不移动视口。 */
   function follow() {
     if (!container || followPending) { return; }
-    // [CUSTOM- Tail 关掉 ⇒ **绝不自动滚**（"别动我的视口"）。开着时仍要求贴底 ——
-    // 用户一滚动 Tail 就被取消，所以"tail 开 + 不贴底"只会出现在程序把视口放到中间的那一瞬间。
-    if (!pinned || !tail) {
-      // [CUSTOM- 2026-10-29] Tail 关闭 / 暂时不贴底时内容仍可能长高；不重算的话
-      // 'pinned' 会烂在旧值，Jump 一直不出现（日志里的 pin=1 dist=13327）。
+    // pinned 只是几何观测：浏览器布局滚动可能留下 tail=true / pinned=false，
+    // 真实用户滚动则会先取消 Tail，因此持续跟随只看 tail。
+    if (!tail) {
+      // Tail 关闭时内容仍可能长高；不重算的话 pinned 会烂在旧值，Jump 一直不出现。
       // 只读几何、更新 pinned/Jump，绝不写 scrollTop。
       scheduleRecompute();
       // [CUSTOM- 用户在往上翻：**不跟是对的**（不该抢他的视口）。但"面板没到底"
@@ -807,7 +879,7 @@ export const scrollClient = `
     NS.dom.schedule(function () {
       followPending = false;
       if (!container) { return; }
-      if (!pinned || !tail) { logScrollState('unpinned-before-frame'); recompute(); return; }
+      if (!tail) { logScrollState('unpinned-before-frame'); recompute(); return; }
       var height = container.scrollHeight;
       lastScrollHeight = height;
       var max = height - container.clientHeight;

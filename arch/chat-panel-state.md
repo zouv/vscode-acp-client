@@ -267,7 +267,8 @@ scroll 事件**：底部留白（输入卡 / 表单抽屉 / 权限抽屉的高�
    时才读（`diagAllows`，与日志那套节流/配额同一判据）。这是那个长任务里最值得砍的一半：真机日志里
    `skip-unpinned` / `grew-unpinned` 就是这条链打出来的，流式/回放期间几十次每秒。
 2. **回填应用分帧**：`transcriptView.queueMarkdown` 按时间片（每片 ≤ 8ms）落地，剩下的排到下一帧
-   ⇒ 单任务不超过一帧。每片只做两个便宜收尾（`reassert` / `stickyUser.schedule`），`rail.reflow()`
+   ⇒ 单任务不超过一帧。每片只做三个可合帧收尾（`reassert` / `follow` / `stickyUser.schedule`），
+   其中 `follow` 让 stream/tool Markdown 撑高后也继续保持 Tail 置底；`rail.reflow()`
    只在整批结束时点一次 —— 逐片点名时那趟全量量测自己就成 50ms+ 的长任务（`#mdsliceprobe` 量到过）。
    一条回填抛错只跳过它自己（**先推游标再干活**），否则它会被每帧重试一次（死循环 + 刷屏）。
 
@@ -287,7 +288,8 @@ scroll 事件**：底部留白（输入卡 / 表单抽屉 / 权限抽屉的高�
 各自 12 条/10s 与日志桥 30 条/10s 的配额吞了。所以加了三条定向采样，读法：
 
 - **`cov=1` / `gap=N`**：`cov` = 已在滚动范围末尾（`st >= max-32`）且末条记录底边 **压在输入卡顶边之下**；
-  `gap` = 末条底边 − 卡片顶边（负数 = 卡片上方，健康）。用户看到的"触底却看不全"就是 `cov=1`。
+  `gap` = 末条底边 − 卡片顶边（负数 = 卡片上方，健康）。`cov=1` 可直接定案；但 `cov=0` 不能排除
+  “内容长高后停在上方、尚未 atMax”的遮挡，还要结合 `last/comp` 与 `pin/tail/dist` 读。
 - **`wheel dy=N`**：滚轮事件的下一帧采样一次。用来区分"他滚了一格"与"位置根本没动"（后者是手势没落到
   `#messages` 上，见同一文件的 `press@messages-bar`）。
 - **`heal-skip:<原因>`**：自愈没出手的理由（`unpinned` / `no-tail` / `not-atmax` / `no-api` /
@@ -332,9 +334,10 @@ Tab 栏：`#settingsBtn` 用 `margin-left: auto` 固定在条带最右；`#newTa
 
 | 机制 | 规则 |
 |---|---|
-| 聚焦（`setActive` / `activeScroller` / `activeCard`） | `pointerdown`（document，capture）**只认左键**（`button === 0`；合成事件缺 `button` 时按左键）落在卡片上 ⇒ 该卡片**离落点最近**的纵向滚动容器（落点在标题栏这类"不在滚动区里"的地方时取卡片里第一个）拿到 `.scroll-active`。**再次左键原地点击同一张卡片**（未拖动 >4px、未框选文本、没点在按钮/链接/折叠头/文件 chip 等交互控件上）⇒ `setActive(null)` 取消聚焦。右键（上下文菜单）与中键（自动滚动）都不改变焦点。点面板空白 / 输入卡 / 标签栏即交还。切会话（`restore`）也交还。 |
-| 滚轮门控（document `wheel`，`capture` + `passive:false`） | 按**指针位置**分流，两边互不牵连：指针在**已聚焦**卡片内 ⇒ 只滚它自己的滚动区，**到边界就停、面板原地不动**（`scrollInner` 自己夹紧，**不**把余量交给面板 —— 交还过一版，手感就是"卡片和面板一起滚"）；指针在**未聚焦**卡片内且有内层滚动区 ⇒ `preventDefault` + `writeTop(面板 + delta)`；指针离开卡片 ⇒ 不拦截，浏览器默认滚面板。**横向** delta（Shift+滚轮 / 触控板横滑）与 Ctrl/Cmd+滚轮（IDE 缩放）一律放行。内层滚动区另有一道 CSS 保险：`overscroll-behavior: contain`（`.thought-body` / `.tool-body` / `.tool-seg-out`）——浏览器把某串滚轮判成不可取消时，滚动链也不会从卡片传到面板。**2026-10-29**：候选纵向滚动区**只认 `INNER_SCROLL_SELECTOR`**（`.thought-body` / `.tool-body` / `.tool-seg-out` / `.diff-body` / `.elic-preview`）；`.bubble pre` / `.table-wrap` 这类 `overflow-x:auto` 的元素计算出的 `overflowY` 也是 `auto`，横向滚动条还会让 `scrollHeight` 大一圈，不能当纵向滚动区。`isVertScrollable` 另扣掉 `offsetHeight - clientHeight`（边框 + 横向滚动条）再比较。 |
-| 一张卡一条滚动条 | 自动展开时外层 `.tool-body` 是视口，里层 `.tool-seg-out`（510）/`.diff-body`（340）**不再各自限高**（`styles.ts` 里 `.tool.auto-expanded .tool-body .tool-seg-out` 与 `.tool-body .tool-seg-out .diff-body` 的 `max-height: none`）。不这么做就是"滚动条套滚动条"，用户 2026-10-28 报的"卡边多层嵌套"就是它。 |
+| 聚焦（`setActive` / `activeScroller` / `activeCard` / `reclaimActive`） | `pointerdown`（document，capture）**只认左键**（`button === 0`；合成事件缺 `button` 时按左键）落在卡片上 ⇒ 该卡片**离落点最近**的纵向滚动容器（落点在标题栏这类"不在滚动区里"的地方时取卡片里第一个）拿到 `.scroll-active`。**再次左键原地点击同一张卡片**（未拖动 >4px、未框选文本、没点在按钮/链接/折叠头/文件 chip 等交互控件上）⇒ `setActive(null)` 取消聚焦。右键（上下文菜单）与中键（自动滚动）都不改变焦点。`pressLabel` 用事件 `offsetX/offsetY` 与目标 client 几何识别原生横条/纵条，两类滚动条均不参与聚焦或二次点击取消；只有 `#messages` 自身滚动条进入面板拖条路径。点面板空白 / 输入卡 / 标签栏即交还。切会话（`restore`）也交还。内层重建后 `reclaimActive` 找同卡接替者，没有则清焦点，不能留下半失效状态。 |
+| 滚轮门控（document `wheel`，`capture` + `passive:false`） | 按**指针位置**分流：已聚焦卡片只滚有效 `activeScroller`，到边界就停、面板不动（`scrollInner` 夹紧，不交余量）；未聚焦卡片只要有纵向 `deltaY`，无论是否命中内层或原生横条，都 `preventDefault` + `writeTop(面板 + delta)` 并取消 Tail，不能因 `!scroller` 早退。离开卡片、Ctrl/Cmd+wheel、纯横向与 Shift+wheel 保持原生；`cancelable=false` 不做补偿滚动。斜向输入由 `wheelDelta` 归一化双轴后按轴处理：纵向走焦点规则，横向经 `nearestHorizScroller` 写最近容器 `scrollLeft`。纵向候选只认 `INNER_SCROLL_SELECTOR`（`.thought-body` / `.tool-body` / `.tool-seg-out` / `.diff-body` / `.elic-preview`）；横向识别独立使用 `overflowX` + 真实横向溢出，不把 pre/table 混入纵向白名单。`isVertScrollable` 用标准 `overflowY` + `scrollHeight > clientHeight + 1`，不再扣横条高度而漏掉小幅真实纵向溢出。 |
+| 一张卡一条滚动条 | 自动展开时外层 `.tool-body` 是视口，里层 `.tool-seg-out`（510）/`.diff-body`（340）**不再各自限高**；`styles.ts` 同时覆盖自动展开的直接 `.diff-body` 与 `.tool-seg-out` 内嵌 diff，均设 `max-height:none`，保留横向 `overflow:auto`。不这么做就是"滚动条套滚动条"。 |
+| 中键原生自动滚动（`guardMiddleAutoScroll` / `restoreMiddleGuard`） | Chromium autoscroll 由浏览器内部驱动，**不反复派发 `wheel`**，会绕过门控直接选中内层。未聚焦卡片在 `pointerdown(button===1)` 时收集落点到 `#messages` 间的**全部**有效纵向白名单与真实横向候选，暂存各节点 inline overflow 并统一设为 **`overflow:clip`**（`hidden` 仍是滚动候选），不取消默认动作，让原生滚动落到面板；已聚焦卡片跳过。保护持续到下一次按下，并在 `pointercancel` / Escape / blur / 页面隐藏时逐一精确恢复；下一次左键先恢复再聚焦。不能下一 macrotask 就恢复，否则 Chromium 可能尚未完成 autoscroll 启动。 |
 | 自动追尾（`flushTails`） | `MutationObserver`（`childList`+`characterData`，subtree）收"变了哪一块"，布局读取与写入推迟到 `NS.dom.schedule` 那一帧。一个容器要同时满足：仍纵向可滚 / `innerPinned` 不是 false（用户没在里面往上滚过）/ 所属卡片 `isLiveCard`（`.thought-spin`、`.tool-status.tc-in_progress`、`.subagent-state[data-state="running"]`）才跟到 `scrollHeight`。 |
 | 样式 | `.messages .scroll-active { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }` —— 用 outline 不用 border，聚焦瞬间不产生 1px 布局位移。 |
 
@@ -351,8 +354,7 @@ Tab 栏：`#settingsBtn` 用 `margin-left: auto` 固定在条带最右；`#newTa
 **诊断**：`focus:<容器类>`（聚焦变化，强制记）、`wheel-card:<容器类>` / `wheel-gate:<容器类>`
 （只在**换了卡片**时记一条，避免每 700ms 一条把日志桥的共享配额吃光，见 §5.46 的配额规矩）。
 
-**验收**：桩 DOM 9 条（`src/test/chat-client.test.ts` 的「scroll: 内层滚动卡片的焦点门控与自动追尾」）。
-真机验收见 `docs/03-验收清单.md`。
+**验收**：`src/test/chat-client.test.ts` 的 scroll 桩套件覆盖无纵向内层、横向-only、小幅纵横溢出、双轴输入、失效焦点、完整中键候选链与滚动条焦点隔离；当前完整宿主 **650 passing**。`node scripts/preview-records.mjs --wheel-scroll-probe` 用 CDP 真实坐标输入覆盖十档 wheel、原生横条点击和直接/嵌套 diff 几何；`--middle-scroll-probe` 覆盖未聚焦、聚焦、普通区域、横向-only、横向工具与纵向嵌横向六档。两者都检查实际滚动位置、Tail、样式恢复与 pageerror；合成 `PointerEvent` 不会触发原生 autoscroll，不能替代。真机验收见 `docs/03-验收清单.md` 246–249、256。
 
 ### 5.54 Tail（消息面板自动追尾）与会话级开关的「落定」（2026-10-28）
 
@@ -364,10 +366,11 @@ Outline 都是会话级**——在一个会话里拨它只影响这个会话，�
 | 项 | 规则 |
 |---|---|
 | 数据 | `UiPrefs.tailBySession`（会话 → 布尔）+ `tailDefault`。宿主存 `globalState`，两个面同一份。**默认 `tailDefault` = true** —— 不开按钮时也照旧"贴底跟随"，那是改动前就有的行为，按钮只是把它显式化。 |
-| 运行时 | `scroll.ts` 的 `tail` 旗标：`setTail(on, immediate)`；`follow()` 的判据是 **`pinned && tail`** —— **Tail 关掉 ⇒ 绝不自动滚**（"别动我的视口"），开着时才跟到底。`pinned` 仍然如实反映"贴底"，Tail **不许伪造它**（大纲跳转、探针、`reflow` 都读它）。`immediate` 只在**用户点按钮**时为真（换会话由 `restore` 决定落点）。 |
+| 运行时 | `scroll.ts` 的 `tail` 旗标：`setTail(on, immediate)`；`follow()` 只看 **`tail`**，`reflow()` 以 **`pinned || tail`** 决定是否保持底部。**Tail 关掉 ⇒ follow 绝不自动滚**（"别动我的视口"），开着时持续跟到底，不被布局滚动留下的 `pinned=false` 锁死。`pinned` 仍如实反映几何上的"贴底"，Tail **不许伪造它**（Jump、探针都读它）。`immediate` 只在**用户点按钮**时为真（换会话由 `restore` 决定落点）。 |
 | 退出路径 | ① **真实用户滚动**改变了阅读进度 → `cancelTail('scroll')`。判据不是“非程序写入”本身（浏览器 scroll anchoring / 内容折叠后的夹紧 / 布局重排也会改 scrollTop），而是**用户意图**：wheel（document 门控）、拖 `#messages` 滚动条（pointerdown 落在 messages-bar）、中键自动滚动（button 1，持续到 pointerup）、键盘翻页（PageUp/PageDown/Home/End/方向键），窗口 800ms；② 大纲跳到某条记录（`jumpTo`）；③ 切会话恢复到用户自己选的中间位置（`restore`）。都只改这个会话那一条记录，不动默认值。 |
 | 滚轮门控与 Tail | 指针在**未聚焦**卡片的内层滚动区时，门控用 `writeTop(panel + delta)` 滚面板；它走的是程序写入口，所以该分支**显式** `cancelTail('scroll')`。滚**已聚焦**卡片的内部不关 Tail（面板没动，滚轮意图撤回）。 |
-| Tail 关闭时的 Jump | `follow()` 在 `!pinned || !tail` 时每帧最多调度一次 `recompute()`（只读几何、更新 pinned/Jump，**不写 scrollTop**）。没有它，Tail 关闭后内容长高但无 scroll 事件，Jump 会一直不出现（真机日志出现过 `pin=1 dist=13327`）。 |
+| Markdown 异步回填 | `transcriptView.afterMarkdownSlice` 在 `reassert()` 后调一次 `follow()`，覆盖 stream / tool key / 普通 patch 三条路径；普通 patch 的重复通知由现有 rAF 合帧。恢复中间阅读位置已取消 Tail，所以不会与 `reassert()` 抢视口。 |
+| Tail 关闭时的 Jump | `follow()` 在 `!tail` 时每帧最多调度一次 `recompute()`（只读几何、更新 pinned/Jump，**不写 scrollTop**）。没有它，Tail 关闭后内容长高但无 scroll 事件，Jump 会一直不出现（真机日志出现过 `pin=1 dist=13327`）。 |
 | 诊断 | `scroll#` 行带 `tail=0|1`；`setTail` / `cancelTail` 真正翻转时强制记 `tail:on` / `tail:off <scroll|restore>`；scroll 来源分 `user-scroll` / `layout-scroll` / `scroll-after-program`。 |
 
 **「落定」（`seedKnown`，四个模块同一件事）**：光有"按会话 + 默认值"还不够 —— 一个没有记录的
@@ -386,5 +389,6 @@ agent 的 `session/list`），删不掉源数据 ⇒ `SessionHistoryStore` 用**
 两个来源时统一过滤；同一目录再新建会话即自动恢复（`upsertNew` 里 `undismiss`）。客户端点完立刻
 把行拿掉（不等往返），再发 `removeRecentDirectory` 让宿主持久化并回一份新候选。
 
-**验收**：桩 DOM 7 条（Tail 4 + Tail 运行时 1 + Times 落定 1 + 目录删除 1）。
-真机见 `docs/03-验收清单.md`。
+**验收**：桩 DOM 覆盖 Tail 开关、真实/布局滚动、布局滚动后的 `follow/reflowNow`、Jump，以及 stream/tool Markdown 时间片的跟随接线。
+真 Chromium `#elictailfollowprobe` 同时摆出 composer 与表单抽屉：先形成 `Tail=true / pinned=false`，再只让末条 stream Markdown 长高；
+通过判据是 Tail 仍开、`atMax=true` 且末条底边不超过最高可见遮挡层顶边（1px 容差），不能只看滚动条。真机见 `docs/03-验收清单.md`。

@@ -729,6 +729,7 @@ export function styles(): string {
      非自动展开的卡片同理：视口是 .tool-seg-out（510），里面的 diff 不再自己限高。
      结果：一个卡片恰好一条纵向滚动条，scroll.ts 的"最近滚动容器"也永远只有唯一答案。 */
   .messages .tool.auto-expanded .tool-body .tool-seg-out,
+  .messages .tool.auto-expanded .tool-body .diff-body,
   .tool-body .tool-seg-out .diff-body { max-height: none; }
 
   /* [CUSTOM- 内层滚动区**不许把滚动链传给面板**（2026-10-28）。滚轮的拦截在 scroll.ts，
