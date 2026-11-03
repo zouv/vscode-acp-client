@@ -15,9 +15,10 @@
 ## 状态快照
 
 - **最近更新**：2026-11-03
-- **整体状态**：v1.9.1 发布中；当前改动包含消息区滚动修复与压缩会话完整历史回放。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
-- **当前分支（必填）**：`main`；用户已授权 v1.9.1 的 commit/push、打包与 GitHub Release 上传，不另建分支。
+- **整体状态**：v1.9.1 已发布为 Latest（tag `bd1bfc6`）；VSIX 已上传并核对摘要。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
+- **当前分支（必填）**：`main`；v1.9.1 已按授权提交推送、打包并上传 GitHub Release，不另建分支。
 - **最后验证状态**（2026-11-03）：lint/typecheck ✅；unit **175 / 27 文件** ✅；完整宿主 **650 passing** ✅；完整 Chromium preview、横向 wheel 十档 + 横条点击 + diff 几何探针、中键六档探针均通过且无 pageerror。
+  GitHub Actions 四格 CI 通过；VSIX `vscode-acp-client-1.9.1.vsix`（510767 字节）SHA256 `67d646dbe1ef903aa58baa15a53d527febc07f9701470a3e20a36c44aa7463f1`，Release 附件摘要一致。
   真实 agent 的 `npm run dev:host` 人工验收尚未执行；远程 CI 以 GitHub Actions 为准。
 
 
