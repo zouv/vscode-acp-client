@@ -15,14 +15,14 @@
 ## 状态快照
 
 - **最近更新**：2026-11-04
-- **整体状态**：v1.10.0 发布进行中；本地验证已完成，发布提交、CI、打包与 GitHub Release 上传尚待完成。v1.9.0 草稿仍留在 GitHub，本次不动。
-- **当前分支（必填）**：`main`；按用户授权直接在 main 提交推送、打包并上传 GitHub Release，不另建分支。Side Chat 改动随本次 release commit 提交。
-- **最后验证状态**（2026-11-04）：Webview 语法检查、lint/typecheck、check-docs ✅，unit **177 / 27 文件** ✅，完整宿主 **701 passing** ✅；来源标题、Main/Side 偏好隔离、重复投影收敛、重载/release/Reset 均有自动回归。远程 CI 待发布提交后运行；真实 agent 的 `npm run dev:host` 人工验收尚未执行；真机验收 257–258 未做。
+- **整体状态**：v1.10.0 已发布为 Latest（release commit `6bd0609`，tag `v1.10.0`）；VSIX 已上传并核对摘要。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
+- **当前分支（必填）**：`main`；v1.10.0 已按授权提交推送、打包并上传 GitHub Release，不另建分支。
+- **最后验证状态**（2026-11-04）：Webview 语法检查、lint/typecheck、check-docs ✅，unit **177 / 27 文件** ✅，完整宿主 **701 passing** ✅；GitHub Actions 四格 CI 通过。VSIX `vscode-acp-client-1.10.0.vsix`（517684 字节）SHA256 `0a39e0e6cb0fcb6d1f65b3bf8f5678f5cea0ba9701ab616ee46c50eaf232897f`，Release 附件摘要一致。真实 agent 的 `npm run dev:host` 人工验收尚未执行；真机验收 257–258 未做。
 
 
 ## 当前任务（In Progress）
 
-- **v1.10.0 发布（2026-11-04 进行中）**：版本与发布文档已更新，本地全量验证通过；下一步 release commit/push → 四格 CI → tag/VSIX 核对 → GitHub Release draft/核对/Latest → HANDOFF 收尾。真实 agent 验收仍未做。
+- **Side Chat 真实验收（已随 v1.10.0 发布 / 待做）**：按「下一步」第一条执行 `npm run dev:host`，覆盖主/Side 工具栏隔离、主双面同步、全局设置共享、来源标题、Side 关闭/重载/Reset，以及真实 agent fork、权限/表单、通知与关闭清理。
 
 - **Jump / Tail 语义修正（已随 v1.9.2 发布 / 待真机验收）**：Jump 置底并恢复当前会话追尾、不改 `tailDefault`；无会话焦点与 `uiPrefs → boot` 顺序已修，真实 Jump click / follow / 草稿与关闭会话 / 偏好顺序回归已补。lint/typecheck ✅、unit **175 / 27 文件** ✅、完整宿主 **657 passing** ✅、完整 Chromium preview ✅、check-docs ✅。下一步 `npm run dev:host` 按 `docs/03-验收清单.md` 257–258 验证持续跟随、新会话默认值、草稿/关闭会话归属与重载偏好。以下为既有待真机验收项。
 
