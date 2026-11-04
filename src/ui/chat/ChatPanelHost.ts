@@ -51,7 +51,7 @@ import {
 } from '../../config/SettingScope';
 // [CUSTOM- 回放结束时的 markdown 预渲染（见 prefillReplayMarkdown）。
 import type { TranscriptEntry } from './transcript/types';
-import type { IChatPanel, PanelContext } from './panelContract';
+import type { IChatPanel, PanelContext, SideChatOpener } from './panelContract';
 import { primaryAgentName, getAgentNames, getAgentConfig, getAgentKind } from '../../config/AgentConfig';
 import { profileFor } from '../../agents/AgentProfile';
 import { viewSurface, type ChatSurface, type SurfaceKey } from './ChatSurface';
@@ -127,8 +127,103 @@ const STRUCTURAL_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   'customModels',
 ]);
 
-/** [CUSTOM- globalState key for the outline pin/width prefs. */
+/** [CUSTOM- globalState key for main-scoped and shared UI prefs. */
 const UI_PREFS_KEY = 'vac.outlinePrefs.v1';
+const SIDE_UI_PREFS_KEY = 'vac.sideUiPrefs.v1';
+
+type UiPrefsScope = 'main' | 'side';
+
+const DEFAULT_UI_PREFS: UiPrefs = { outlineMode: 'popup', outlineWidth: 240 };
+const SESSION_FLAG_PREF_KEYS = [
+  'timesBySession', 'tailBySession', 'outlineOpenBySession', 'autoExpandBySession',
+] as const;
+const SCOPED_UI_PREF_KEYS = [
+  'outlineMode', 'outlineWidth',
+  'timesBySession', 'timesDefault',
+  'tailBySession', 'tailDefault',
+  'outlineOpenBySession', 'outlineOpenDefault',
+  'autoExpandBySession', 'autoExpandDefault',
+] as const;
+const MAIN_SCOPED_UI_PREF_KEYS = [...SCOPED_UI_PREF_KEYS, 'tabOrder'] as const;
+const GLOBAL_UI_PREF_KEYS = [
+  'autoExpandKinds', 'autoExpandToolHeight', 'autoExpandThoughtHeight',
+  'flatTools', 'composerMaxWidth', 'inputMaxHeight', 'sendKey',
+  'defaultModelByAgent', 'defaultEffortByAgent', 'recentDirectoryLimit', 'markdownStyle',
+] as const;
+
+function copyDefinedUiPrefs(
+  target: UiPrefs,
+  source: UiPrefs | null,
+  keys: readonly (keyof UiPrefs)[],
+): void {
+  if (!source) { return; }
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined) { Object.assign(target, { [key]: value }); }
+  }
+}
+
+function scopedUiPrefsOf(prefs: UiPrefs): UiPrefs {
+  const scoped: UiPrefs = { outlineMode: prefs.outlineMode, outlineWidth: prefs.outlineWidth };
+  copyDefinedUiPrefs(scoped, prefs, SCOPED_UI_PREF_KEYS);
+  return scoped;
+}
+
+function restoredSideUiPrefs(prefs: UiPrefs): UiPrefs {
+  const restored = scopedUiPrefsOf({ ...DEFAULT_UI_PREFS, ...prefs });
+  for (const key of SESSION_FLAG_PREF_KEYS) { restored[key] = {}; }
+  return restored;
+}
+
+function defaultPanelUiPrefs(): UiPrefs {
+  return {
+    outlineMode: 'popup',
+    outlineWidth: 240,
+    tabOrder: [],
+    timesBySession: {},
+    timesDefault: false,
+    tailBySession: {},
+    tailDefault: true,
+    outlineOpenBySession: {},
+    outlineOpenDefault: false,
+    autoExpandBySession: {},
+    autoExpandDefault: false,
+    autoExpandKinds: ['thought', 'tool'],
+    autoExpandToolHeight: 360,
+    autoExpandThoughtHeight: 240,
+    flatTools: false,
+    composerMaxWidth: 720,
+    inputMaxHeight: 320,
+    sendKey: 'enter',
+    defaultModelByAgent: {},
+    defaultEffortByAgent: {},
+    recentDirectoryLimit: 8,
+    markdownStyle: 'editor',
+  };
+}
+
+function uiPrefValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) { return true; }
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') { return false; }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) { return false; }
+    return left.every((value, index) => uiPrefValuesEqual(value, right[index]));
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  if (!uiPrefValuesEqual(leftKeys, rightKeys)) { return false; }
+  return leftKeys.every(key => uiPrefValuesEqual(leftRecord[key], rightRecord[key]));
+}
+
+function uiPrefsChanged(
+  before: UiPrefs,
+  after: UiPrefs,
+  keys: readonly (keyof UiPrefs)[],
+): boolean {
+  return keys.some(key => !uiPrefValuesEqual(before[key], after[key]));
+}
 
 // 草稿页的配置项/命令快照，按 agent 存。
 // 为什么要持久化：VS Code 重载后宿主内存里的活动会话**全没了**，而"全新窗口点 + 时输入卡
@@ -186,6 +281,14 @@ interface SessionLabelOverride {
   archived?: boolean;
 }
 
+const SIDE_MESSAGE_TYPES = new Set([
+  'ready', 'sendPrompt', 'cancelTurn', 'cancelSubagent',
+  'permissionAnswer', 'elicitationAnswer', 'renderMarkdown',
+  'copy', 'clientLog', 'openLink', 'openFile', 'setUiPref',
+  'detachFile', 'attachPath', 'attachImage', 'setMode', 'setModel',
+  'setConfigOption', 'needToolView', 'openTerminal', 'sideFocus', 'sideClose',
+]);
+
 export class ChatPanelHost implements IChatPanel, PermissionPresenter, ElicitationPresenter {
 
   // 单视图 → 多 surface（侧边栏 + 编辑区）。
@@ -193,6 +296,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // `lastActive` 只用于「把某个面提到前面」（附件 chip），不参与路由决策。
   private readonly surfaces = new Map<SurfaceKey, ChatSurface>();
   private lastActive: SurfaceKey | null = null;
+  private sideChatOpener: SideChatOpener | null = null;
   /** Which session each surface is showing. The two surfaces focus independently. */
   private readonly surfaceFocused = new Map<SurfaceKey, string | null>();
   /**
@@ -307,8 +411,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   private readonly notifier: SessionNotifier;
   /** [CUSTOM- 每会话的轮次序号，只用来给 turn-done 通知一个稳定去重键。 */
   private readonly turnSeq: Map<string, number> = new Map();
-  /** [CUSTOM- Outline pin/width prefs, cached from globalState. */
+  /** [CUSTOM- Main-scoped and shared prefs, cached from globalState. */
   private uiPrefs: UiPrefs | null = null;
+  private sideUiPrefs: UiPrefs | null = null;
   // [CUSTOM- agent → 它最后一次会话的配置项/命令快照（草稿页拿它渲染输入卡）。
   // 只由 rememberAgentOptions 写；**不是**可写状态——用户真正生效的那份永远在 SessionManager。
   private readonly draftOptions: Map<string, AgentOptionSnapshot> = new Map();
@@ -347,6 +452,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // 合帧队列 + 标签栏快照签名（见 refreshSessions）。
   private readonly outbox: Outbox;
   private lastSessionsSignature: string | null = null;
+  private lastSideSessionsSignature: string | null = null;
 
   private readonly updateListener: SessionUpdateListener;
   private readonly subscriptions: vscode.Disposable[] = [];
@@ -384,6 +490,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     );
     this.sessionUpdateHandler = sessionUpdateHandler;
     this.uiPrefs = this.globalState?.get<UiPrefs>(UI_PREFS_KEY) ?? null;
+    const storedSideUiPrefs = this.globalState?.get<UiPrefs>(SIDE_UI_PREFS_KEY) ?? null;
+    if (storedSideUiPrefs) {
+      this.sideUiPrefs = restoredSideUiPrefs(storedSideUiPrefs);
+      void this.globalState?.update(SIDE_UI_PREFS_KEY, this.sideUiPrefs);
+    }
     // [CUSTOM- 上一次退出时开着的会话（可能是上一次进程留下的 —— 本次还没人写它）。
     this.openSessions = this.globalState?.get<OpenSessionsSnapshot>(OPEN_SESSIONS_KEY) ?? null;
     // [CUSTOM- 草稿页的配置项/命令快照（重载窗口后仍可用）。
@@ -433,6 +544,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     on('agent-stderr', (evt: { line?: string }) => this.noteAgentStderr(evt?.line ?? ''));
 
     on('session-created', (sessionId: string, _agentName: string, origin?: string) => {
+      if (origin === 'side') {
+        refresh();
+        return;
+      }
       // [CUSTOM- 会话一建好就把它的配置项/命令收进草稿页快照——下一次点「+」用的
       // 就是这一份。
       this.rememberAgentOptions(sessionId);
@@ -455,6 +570,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       }
     });
     on('session-closed', (sessionId: string, _agentName: string, reason: CloseReason) => {
+      if (this.surfaceFocused.get('side') === sessionId) {
+        this.surfaceFocused.set('side', null);
+      }
       // Release everything keyed by this session, then tell the client so a
       // closed tab disappears immediately rather than waiting for the focus
       // change that follows.
@@ -539,6 +657,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // The router owns focus decisions, but a focus change originating from
       // elsewhere (e.g. the tree) must still reach an attached panel.
       this.focused = { agentName, sessionId };
+      if (this.lastActive && this.lastActive !== 'side') {
+        this.surfaceFocused.set(this.lastActive, sessionId);
+      }
       // [CUSTOM- Focusing a session consumes its unread marker, and
       // the strip has to be told — otherwise the attention dot lingers.
       if (sessionId) { this.unread.delete(sessionId); }
@@ -555,8 +676,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // `SessionUpdateHandler`，把 agent 推送的 `config_option_update` / `available_commands_update`
     // 落成会话状态后 emit。哪天那条订阅被摘掉，快照会**静默停止更新**（斜杠补全一起坏），
     // 而"某个事件没人 emit"这类缺口测试抓不到（见 pitfalls #65）。
-    on('config-options-changed', (sessionId: string) => this.rememberAgentOptions(sessionId));
-    on('available-commands-changed', (sessionId: string) => this.rememberAgentOptions(sessionId));
+    on('config-options-changed', (sessionId: string) => {
+      if (!sessionOf(this.sessionManager, sessionId)?.sideChat) { this.rememberAgentOptions(sessionId); }
+    });
+    on('available-commands-changed', (sessionId: string) => {
+      if (!sessionOf(this.sessionManager, sessionId)?.sideChat) { this.rememberAgentOptions(sessionId); }
+    });
 
     // [CUSTOM- 本仓库第一次用 onDidChangeConfiguration。理由不是"同步方便"：
     // 面板把这个配置项**渲染成了一个控件**，控件显示过期值就是在撒谎（与 pitfalls #29 同族）。
@@ -591,6 +716,35 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.attachSurface(viewSurface(view), ctx);
   }
 
+  setSideChatOpener(opener: SideChatOpener | null): void {
+    this.sideChatOpener = opener;
+  }
+
+  postSideQuote(sessionId: string, text: string): void {
+    if (text.trim()) { this.post({ type: 'sideQuote', sessionId, text }, 'side'); }
+  }
+
+  activeSideSessionId(): string | null {
+    return this.surfaceFocused.get('side') ?? null;
+  }
+
+  activateSideSession(sessionId: string): boolean {
+    const session = sessionOf(this.sessionManager, sessionId);
+    if (!this.surfaces.has('side') || !session?.sideChat || !this.sideChatOpener?.has(sessionId)) {
+      return false;
+    }
+    const changed = this.surfaceFocused.get('side') !== sessionId;
+    this.surfaceFocused.set('side', sessionId);
+    this.unread.delete(sessionId);
+    if (changed) { this.pushFocus('side'); }
+    this.refreshSessions();
+    return true;
+  }
+
+  releaseSideSession(sessionId: string): void {
+    this.clearSessionUiPrefs('side', sessionId);
+  }
+
   /**
    * [CUSTOM- Attach (or re-attach) one surface. The same entry
    * point serves the sidebar view and the editor panel, so the HTML is rendered
@@ -601,8 +755,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.surfaces.set(surface.key, surface);
     // [CUSTOM- 新面立刻拿到编辑器当前文件（签名是全局的，这里必须 force）。
     this.pushActiveFile(true);
-    this.lastActive = surface.key;
-    this.focused = ctx;
+    if (surface.key !== 'side') {
+      this.lastActive = surface.key;
+      this.focused = ctx;
+    }
     this.surfaceFocused.set(surface.key, ctx.sessionId);
     surface.webview.options = {
       enableScripts: true,
@@ -622,7 +778,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.surfaces.delete(key);
     this.surfaceFocused.delete(key);
     if (this.lastActive === key) {
-      this.lastActive = this.surfaces.keys().next().value ?? null;
+      this.lastActive = this.surfaces.has('view')
+        ? 'view'
+        : (this.surfaces.has('editor') ? 'editor' : null);
     }
     // [CUSTOM- Last surface gone: any permission card still
     // waiting for a click is now unreachable, and the agent is blocked on it.
@@ -742,12 +900,44 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   onMessage(message: unknown, from: SurfaceKey = 'view'): void {
     const msg = message as Partial<ChatToExt> & { type?: string };
     if (!msg || typeof msg.type !== 'string') { return; }
-    this.lastActive = from;
+    if (from === 'side' && !SIDE_MESSAGE_TYPES.has(msg.type)) { return; }
+    if (from !== 'side') { this.lastActive = from; }
 
     switch (msg.type) {
       case 'ready':
         this.pushBoot(from);
         return;
+      case 'openSide': {
+        if (from === 'side') { return; }
+        const sourceSessionId = (msg as { sessionId?: string }).sessionId ?? '';
+        const source = sessionOf(this.sessionManager, sourceSessionId);
+        if (!source || source.sideChat || this.surfaceFocused.get(from) !== sourceSessionId) { return; }
+        const selectedText = (msg as { selectedText?: unknown }).selectedText;
+        const opener = this.sideChatOpener;
+        if (!opener) {
+          this.reportError(sourceSessionId, new Error('Side Chat is not available.'));
+          return;
+        }
+        void opener.open(sourceSessionId, typeof selectedText === 'string' ? selectedText : undefined)
+          .catch(e => this.reportError(sourceSessionId, e));
+        return;
+      }
+      case 'sideFocus': {
+        if (from !== 'side') { return; }
+        const sessionId = (msg as { sessionId?: string }).sessionId ?? '';
+        const opener = this.sideChatOpener;
+        if (!opener?.has(sessionId)) { return; }
+        opener.activate(sessionId);
+        return;
+      }
+      case 'sideClose': {
+        if (from !== 'side') { return; }
+        const sessionId = (msg as { sessionId?: string }).sessionId ?? '';
+        const opener = this.sideChatOpener;
+        if (!opener?.has(sessionId)) { return; }
+        void opener.close(sessionId).catch(e => this.reportError(sessionId, e));
+        return;
+      }
       case 'newSession': {
         // 修「+ 按钮点了没反应」。
         // 原先这里调 `connectToAgent(agentName)`，而它的语义是**已有会话就复用**
@@ -942,12 +1132,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // through `verifySession` dropped every one of them — which is what made
       // markdown rendering (and therefore code blocks, Copy buttons and links)
       // dead on arrival.
-      case 'renderMarkdown':
-        // Per-item session ids are validated inside handleRenderMarkdown.
-        this.handleRenderMarkdown(
-          (msg as { items: Array<{ entryId: string; sessionId: string; text: string }> }).items,
-        );
+      case 'renderMarkdown': {
+        const items = (msg as { items?: Array<{ entryId: string; sessionId: string; text: string }> }).items ?? [];
+        this.handleRenderMarkdown(items.filter(item => !!item && this.canSurfaceAccess(from, item.sessionId)));
         return;
+      }
       case 'copy': {
         // [CUSTOM- 复制是用户动作、频率低，但**失败必须留痕**：此前是裸 `void writeText`，
         // 剪贴板拒绝/超时只在渲染进程里变成一个没人看的 unhandled rejection ⇒ 界面表现
@@ -973,7 +1162,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // [CUSTOM- **合并**而不是重建。原先这里按消息里的字段重建整个对象 ——
         // 那时只有一个写者（大纲）。现在有了第二个（tab 手工顺序），重建会把对方那一半抹掉
         // （同一条记录两个写者 = 后到的赢，而"赢"的代价是另一项被重置）。
-        const previous = this.uiPrefs ?? { outlineMode: 'popup' as const, outlineWidth: 240 };
+        const scope: UiPrefsScope = from === 'side' ? 'side' : 'main';
+        const previous = this.projectUiPrefs(scope);
         const mode = (msg as { outlineMode?: unknown }).outlineMode;
         const outlineWidth = Number((msg as { outlineWidth?: unknown }).outlineWidth);
         const tabOrder = (msg as { tabOrder?: unknown }).tabOrder;
@@ -1070,11 +1260,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         }
         const markdownStyle = (msg as { markdownStyle?: unknown }).markdownStyle;
         if (markdownStyle !== undefined) { next.markdownStyle = resolveMarkdownStyle(markdownStyle); }
-        this.uiPrefs = next;
-        this.globalState?.update(UI_PREFS_KEY, this.uiPrefs);
-        // [CUSTOM- 另外那个面（侧边栏 / 编辑区）也要跟着换序，否则它下次被重开
-        // 之前会一直用旧顺序 —— 同一份偏好，两个写者，必须回话（pitfall #29 的老规矩）。
-        this.post({ type: 'uiPrefs', ...this.uiPrefs });
+        this.commitUiPrefs(scope, next);
         return;
       }
       // [CUSTOM- 设置面板（2026-10-21）：与 setUiPref 一样**非会话作用域**，放在
@@ -1115,8 +1301,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       case 'openFile': {
         const requested = (msg as { sessionId?: unknown }).sessionId;
         const requestedSession = typeof requested === 'string' && requested ? requested : undefined;
-        if (requestedSession && !sessionOf(this.sessionManager, requestedSession)) {
-          log(`${LOG_PREFIX}: dropped openFile for unknown session ${requestedSession}`);
+        if (requestedSession && !this.canSurfaceAccess(from, requestedSession)) {
+          log(`${LOG_PREFIX}: dropped openFile for inaccessible session ${requestedSession}`);
           return;
         }
         void this.handleOpenFile(
@@ -1137,8 +1323,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
     // Everything below is session-scoped and must name a live session.
     const sessionId = verifySession(this.sessionManager, msg as { sessionId?: string });
-    if (!sessionId) {
-      log(`${LOG_PREFIX}: dropped ${msg.type} for unknown session ${String((msg as { sessionId?: string }).sessionId)}`);
+    if (!sessionId || !this.canSurfaceAccess(from, sessionId)) {
+      log(`${LOG_PREFIX}: dropped ${msg.type} for inaccessible session ${String((msg as { sessionId?: string }).sessionId)}`);
       return;
     }
 
@@ -1317,14 +1503,14 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           content?: ElicitationContent;
         };
         if (answer.promptId && answer.action) {
-          this.elicitationBridge?.submit(answer.promptId, answer.action, answer.content);
+          this.elicitationBridge?.submit(answer.promptId, answer.action, answer.content, sessionId);
         }
         return;
       }
       case 'permissionAnswer': {
         const promptId = (msg as { promptId?: string }).promptId;
         if (promptId) {
-          this.permissionBridge?.answer(promptId, (msg as { optionId?: string }).optionId);
+          this.permissionBridge?.answer(promptId, (msg as { optionId?: string }).optionId, sessionId);
         }
         return;
       }
@@ -2529,15 +2715,33 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   canPresent(sessionId: string): boolean {
     const session = sessionOf(this.sessionManager, sessionId);
     if (!session) { return false; }
+    if (session.sideChat) {
+      const side = this.surfaces.get('side');
+      if (!side || !this.sideChatOpener?.has(sessionId)) { return false; }
+      if (this.surfaceFocused.get('side') === sessionId && !side.visible) { side.reveal(true); }
+      return true;
+    }
     const surface = this.surfaceShowing(sessionId) ?? this.activeSurface();
     if (!surface) { return false; }
     if (this.focused.sessionId === sessionId && !surface.visible) { surface.reveal(true); }
     return true;
   }
 
+  private canSurfaceAccess(from: SurfaceKey, sessionId: string): boolean {
+    const session = sessionOf(this.sessionManager, sessionId);
+    if (!session) { return false; }
+    if (from === 'side') {
+      return !!session.sideChat && this.surfaceFocused.get('side') === sessionId;
+    }
+    return !session.sideChat;
+  }
+
   /** The surface a prompt would be drawn on (last active, else any). */
   private activeSurface(): ChatSurface | undefined {
-    return this.surfaces.get(this.lastActive ?? 'view') ?? this.surfaces.values().next().value;
+    const active = this.lastActive && this.lastActive !== 'side'
+      ? this.surfaces.get(this.lastActive)
+      : undefined;
+    return active ?? this.surfaces.get('view') ?? this.surfaces.get('editor');
   }
 
   /**
@@ -2547,19 +2751,22 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * consulted as a fallback.
    */
   private surfaceShowing(sessionId: string): ChatSurface | undefined {
+    if (sessionOf(this.sessionManager, sessionId)?.sideChat) {
+      const side = this.surfaces.get('side');
+      return side && this.isSurfaceShowing(side, sessionId) ? side : undefined;
+    }
     const active = this.activeSurface();
     if (active && this.isSurfaceShowing(active, sessionId)) { return active; }
-    for (const surface of this.surfaces.values()) {
-      if (this.isSurfaceShowing(surface, sessionId)) { return surface; }
+    for (const key of ['view', 'editor'] as const) {
+      const surface = this.surfaces.get(key);
+      if (surface && this.isSurfaceShowing(surface, sessionId)) { return surface; }
     }
     return undefined;
   }
 
   /** True when the surface is on screen and its focused session is `sessionId`. */
   private isSurfaceShowing(surface: ChatSurface, sessionId: string): boolean {
-    if (!surface.visible) { return false; }
-    const shown = surface.key === this.lastActive ? this.focused.sessionId : this.surfaceFocused.get(surface.key);
-    return shown === sessionId;
+    return surface.visible && this.surfaceFocused.get(surface.key) === sessionId;
   }
 
   /**
@@ -2569,9 +2776,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * showing a different session entirely).
    */
   private isSessionOnScreen(sessionId: string): boolean {
-    if (this.focused.sessionId !== sessionId) { return false; }
-    const surface = this.activeSurface();
-    return !!surface && surface.visible;
+    return !!this.surfaceShowing(sessionId);
   }
 
   /**
@@ -2697,6 +2902,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       return;
     }
     log(`${LOG_PREFIX}: notification clicked — revealing ${label} (${sessionId})`);
+    if (sessionOf(this.sessionManager, sessionId)?.sideChat) {
+      this.sideChatOpener?.activate(sessionId, { reveal: true, preserveFocus: false });
+      return;
+    }
     this.sessionManager.focusSession(sessionId, { force: true });
     const surface = this.activeSurface();
     if (surface) { surface.reveal(false); return; }
@@ -3369,7 +3578,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    */
   private rememberUserMode(sessionId: string): void {
     const session = sessionOf(this.sessionManager, sessionId);
-    if (!session) { return; }
+    if (!session || session.sideChat) { return; }
     const option = modeOptionOf(session.configOptions);
     if (!option) { return; }
     const value = String((option as { currentValue?: unknown }).currentValue ?? '');
@@ -3786,7 +3995,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // per-call-site approach would eventually do).
     if (type === 'append' || type === 'revise' || type === 'toolUpdate') {
       const sessionId = (message as { sessionId?: string }).sessionId;
-      if (sessionId && this.focused.sessionId !== sessionId && !this.unread.has(sessionId)) {
+      const session = sessionId ? sessionOf(this.sessionManager, sessionId) : undefined;
+      const current = session?.sideChat
+        ? this.surfaceFocused.get('side') === sessionId
+        : this.focused.sessionId === sessionId;
+      if (sessionId && !current && !this.unread.has(sessionId)) {
         this.unread.add(sessionId);
         // Tell the strip immediately. Without this the dot could wait for the next
         // unrelated refresh — some append paths (a notice, terminal output) never
@@ -3808,7 +4021,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       if (only) { this.send(only, message); }
       return;
     }
-    for (const surface of this.surfaces.values()) { this.send(surface, message); }
+    const type = (message as { type?: string }).type;
+    for (const surface of this.surfaces.values()) {
+      if (surface.key === 'side' && (type === 'boot' || type === 'focus' || type === 'sessionsChanged')) { continue; }
+      this.send(surface, message);
+    }
   }
 
   private send(surface: ChatSurface, message: ExtToChat | MarkdownRendered): void {
@@ -3888,7 +4105,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   /** 活着的会话，按客户端那份手工顺序排（不在表里的按 SessionManager 的顺序接在后面）。 */
   private liveSessionsInTabOrder(): RecoverableSession[] {
     const app = ideLabel();
-    const out: RecoverableSession[] = this.sessionManager.getLiveSessions().map(session => ({
+    const out: RecoverableSession[] = this.sessionManager.getMainLiveSessions().map(session => ({
       agentName: session.agentName,
       sessionId: session.sessionId,
       ...(session.cwd ? { cwd: session.cwd } : {}),
@@ -3905,17 +4122,32 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   /** [CUSTOM- 新会话 tab 落在源会话右边：把完整顺序写回 `uiPrefs.tabOrder` 并广播。 */
   private placeSessionAfterInTabOrder(sourceId: string, newSessionId: string): void {
-    const liveIds = this.sessionManager.getLiveSessions().map(session => session.sessionId);
+    const liveIds = this.sessionManager.getMainLiveSessions().map(session => session.sessionId);
     const order = sanitizeTabOrder(
       insertSessionAfter(this.uiPrefs?.tabOrder ?? [], liveIds, sourceId, newSessionId),
     );
-    const next: UiPrefs = {
-      ...(this.uiPrefs ?? { outlineMode: 'popup' as const, outlineWidth: 240 }),
-      tabOrder: order,
-    };
-    this.uiPrefs = next;
-    this.globalState?.update(UI_PREFS_KEY, next);
-    this.post({ type: 'uiPrefs', ...next });
+    const next: UiPrefs = { ...this.projectUiPrefs('main'), tabOrder: order };
+    this.commitUiPrefs('main', next);
+  }
+
+  private clearSessionUiPrefs(scope: UiPrefsScope, sessionId: string): void {
+    const previous = this.projectUiPrefs(scope);
+    const next: UiPrefs = { ...previous };
+    let changed = false;
+    for (const key of SESSION_FLAG_PREF_KEYS) {
+      const values = previous[key];
+      if (!values || !Object.prototype.hasOwnProperty.call(values, sessionId)) { continue; }
+      const copy = { ...values };
+      delete copy[sessionId];
+      next[key] = copy;
+      changed = true;
+    }
+    if (scope === 'main' && previous.tabOrder?.includes(sessionId)) {
+      next.tabOrder = previous.tabOrder.filter(id => id !== sessionId);
+      changed = true;
+    }
+    if (!changed) { return; }
+    this.commitUiPrefs(scope, next);
   }
 
   /**
@@ -4369,12 +4601,56 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.postSettings();
   }
 
-  /** [CUSTOM- 设置面板 + 地址栏开关共用的一条写路径：合并、落盘、广播给两个面。 */
+  private projectUiPrefs(scope: UiPrefsScope): UiPrefs {
+    if (scope === 'main') { return { ...(this.uiPrefs ?? DEFAULT_UI_PREFS) }; }
+    const projected = scopedUiPrefsOf(this.sideUiPrefs ?? DEFAULT_UI_PREFS);
+    copyDefinedUiPrefs(projected, this.uiPrefs, GLOBAL_UI_PREF_KEYS);
+    return projected;
+  }
+
+  private commitUiPrefs(scope: UiPrefsScope, next: UiPrefs): void {
+    const previous = this.projectUiPrefs(scope);
+    const scopedKeys = scope === 'main' ? MAIN_SCOPED_UI_PREF_KEYS : SCOPED_UI_PREF_KEYS;
+    const scopedChanged = uiPrefsChanged(previous, next, scopedKeys);
+    const globalChanged = uiPrefsChanged(previous, next, GLOBAL_UI_PREF_KEYS);
+    if (!scopedChanged && !globalChanged) { return; }
+
+    let nextMain = this.uiPrefs ?? DEFAULT_UI_PREFS;
+    if (scope === 'main') {
+      nextMain = next;
+    } else if (globalChanged) {
+      nextMain = { ...nextMain };
+      copyDefinedUiPrefs(nextMain, next, GLOBAL_UI_PREF_KEYS);
+    }
+    if ((scope === 'main' && scopedChanged) || globalChanged) {
+      this.uiPrefs = nextMain;
+      void this.globalState?.update(UI_PREFS_KEY, nextMain);
+    }
+    if (scope === 'side' && scopedChanged) {
+      this.sideUiPrefs = scopedUiPrefsOf(next);
+      void this.globalState?.update(SIDE_UI_PREFS_KEY, this.sideUiPrefs);
+    }
+    if (globalChanged) {
+      this.postUiPrefs();
+    } else if (scopedChanged) {
+      this.postUiPrefs(scope);
+    }
+  }
+
+  private postUiPrefs(scope?: UiPrefsScope): void {
+    const targets: SurfaceKey[] = scope === 'main'
+      ? ['view', 'editor']
+      : scope === 'side' ? ['side'] : ['view', 'editor', 'side'];
+    for (const target of targets) {
+      const targetScope: UiPrefsScope = target === 'side' ? 'side' : 'main';
+      this.post({ type: 'uiPrefs', ...this.projectUiPrefs(targetScope) }, target);
+    }
+  }
+
+  /** [CUSTOM- 设置面板写入 main scope；共享字段由 commitUiPrefs 定向扇出。 */
   private patchUiPrefs(patch: Partial<UiPrefs>): void {
-    const next: UiPrefs = { ...(this.uiPrefs ?? { outlineMode: 'popup' as const, outlineWidth: 240 }), ...patch };
-    this.uiPrefs = next;
-    void this.globalState?.update(UI_PREFS_KEY, next);
-    this.post({ type: 'uiPrefs', ...next });
+    const previous = this.projectUiPrefs('main');
+    this.commitUiPrefs('main', { ...previous, ...patch });
   }
 
   private toggledKind(kind: string, on: boolean): string[] {
@@ -4443,33 +4719,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       return;
     }
     if (action === 'resetPanelPrefs') {
-      // [CUSTOM- 一键恢复面板 UI 默认值；不动 VS Code 配置项（那些在 General/Advanced 里）。
-      // 广播时必须**显式带上每一项的默认值**：客户端的契约是"缺字段 = 这一项没改"，
-      // 只发大纲两项的话，Times / 自动展开 / 输入卡尺寸会保留旧值（直到窗口重开）。
-      this.uiPrefs = { outlineMode: 'popup', outlineWidth: 240 };
-      void this.globalState?.update(UI_PREFS_KEY, this.uiPrefs);
-      this.post({
-        type: 'uiPrefs',
-        outlineMode: 'popup',
-        outlineWidth: 240,
-        timesBySession: {},
-        timesDefault: false,
-        // Tail 的默认值是 true（不开按钮时也照旧自动跟到最后一条）。
-        tailBySession: {},
-        tailDefault: true,
-        outlineOpenBySession: {},
-        outlineOpenDefault: false,
-        autoExpandBySession: {},
-        autoExpandDefault: false,
-        autoExpandKinds: ['thought', 'tool'],
-        autoExpandToolHeight: 360,
-        autoExpandThoughtHeight: 240,
-        flatTools: false,
-        composerMaxWidth: 720,
-        inputMaxHeight: 320,
-        sendKey: 'enter',
-        defaultModelByAgent: {},
-      });
+      // [CUSTOM- 一键恢复 Main、Side 与共享 UI 默认值；客户端需要显式字段覆盖旧状态。
+      const defaults = defaultPanelUiPrefs();
+      this.uiPrefs = defaults;
+      this.sideUiPrefs = scopedUiPrefsOf(defaults);
+      void this.globalState?.update(UI_PREFS_KEY, defaults);
+      void this.globalState?.update(SIDE_UI_PREFS_KEY, this.sideUiPrefs);
+      this.postUiPrefs();
       this.postSettings();
       void vscode.window.showInformationMessage('Panel preferences reset.');
       return;
@@ -4512,17 +4768,20 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.post({ type: 'restorePref', value: this.prefs.getRestore() });
   }
 
-  private pushBoot(to?: SurfaceKey): void {
+  private pushBoot(to: SurfaceKey): void {
     if (this.attachedCount === 0) { return; }
     // INV-E: the snapshot must not overtake anything still sitting in the queue.
     this.outbox.flush();
     this.refreshLiveSessionIds();
-    const recoverable = this.recoverableSessions();
-    const sessions = this.buildSummaries();
-    const focused = this.focused.sessionId ? this.buildSummary(this.focused.sessionId) : null;
+    const side = to === 'side';
+    const focusedId = side ? this.surfaceFocused.get('side') : this.focused.sessionId;
+    const focused = focusedId ? this.buildSummary(focusedId) : null;
+    const recoverable = side ? [] : this.recoverableSessions();
+    const sessions = side ? this.buildSideSummaries() : this.buildSummaries();
     // Restore preferences before boot because scroll restoration can cancel Tail and persist immediately.
-    if (this.uiPrefs) {
-      this.post({ type: 'uiPrefs', ...this.uiPrefs }, to);
+    const hasUiPrefs = side ? !!(this.uiPrefs || this.sideUiPrefs) : !!this.uiPrefs;
+    if (hasUiPrefs) {
+      this.post({ type: 'uiPrefs', ...this.projectUiPrefs(side ? 'side' : 'main') }, to);
     }
     this.post({
       type: 'boot',
@@ -4530,39 +4789,40 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       sessions,
       snapshot: focused ? this.snapshotOf(focused.sessionId) : null,
       meta: focused ? this.metaOf(focused.sessionId) : null,
-      agentConnected: this.panelAgentConnected(),
-      // [CUSTOM- 首屏值随 boot 一起走：客户端的自动连接布防需要
-      // {agentConnected, focused, autoConnect} 三者同时成立。
-      autoConnect: this.prefs.getAutoConnect(),
-      // [CUSTOM- 没有聚焦会话时地址栏显示它：连接适配器（npx 下载）那几十秒里
-      // 面板就是"已连接、还没有会话"，那时地址栏空着会看着像坏了（090 当初把这一格整个隐藏）。
-      // 与草稿页显示的是**同一份**语义（下次会话建在这里），所以也复用宿主这一个解析器。
-      defaultCwd: this.sessionManager.resolveDefaultCwd(),
-      // [CUSTOM- 上次退出时开着的会话（现在都不活）→ 空态卡片据此问一句要不要恢复。
-      // 只给 modern agent 的（legacy 交给旧面板会换文档）；一条都没有时不带这个字段。
+      agentConnected: side && focused
+        ? this.sessionManager.isAgentConnected(focused.agentName)
+        : this.panelAgentConnected(),
+      autoConnect: side ? false : this.prefs.getAutoConnect(),
+      ...(!side ? { defaultCwd: this.sessionManager.resolveDefaultCwd() } : {}),
       ...(recoverable.length > 0 ? { recoverable } : {}),
       restorePref: this.prefs.getRestore(),
     }, to);
   }
 
-  private pushFocus(): void {
+  private pushFocus(to?: SurfaceKey): void {
     if (this.attachedCount === 0) { return; }
     this.outbox.flush();
-    const sessionId = this.focused.sessionId;
+    const side = to === 'side';
+    const sessionId = side ? this.surfaceFocused.get('side') : this.focused.sessionId;
     const summary = sessionId ? this.buildSummary(sessionId) : null;
     this.post({
       type: 'focus',
       summary,
       snapshot: summary ? this.snapshotOf(sessionId!) : null,
       meta: summary ? this.metaOf(sessionId!) : null,
-      agentConnected: this.panelAgentConnected(),
-    });
+      agentConnected: side && summary
+        ? this.sessionManager.isAgentConnected(summary.agentName)
+        : this.panelAgentConnected(),
+    }, to);
   }
 
   private pushMeta(sessionId: string): void {
     if (this.attachedCount === 0) { return; }
-    if (this.focused.sessionId !== sessionId) { return; }
-    this.post({ type: 'meta', sessionId, meta: this.metaOf(sessionId) });
+    for (const surface of this.surfaces.values()) {
+      if (this.surfaceFocused.get(surface.key) === sessionId) {
+        this.post({ type: 'meta', sessionId, meta: this.metaOf(sessionId) }, surface.key);
+      }
+    }
   }
 
   private pushTurnState(sessionId: string): void {
@@ -4586,9 +4846,28 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     const signature = `conn:${agentConnected ? 1 : 0}\n` + sessions
       .map(s => `${s.sessionId}|${s.agentName}|${s.agentKind ?? ''}|${s.title ?? ''}|${s.loading ? 1 : 0}|${s.running ? 1 : 0}|${s.unread ? 1 : 0}|${s.waiting ? 1 : 0}`)
       .join('\n');
-    if (signature === this.lastSessionsSignature) { return; }
-    this.lastSessionsSignature = signature;
-    this.outbox.flushThenPost({ type: 'sessionsChanged', sessions, agentConnected });
+    if (signature !== this.lastSessionsSignature) {
+      this.lastSessionsSignature = signature;
+      this.outbox.flushThenPost({ type: 'sessionsChanged', sessions, agentConnected });
+    }
+    const sideId = this.surfaceFocused.get('side');
+    const sideSessions = this.buildSideSummaries();
+    const sideFocused = sideSessions.find(session => session.sessionId === sideId);
+    const sideAgentConnected = sideFocused
+      ? this.sessionManager.isAgentConnected(sideFocused.agentName)
+      : false;
+    const sideSignature = JSON.stringify({
+      focused: sideId ?? null,
+      agentConnected: sideAgentConnected,
+      sessions: sideSessions,
+    });
+    if (!this.surfaces.has('side')) {
+      this.lastSideSessionsSignature = null;
+    } else if (sideSignature !== this.lastSideSessionsSignature) {
+      this.lastSideSessionsSignature = sideSignature;
+      this.outbox.flush();
+      this.post({ type: 'sessionsChanged', sessions: sideSessions, agentConnected: sideAgentConnected }, 'side');
+    }
   }
 
   // --- State assembly ------------------------------------------------------
@@ -4598,7 +4877,15 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   private buildSummaries(): SessionSummary[] {
-    return this.sessionManager.getLiveSessions().map(s => this.toSummary(s));
+    return this.sessionManager.getMainLiveSessions().map(s => this.toSummary(s));
+  }
+
+  private buildSideSummaries(): SessionSummary[] {
+    const ids = this.sideChatOpener?.sessionIds() ?? [];
+    return ids.flatMap(sessionId => {
+      const session = sessionOf(this.sessionManager, sessionId);
+      return session?.sideChat ? [this.toSummary(session)] : [];
+    });
   }
 
   private buildSummary(sessionId: string): SessionSummary | null {
@@ -4608,6 +4895,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   private toSummary(session: SessionInfo): SessionSummary {
     const stored = this.sessionManager.getHistoryStore()?.get(session.agentName, session.sessionId);
+    const parent = session.sideChat
+      ? sessionOf(this.sessionManager, session.sideChat.parentSessionId)
+      : undefined;
+    const parentStored = parent
+      ? this.sessionManager.getHistoryStore()?.get(parent.agentName, parent.sessionId)
+      : undefined;
     return {
       sessionId: session.sessionId,
       agentName: session.agentName,
@@ -4634,6 +4927,15 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         || (this.elicitationBridge?.hasPendingFor(session.sessionId) ?? false),
       // [CUSTOM- agent 选择器的第二行说明用它（2026-10-27）。
       agentKind: this.agentKindOf(session.agentName),
+      ...(session.sideChat ? {
+        sideChat: {
+          parentSessionId: session.sideChat.parentSessionId,
+          parentTitle: parent
+            ? this.sessionLabelTitle(parent.sessionId) ?? parent.title ?? parentStored?.title ?? parentStored?.firstPrompt ?? null
+            : null,
+          forkedAt: session.sideChat.forkedAt,
+        },
+      } : {}),
     };
   }
 

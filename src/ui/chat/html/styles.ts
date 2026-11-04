@@ -346,6 +346,22 @@ export function styles(): string {
      的 flex: 1 吃掉剩余宽度把它们顶过去 —— 那一格一旦不显示了（上面那种空态），整组就会滑到
      ↺ 旁边。有 flex 项能成长时 auto margin 分不到任何空间，所以这条对原有布局零影响。 */
   .session-header > #tailBtn { margin-left: auto; }
+  .side-origin {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px; min-height: 24px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-descriptionForeground); font-size: 0.85em;
+  }
+  .side-origin-label { flex: none; font-weight: 600; color: var(--vscode-foreground); }
+  .side-origin-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side-origin-time { flex: none; margin-left: auto; white-space: nowrap; }
+  .surface-side .agent-bar,
+  .surface-side #newTab,
+  .surface-side #settingsBtn,
+  .surface-side #historyBtn,
+  .surface-side #cwdBtn,
+  .surface-side #history,
+  .surface-side #cwdMenu { display: none !important; }
   /* --- Conversation outline () ---------------------- */
   /* 抽屉从标题栏下沿展开。.session-header 没有 overflow: hidden（已核对），
      否则绝对定位的抽屉会被裁掉——这是这类浮层最常见的失灵原因。 */
@@ -816,7 +832,8 @@ export function styles(): string {
     overflow: hidden;
     cursor: pointer;
   }
-  .surface-editor .sticky-card { background: var(--vscode-editor-background); }
+  .surface-editor .sticky-card,
+  .surface-side .sticky-card { background: var(--vscode-editor-background); }
   /* 同 .messages > *（037）：克隆体在"列 flex + overflow:hidden"里同样不许被压缩。 */
   .sticky-body { display: flex; flex-direction: column; }
   .sticky-body > * { flex: 0 0 auto; }
@@ -2024,7 +2041,8 @@ export function styles(): string {
   /* [CUSTOM- 编辑区面与编辑器标签同处一列：用侧边栏底色会像"外部面板
      贴在了编辑区里"。类名由 body(surface) 打在 <body> 上（见 html/body.ts）。
      侧边栏面不加任何规则——它必须保持侧边栏底色。 */
-  .surface-editor {
+  .surface-editor,
+  .surface-side {
     background: var(--vscode-editor-background);
   }
   /* [CUSTOM- tab 的"选中态底色"必须跟着**这个面**的底走：侧边栏面用 sideBar、
@@ -2035,7 +2053,8 @@ export function styles(): string {
      两侧的消息、右侧大纲栏的底部全被盖住 —— 用户报的"还是遮挡"就是这个，而且它**只在编辑区
      面出现**（本脚本的预览默认渲染侧边栏面，所以一直没照出来）。
      编辑区面的底色差异现在只由 .load-overlay 承担（它本来就是不透明遮罩）。 */
-  .surface-editor .load-overlay {
+  .surface-editor .load-overlay,
+  .surface-side .load-overlay {
     background: var(--vscode-editor-background);
   }
 

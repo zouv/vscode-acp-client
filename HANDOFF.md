@@ -14,15 +14,15 @@
 
 ## 状态快照
 
-- **最近更新**：2026-11-03
-- **整体状态**：v1.9.2 已发布为 Latest（release commit `fbfb2e5`）；VSIX 已上传并核对摘要。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
-- **当前分支（必填）**：`main`；v1.9.2 已按授权提交推送、打包并上传 GitHub Release，不另建分支。
-- **最后验证状态**（2026-11-03）：lint/typecheck ✅；unit **175 / 27 文件** ✅；完整宿主 **657 passing** ✅；完整 Chromium preview ✅；check-docs ✅。
-  GitHub Actions 四格 CI 通过（Ubuntu 1.85.0 首次网络超时，重跑失败格后全绿）；VSIX `vscode-acp-client-1.9.2.vsix`（511065 字节）SHA256 `13f6f6818cc74e01514abaf78714cf19b0fd645582daec57b3d34bfdcfe1b362`，Release 附件摘要一致。
-  真实 agent 的 `npm run dev:host` 人工验收尚未执行；真机验收 257–258 未做；远程 CI 以 GitHub Actions 为准。
+- **最近更新**：2026-11-04
+- **整体状态**：v1.10.0 发布进行中；本地验证已完成，发布提交、CI、打包与 GitHub Release 上传尚待完成。v1.9.0 草稿仍留在 GitHub，本次不动。
+- **当前分支（必填）**：`main`；按用户授权直接在 main 提交推送、打包并上传 GitHub Release，不另建分支。Side Chat 改动随本次 release commit 提交。
+- **最后验证状态**（2026-11-04）：Webview 语法检查、lint/typecheck、check-docs ✅，unit **177 / 27 文件** ✅，完整宿主 **701 passing** ✅；来源标题、Main/Side 偏好隔离、重复投影收敛、重载/release/Reset 均有自动回归。远程 CI 待发布提交后运行；真实 agent 的 `npm run dev:host` 人工验收尚未执行；真机验收 257–258 未做。
 
 
 ## 当前任务（In Progress）
+
+- **v1.10.0 发布（2026-11-04 进行中）**：版本与发布文档已更新，本地全量验证通过；下一步 release commit/push → 四格 CI → tag/VSIX 核对 → GitHub Release draft/核对/Latest → HANDOFF 收尾。真实 agent 验收仍未做。
 
 - **Jump / Tail 语义修正（已随 v1.9.2 发布 / 待真机验收）**：Jump 置底并恢复当前会话追尾、不改 `tailDefault`；无会话焦点与 `uiPrefs → boot` 顺序已修，真实 Jump click / follow / 草稿与关闭会话 / 偏好顺序回归已补。lint/typecheck ✅、unit **175 / 27 文件** ✅、完整宿主 **657 passing** ✅、完整 Chromium preview ✅、check-docs ✅。下一步 `npm run dev:host` 按 `docs/03-验收清单.md` 257–258 验证持续跟随、新会话默认值、草稿/关闭会话归属与重载偏好。以下为既有待真机验收项。
 
@@ -48,7 +48,7 @@
 
 ## 进行中（半成品 / 未提交）
 
-- 无半成品编码任务；本轮 Jump / Tail 已随 v1.9.2 发布，真机验收清单 257–258 未做。
+- （无。）
 
 ## 阻塞 / 待决策（Blockers）
 
@@ -56,6 +56,8 @@
 
 
 ## 下一步（Next Steps）
+
+- **Side Chat 第一条动作（真实验收）**：`npm run dev:host` 验证主 A/B 与 Side S/T 的 Tail/Times/Expand/Outline 互不联动、主双面同步、全局设置共享、新会话分别继承本 scope 默认值，以及来源无标题/晚到标题/父改名/长标题 tooltip、Side 关闭/Reload Window/Reset 和无设置齿轮。既有真实 agent 验收继续覆盖同源多个、跨源并存、上下文继承、引用/草稿/附件、后台权限/通知、关闭清理与能力边界。
 
 - **审查修复验收（无需继续编码）**：真实 Claude/Codex 认证、崩溃后 resume/离线手动恢复、多会话草稿/焦点与权限/表单结算；确认远程 CI 结果。P2-4 已按原生正文渲染窗口方案完成（保留 DOM，不是卸载式虚拟列表）。
 

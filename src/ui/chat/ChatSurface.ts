@@ -8,8 +8,8 @@
 // 附件 chip 永远不显示也不报错——这正是本文件存在的原因。
 import * as vscode from 'vscode';
 
-/** The two surfaces the modern chat panel can render into. */
-export type SurfaceKey = 'view' | 'editor';
+/** The main surfaces plus the temporary Side Chat surface. */
+export type SurfaceKey = 'view' | 'editor' | 'side';
 
 /**
  * A view-agnostic chat surface. Implementations are thin adapters: they hold no
@@ -38,9 +38,9 @@ export function viewSurface(view: vscode.WebviewView): ChatSurface {
   };
 }
 
-export function panelSurface(panel: vscode.WebviewPanel): ChatSurface {
+export function panelSurface(panel: vscode.WebviewPanel, key: 'editor' | 'side' = 'editor'): ChatSurface {
   return {
-    key: 'editor',
+    key,
     get webview() { return panel.webview; },
     get visible() { return panel.visible; },
     setHtml: html => { panel.webview.html = html; },

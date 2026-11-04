@@ -12,6 +12,8 @@
 | 恢复任务 | SessionManager.startRecovery / recoverAgent / resumeRetainedSession / resumeRetainedSessionOnce |
 | 退避预算 | core/AgentRecovery.RecoveryBudget / recoveryDelay |
 | 手动重连 | SessionManager.ensureConnected / connectToAgent / openExistingSession |
+| Side fork | SessionManager.requestFork / forkSideSession；UI 由 SideChatPanel.open 调用 |
+| Side 关闭 | SideChatPanel.close / closeGroup / closeAll → SessionManager.deleteSession；close/delete 前复用 cancelTurn 与两桥结算 |
 | 配置通知/取消 | extension.activate 的 agentConfigListener |
 | 回归 | test/recovery-regression.test.ts；core/AgentRecovery.spec.ts；utils/AsyncDeadline.spec.ts |
 
@@ -27,6 +29,10 @@
 - 同 agent、同一个 retained SessionInfo 对象且 resume 成功后，才更新 agentId/能力并 claim 新 owner；禁止放宽 SessionStore.add 的跨连接覆盖禁令。
 - 恢复过程中关闭的会话不复活；用户切换的焦点不被恢复抢走。旧 prompt 的晚到响应不能结束新连接上的轮次。
 - Disconnect / dispose / 关闭 autoReconnect 取消延时和握手，不再启动后台恢复；dispose 不发失败通知。配置变更只提示 Reload Window，不自动重载。
+- Side 与普通 fork 共用 `requestFork` 的 live 主会话、agent 归属和 fork capability 校验，并通过 `connector.enqueue` 在同一连接调用 `unstable_forkSession`。Side 不传 messageId，从打开时末尾派生；不 load/resume/focus/写历史，`SessionInfo.sideChat` 记录源 sessionId 与 forkedAt。
+- `forkSideSession` 注册后立即 emit `session-created(..., 'side')`；`getMainLiveSessions` 与默认 `getSessionIdsForAgent` 排除 Side，ownership、通知和 transcript 活跃集合仍包含它。`SessionStore.focus` 拒绝 Side，后继焦点跳过 Side。
+- SideChatPanel 只在 fork 成功后登记成员并创建/复用单个多标签面板；每次 open 都产生独立 Side，创建/attach/activate 失败只回滚本次新 Side，fork 在途时 dispose 或源已关闭会删除晚到 Side。活动 tab 关闭优先选右邻、否则左邻，最后一个 tab 才销毁面板；源关闭批量清理其子 Side。关闭先移除成员防重入，再 `deleteSession`：待决权限/表单先结算，有在途轮次先 `cancelTurn`，然后 close（能力允许）、best-effort delete 与本地 forget。
+- 不支持 fork 时不创建空 Side；不支持 delete 或厂商删除失败不阻断本地清理，但不能据此承诺厂商磁盘转录或 `session/list` 无残留。
 
 ## 边界
 

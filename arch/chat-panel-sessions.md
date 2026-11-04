@@ -218,7 +218,8 @@ key 由宿主算好。
 
 | 关注点 | 规则 |
 |---|---|
-| 快照存哪 | globalState `vac.openSessions.v1`：`{ sessions: [{agentName, sessionId, cwd, title}], focused }`，**顺序就是 tabOrder 的顺序**（那样恢复出来的 tab 才回到原位）。写点：`session-created` / `session-closed` / `active-session-changed`，**防抖 300ms**（focus 会因为切标签频繁发生） |
+| 快照存哪 | globalState `vac.openSessions.v1`：`{ sessions: [{agentName, sessionId, cwd, title}], focused }`，**顺序就是 tabOrder 的顺序**（那样恢复出来的 tab 才回到原位）。写点：`session-created` / `session-closed` / `active-session-changed`，**防抖 300ms**（focus 会因为切标签频繁发生）。`liveSessionsInTabOrder()` / `buildSummaries()` 只读 `getMainLiveSessions()`，Side 不进 tabs、快照或恢复提示 |
+| Side 隔离 | `origin === 'side'` 不写主会话默认配置与 openSessions 快照；`refreshLiveSessionIds()` 仍用 `getLiveSessions()` 包含全部 Side，避免后台 transcript 被 LRU 淘汰。Side 单面板内按创建顺序显示多个 tab，不读写主 `tabOrder`；源会话关闭只联动清理其子 Side。`releaseSideSession()` 清指定 Side 的 UI prefs 与意外 tabOrder 残留，Side 不注册 serializer |
 | 不许把快照写空 | **只有"本生命周期里出现过会话"之后**才允许写空表 —— 否则重载后刚启动、一个会话都还没有的那一瞬间就会把上一次的快照抹掉（而那正是要读它的时刻）。`sawLiveSession` 就是这道闸 |
 | 端给客户端 | `pushBoot` 加两个字段：`recoverable`（`recoverableSessions()`：快照里**现在不活**的那些——活着的已经是 tab 了；已被答复过或设置为 `never` 时返回空）与 `restorePref`。一条可恢复的都没有时不带 `recoverable` |
 | 问不问 | 客户端：面板**空着**（无聚焦会话、无草稿）且设置不是 `never` 时才问。卡片的 `restore` 相位**压过 `ready`**（那张"Claude Code is ready"要让位）。设置项 `vac.restoreSessionsOnOpen`（ask/always/never，默认 ask），读写走 125 那套 `PanelPrefsIO` 注入缝 |

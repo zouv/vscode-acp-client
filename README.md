@@ -22,7 +22,7 @@ VAC 是一个 [ACP（Agent Client Protocol）](https://agentclientprotocol.com/)
 
 > **只实现协议，不绑定厂商。** 与「把某个 agent 焊死在一个扩展里」不同，任何说 ACP 的 agent 都能接进来：新增一个 agent 通常只需要在设置里加一条 `vac.agents` 配置。
 
-> 项目状态：v1.8.5，早期阶段，接口与设置项仍可能变动。尚未上架 VS Code Marketplace，目前请从 [Releases](https://github.com/zouv/vscode-acp-client/releases) 安装 VSIX。
+> 项目状态：v1.10.0，早期阶段，接口与设置项仍可能变动。尚未上架 VS Code Marketplace，目前请从 [Releases](https://github.com/zouv/vscode-acp-client/releases) 安装 VSIX。
 
 ## 目录
 
@@ -52,6 +52,7 @@ VAC 是一个 [ACP（Agent Client Protocol）](https://agentclientprotocol.com/)
 **聊天与交互**
 
 - **双聊天面并存**：侧边栏 Chat 视图与编辑区标签页共享同一份记录，关掉再打开不丢内容，两个面各记各的焦点会话。
+- **Side Chat**：在主会话输入 `/side`，或选中消息后右键 **Side Chat with Selection**，从主会话当前上下文 fork 临时旁路会话；支持多个同源/跨源 Side 标签，横幅显示来源 UUID 与标题，工具栏状态与主会话隔离。Side 不是只读沙箱，工具/文件/终端仍有真实副作用；关闭后不恢复，并尽力删除远端会话。
 - **工具调用渲染**：diff、文件读取、终端输出、嵌套子任务调用、图片，都在记录里按类型渲染。
 - **权限与表单**：ACP 的权限请求与表单（如 Claude Code 的 AskUserQuestion）渲染成会话内的卡片；面板不可见时自动回退到 VS Code 弹框。带预览的选项会就地展开示意内容。
 - **轮次中补发**：agent 声明支持 steering 时，轮次进行中再发一条消息会追加进当前轮次，而不是排成新一轮。

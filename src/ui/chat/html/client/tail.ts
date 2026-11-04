@@ -24,6 +24,8 @@ export const tailClient = `
   var known = [];
   // 宿主的偏好到了之前不许"落定"任何会话：否则会用本地的默认值把用户真正的选择盖掉。
   var prefsSeen = false;
+  // 重复的旧投影不能再次触发 seedKnown，否则空表会造成持续回写。
+  var lastPrefsKey = null;
 
   /** 这个会话此刻该不该自动追尾：它自己的记录，没有就回落默认。 */
   function enabledFor(sessionId) {
@@ -104,6 +106,9 @@ export const tailClient = `
 
   /** 收下宿主那份偏好。缺字段 = 那一项从来没被写过 ⇒ 保留本地值（同 times.applyPrefs）。 */
   function applyPrefs(prefs) {
+    var prefsKey = JSON.stringify([prefs && prefs.tailBySession, prefs && prefs.tailDefault]);
+    if (prefsKey === lastPrefsKey) { return; }
+    lastPrefsKey = prefsKey;
     prefsSeen = true;
     if (prefs && prefs.tailBySession && typeof prefs.tailBySession === 'object') {
       var next = {};

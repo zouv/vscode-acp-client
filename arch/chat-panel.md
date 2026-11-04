@@ -6,7 +6,7 @@
 >
 > | 分册 | 主题 | 覆盖的 §5.x |
 > |---|---|---|
-> | 本文件 | 面板骨架与消息纪律、安全、子 agent、双 surface、大纲、引导条；性能/审计保留跳转入口 | §5.1–§5.12 |
+> | 本文件 | 面板骨架与消息纪律、安全、子 agent、主双面与 Side surface、大纲、引导条；性能/审计保留跳转入口 | §5.1–§5.12 |
 > | [chat-performance.md](./chat-performance.md) | 长会话、流式 Markdown 尾块与原生正文渲染窗口 | §5.10 |
 > | [chat-panel-audit.md](./chat-panel-audit.md) | 历史面板审计结论与风险 | §5.12 |
 > | [chat-panel-sessions.md](./chat-panel-sessions.md) | 会话目录与重开路径、历史选择器过滤、会话恢复 | §5.13–§5.15、§5.24、§5.48 |
@@ -36,15 +36,16 @@
 
 | 文件 | 职责 | 何时改它 |
 |---|---|---|
-| `ChatViewProvider.ts` | **侧边栏 `vac-chat` 视图的注册者**，也是视图上**唯一**的 `onDidReceiveMessage` 注册者；同时持有编辑区面板（`openEditorChat`）并做双面焦点同步（`syncFocus`） | 视图注册 / 双面同步 |
-| `ChatPanelHost.ts` | 面板的扩展侧宿主：session/update → transcript，用户消息 → SessionManager；markdown 往返、链接白名单、附件。持有**多个 surface**（侧边栏 / 编辑区），`post()` 广播、`boot` 定向 | 改面板行为 |
-| `ChatSurface.ts` | **019 新增**。把 `WebviewView`（侧边栏）与 `WebviewPanel`（编辑区）归一化：`visible` / `reveal(preserveFocus)` / `onDidDispose`。差异只在显隐与前置方式（`show` vs `reveal`） | 新增第三种承载方式 |
+| `ChatViewProvider.ts` | **侧边栏 `vac-chat` 视图的注册者**，也是视图上**唯一**的 `onDidReceiveMessage` 注册者；同时持有编辑区主面板与一个多标签 `SideChatPanel`，负责主双面焦点同步和统一 dispose | 视图注册 / surface 归属 |
+| `ChatPanelHost.ts` | 面板的扩展侧宿主：session/update → transcript，用户消息 → SessionManager；markdown 往返、链接白名单、附件。持有 `view` / `editor` / `side` 三个 surface；流式记录可广播，boot/focus/meta/sessionsChanged 按主/Side 定向 | 改面板行为 |
+| `ChatSurface.ts` | 把 `WebviewView` 与 `WebviewPanel` 归一化：`SurfaceKey = 'view' \| 'editor' \| 'side'`，统一 `visible` / `reveal` / `onDidDispose`；`panelSurface(panel, 'side')` 复用同一 adapter | 新增承载方式 |
 | `Outbox.ts` | **022 新增**。流式消息合帧队列：只合并「队尾单条同 id 的 append」，其余按 FIFO 原样发。顺序不变式 INV-A..E 见 §5.10 | 改合帧策略 / 新增消息类型 |
-| `ChatEditorPanel.ts` | **019 新增**。编辑区面板生命周期：`open()` / `close(reason)`。视图类型 `vac-chat-editor`。**监听器必须先于 `attachSurface` 注册**（见 §5.7） | 编辑区面板行为 |
-| `panelContract.ts` | `IChatPanel` / `PanelContext` / `PanelId` 三个纯接口：宿主与 surface 之间的契约（宿主独占全部 transcript，所以 detach 一个 surface 不会丢内容；detach 后**允许**继续收到零星事件，宿主丢弃而不是抛错） | 面板接口变更 |
+| `ChatEditorPanel.ts` | 编辑区主面板生命周期：`open()` / `close(reason)`，视图类型 `vac-chat-editor`。**监听器必须先于 `attachSurface` 注册**（见 §5.7） | 编辑区面板行为 |
+| `SideChatPanel.ts` | 临时 `vac-side-chat` 单面板多标签：`open()` 严格串行且每次 fork 新 Side；按创建顺序登记成员，引用按 sessionId 分队列，异常只回滚本次；活动关闭选右/左邻，源关闭清理其子 Side，不注册 serializer | Side 生命周期 |
+| `panelContract.ts` | `IChatPanel` / `PanelContext` / `PanelId` 与 `SideChatOpener`（open/has/sessionIds/activate/close）：宿主与 surface 解耦；detach 后允许零星事件，宿主丢弃而不是抛错 | 面板接口变更 |
 | `SessionNotifier.ts` | **会话状态通知**（等待权限 / 等待表单 / 轮次完成）→ 右下角通知（带「打开会话」按钮）。去重键 `sessionId::kind::token` 由本模块拼，调用方只给 token。**不 import vscode**（UI 通道靠注入缝），可被 vitest 直接驱动（见 §5.34） | 改「哪个会话在等用户」的通知口径 |
 | `diskSessions.ts` | 从 Claude Code 自己的会话目录（`<config>/projects/<slug>/<sessionId>.jsonl`）**补全**历史列表：`session/list` 不是全集。厂商私有格式、只读每个文件的前若干行、只扫当前工作目录的 slug、**只对 profile 声明 `transcriptStore: 'claude'` 的 agent 生效**（按 kind，入口 `ChatPanelHost` 的 `transcriptDirFor`，目录取 agent 自己 env 里的 `CLAUDE_CONFIG_DIR`）；任何一步失败都只当作「没有补充」（见 §5.45）。另提供 `readTranscriptCompactions`（compact boundary → summary uuid 的 trigger/preTokens）与 `readTranscriptUserAttachments` 的 `compactSummary` 标记（见 §5.55） | 历史列表比官方少几条 / Claude 转录目录格式变更 / compact 行元数据 |
-| `protocol.ts` | postMessage 判别联合（`ExtToChat` / `ChatToExt`）+ `verifySession` 纪律 | 增删消息类型 |
+| `protocol.ts` | postMessage 判别联合（`ExtToChat` / `ChatToExt`）+ `verifySession` 纪律；Side 增加 `openSide` / `sideFocus` / `sideClose` / 带 sessionId 的 `sideQuote`，`SessionSummary.sideChat` 带 parentSessionId/parentTitle/forkedAt | 增删消息类型 |
 | `markdown.ts` | `SafeMarkdown`：覆盖 `marked` 的 `html`/`link`/`image` 三个渲染钩子。**必须用 `new Marked()`**（不能用全局单例，渲染钩子会被别处改掉） | markdown 安全策略变更 |
 | `sessionChoices.ts` | **073 新增**。切换状态（mode + config options）的**快照 / 按通知载荷打补丁 / 算差异 → 人类可读的一句话**。纯函数，宿主只做缓存与发帖（去重靠"缓存由宿主独占"，见 §5.22）。**128 起模式以 config option 为权威**：快照的 modeId 由它派生、mode payload 写回该副本——两通道各存一份副本且只写一份时，去重会静默失效（见 §5.22 末与 pitfalls #34） | 改切换提示的表述、或改"两条上报路径怎么去重" |
 | `historyDirs.ts` | **079 新增**。历史选择器的目录过滤器：`directoryKey`（目录同一性：平台大小写规则 + 尾分隔符）/ `directoryOptions`（候选目录与条数）/ `folderName`。纯函数，宿主算 key、客户端只比较（见 §5.24） | 改"两个路径算不算同一个目录"、或改候选目录的来源与排序 |
@@ -56,7 +57,7 @@
 | `content/toolCalls.ts` | `ToolInvocation` → `ToolCallView`（命令、locations、diff/terminal/content 项；对象形状的 `rawOutput` 以 JSON 进 OUT 兜底，裸 `{exit_code}` 跳过） | 工具调用渲染数据 |
 | `nesting/NestingStrategy.ts` | `NestingStrategy` 接口 + `resolveNestingStrategy(agentName)` 分派（按 `AgentProfile.nesting`，即 kind，不按名字）+ `flatNesting`（**空实现，且是默认路径**） | 新增 agent 的嵌套策略 |
 | `nesting/ClaudeCodeNesting.ts` | Claude Code 的嵌套推断：显式链接（父的 `rawOutput`/`_meta` 里出现子 id）优先，时序包含回退。**全部是启发式猜测** | 探针 (b) 有新发现时改这里 |
-| `html/index.ts` | `renderChatHtml(webview, nonce, surface = 'view')`：外壳 + 样式 + 标记 + 脚本。**`surface` 会变成 `<body class="surface-view\|surface-editor">`**（050），供 CSS 区分侧边栏与编辑区底色 | 装配顺序变更 |
+| `html/index.ts` | `renderChatHtml(webview, nonce, surface = 'view')`：外壳 + 样式 + 标记 + 脚本。`surface` 变成 `<body class="surface-view\|surface-editor\|surface-side">`；Side 复用完整聊天骨架，来源横幅在 sessionHeader 与 messageArea 之间 | 装配顺序变更 |
 | `html/shell.ts` / `styles.ts` / `body.ts` | CSP 与文档外壳 / 全部 CSS / 静态标记 | UI 外观 |
 | `html/nonce.ts` | CSP nonce 生成 | — |
 | `html/client/*.ts` | webview 内联客户端 JS，**每个模块是一个字符串**，统一挂到 `window.__vac`。构件：`dom` / `icons` / `links`（链接与文件 chip）/ `boot`（装配入口）/ `tabs` / `transcriptView` / `toolCallView`（记录区，见 §5.16+）/ `rail`（左侧引导条，§5.11）/ `scroll` + `perf`（滚动记忆与长任务看门狗，§5.10/§5.46）；`scroll` 还负责**内层滚动卡片的焦点门控与自动追尾**（§5.53）/ `times`（记录时刻，§5.29）/ `stickyUser`（置顶最近的用户消息，§5.25）/ `outline` + `contextMenu` + `sessionMenu` + `directoryMenu`（大纲与三个右键菜单，§5.9/§5.50）/ `permissionView` + `permissionDrawer`（权限卡与抽屉，§5.8/§5.35）/ `elicitationView`（表单，§5.33）/ `lightbox`（图片放大）/ `stateCard`（**连接状态卡**，§5.28）/ `composer`（输入卡，§5.32）/ `autoExpand`（新输出自动展开，按会话 + 卡片类型，2026-10-21）/ `tail`（消息面板自动追尾，2026-10-28，§5.54）/ `settingsPanel`（设置面板，2026-10-21）/ `popover`（面板内非模态确认 / 输入浮层，2026-10-29；会话删除 / 关闭运行中 / 重命名 / 设置破坏性动作共用）。058 新增 `directoryMenu.ts`；097 新增 `lightbox.ts`；102 新增 `stickyUser.ts`；123 新增 `stateCard.ts`（它同时接管了原先散在 `sessionMenu.ts` 与 `boot.ts` 的空态文案和 Connect 按钮）；151 起 `composer.ts` 也接管**草稿页**的输入卡；152 起 `elicitationView.ts` 从"记录里的内联卡"改成**悬浮抽屉**（记录只留一行待答条） | 改前端交互 |
@@ -119,6 +120,11 @@
 （助手气泡只显示原始 markdown 文本，代码块/复制按钮/链接全都没有），而所有自动化检查都是绿的——
 因为 tsc/lint/webpack 都看不到「消息被运行时守卫丢掉」。见 `CUSTOM-20260923-012`。
 
+**规则三：surface 归属必须与会话归属同时成立。**
+`canSurfaceAccess(from, sessionId)` 要求主 surface 只能操作非 Side，Side 只能操作 `surfaceFocused['side']` 绑定的 Side；
+`openSide` 只接受正在显示该源主会话的 view/editor。权限/表单仍共用一个 Host presenter，但 Host 调
+`PermissionBridge.answer()` / `ElicitationBridge.submit()` 时总传消息中的 expected sessionId，拒绝 stale/cross-surface promptId 回答别的会话。
+
 ### 5.5 webview 侧的安全约定
 
 - CSP：`script-src` **只有 nonce**（无 `'unsafe-inline'`），`img-src` 额外允许 `data:`（非文本内容的 base64 图片）。
@@ -156,7 +162,7 @@
 单趟会让一条全新的深链全部连上（深度都从 0 开始）。**改动前请先跑 `src/test/nesting.test.ts`（11 条）**，
 它把上面每条护栏都钉死了。
 
-### 5.7 双 surface：侧边栏 + 编辑区（CUSTOM-20260924-019）
+### 5.7 主双面与临时 Side surface（CUSTOM-20260924-019）
 
 **为什么必须新建面板**：侧边栏的 `webview` 视图**无法被拖进编辑区**，VS Code 也没有对应的声明式开关；
 编辑区承载 webview 的唯一途径是 `vscode.window.createWebviewPanel`（本仓库此前零处使用）。
@@ -167,13 +173,22 @@
 
 | 关注点 | 规则 |
 |---|---|
-| 状态归属 | 只有一个 `ChatPanelHost`，两个面读同一份 `TranscriptStore` / 工具索引 / 附件 / usage |
-| 下行消息 | `post(msg)` **广播**（客户端本来就按 `currentSessionId` 过滤，广播即同步） |
+| 状态归属 | 只有一个 `ChatPanelHost`，主双面读同一份 `TranscriptStore` / 工具索引 / 附件 / usage；Side 在同一 store 中按自己的 sessionId 隔离 |
+| 下行消息 | `post(msg)` **广播**（客户端本来就按 `currentSessionId` 过滤，广播即同步）；boot/focus/meta/sessionsChanged 等会话外壳状态按下表及 Side 规则定向 |
 | `boot` | **定向**（`pushBoot(from)`），已有 UI 偏好时顺序为 **`uiPrefs → boot`**：恢复中间滚动位置可能立即取消 Tail 并写回，不能让未 hydrate 的偏好表抢先。广播 `boot` 会让另一个文档被迫 `hydrate` → reset + 重建 + 滚到底 |
-| `focus` / `meta` / `sessionsChanged` / `append` / `revise` | 广播 |
-| `renderMarkdown` 往返 | 请求照旧；`markdownRendered` 广播（两个文档都需要 html，`TranscriptStore.patch` 幂等）。**186 加了一条铁律：一份 html 只对"它照之渲染的那段文本"有效**。请求带的是发起那一刻的文本，而正文还在流（适配器 `includePartialMessages: true`，一条消息拆成很多 chunk），所以回填往往对不上当前文本。两边都要判：宿主 `handleRenderMarkdown` 比对 `item.text` 与 store 当前 `entry.text`，不符就**不落盘、不回填**；客户端 `patch` 则用 `asked[entryId]`（这次问的是哪段文本）判定，不符就丢掉手里的 html。**不判的后果**：正文冻在"第一段"上，后面收到的内容一个字都不显示（用户报的"消息显示不全"），而且换会话/重开都还是那一版。**2026-10-27 起宿主还有第二条通道（不再依赖这条往返）**：`session-load-end` → `prefillReplayMarkdown`、`snapshotOf` → `prefillSnapshotMarkdown`、以及**每个会话安静 600ms 后**的 `armSettlePrefill` → `settlePrefillMarkdown`（覆盖"轮次结束后仍在输出"的尾随记录——它们再也等不到 `streaming:false`，客户端的定稿重试点因此永不触发），由宿主把缺 html 的 assistant / thought 自己渲染掉；回放时以 `revise { text, html, streaming:false }` 下发，客户端规则是**同一条 patch 里带着 text 的 html 一律照收**（它渲染的就是那次给的 text，没有"客户端问过哪一段"这回事）。安静窗口那条**在轮次仍在跑时跳过还在 stream 的记录**（半截正文会随下一片变回原文），轮次结束则一起渲染。起因：真机日志里一次 37 条记录的回放，客户端**只为最后一条**发过请求，其余全停在原文，而两端都没有一条报错——这条往返会静默断在客户端侧，所以进场与收尾都不再只靠它 |
+| `focus` / `meta` / `sessionsChanged` / `append` / `revise` | 主双面之间广播；Side 不接收主 sessions/focus。`meta` 按 sessionId 投递给绑定它的 surface；Side sessionsChanged 含面板全部成员，focus/boot 的 summary/meta/snapshot 仅活动 Side；append/revise 仍可广播，由客户端 currentSessionId 过滤 |
+| `renderMarkdown` 往返 | 请求按 surface/session 过滤；`markdownRendered` 广播（所有显示该 session 的文档都需要 html，`TranscriptStore.patch` 幂等）。**186 加了一条铁律：一份 html 只对"它照之渲染的那段文本"有效**。请求带的是发起那一刻的文本，而正文还在流（适配器 `includePartialMessages: true`，一条消息拆成很多 chunk），所以回填往往对不上当前文本。两边都要判：宿主 `handleRenderMarkdown` 比对 `item.text` 与 store 当前 `entry.text`，不符就**不落盘、不回填**；客户端 `patch` 则用 `asked[entryId]`（这次问的是哪段文本）判定，不符就丢掉手里的 html。**不判的后果**：正文冻在"第一段"上，后面收到的内容一个字都不显示（用户报的"消息显示不全"），而且换会话/重开都还是那一版。**2026-10-27 起宿主还有第二条通道（不再依赖这条往返）**：`session-load-end` → `prefillReplayMarkdown`、`snapshotOf` → `prefillSnapshotMarkdown`、以及**每个会话安静 600ms 后**的 `armSettlePrefill` → `settlePrefillMarkdown`（覆盖"轮次结束后仍在输出"的尾随记录——它们再也等不到 `streaming:false`，客户端的定稿重试点因此永不触发），由宿主把缺 html 的 assistant / thought 自己渲染掉；回放时以 `revise { text, html, streaming:false }` 下发，客户端规则是**同一条 patch 里带着 text 的 html 一律照收**（它渲染的就是那次给的 text，没有"客户端问过哪一段"这回事）。安静窗口那条**在轮次仍在跑时跳过还在 stream 的记录**（半截正文会随下一片变回原文），轮次结束则一起渲染。起因：真机日志里一次 37 条记录的回放，客户端**只为最后一条**发过请求，其余全停在原文，而两端都没有一条报错——这条往返会静默断在客户端侧，所以进场与收尾都不再只靠它 |
 | 关掉再打开 | `onDidDispose` → `detachSurface('editor')`；store 不动；重开 → 新文档 → `ready` → 定向 boot → 全量快照 |
 | 窗口重载后恢复 | **非目标**（需 `registerWebviewPanelSerializer`） |
+
+**Side 是第三个、但不参与主焦点模型的 surface**：
+
+- `ChatViewProvider` 装配一个多标签 `SideChatPanel`；每次 `open()` 都从对应主会话末尾 fork 新 Side，同源/跨源均并存，新 tab 自动激活。标签为 `来源标题 · Side短id`，保持创建顺序且不可拖拽；关闭活动 tab 优先右邻、否则左邻，最后一个才销毁面板；源关闭只清理其子 Side。
+- Side attach/activate 只写 `surfaceFocused['side']`，不改全局 `focused`、主 surface `lastActive` 或主 tab 顺序。Side boot/sessionsChanged 含全部成员，focus/boot 的 summary/meta/snapshot 仅活动 Side；`autoConnect=false`，不含主 recoverable/defaultCwd；`syncSideOrigin()` 显示 `From <完整 parentSessionId>`，非空 `parentTitle` 追加为 ` · <标题>`，并显示 forkedAt tooltip；无标题/空白标题只留 UUID，晚到标题与父改名随 summaries 原地刷新，不重新 hydrate。
+- `SIDE_MESSAGE_TYPES` 与 `canSurfaceAccess()` 双层拒绝递归 Side、普通 fork、新建/恢复及跨 session 操作；`sideFocus/sideClose` 单独校验 Side surface 与面板成员，可切换/关闭非活动 tab，其他普通消息仍只准活动 Side。
+- `ready` 先交 `host.onMessage(..., 'side')` 触发定向 boot，再只 flush 活动 Side 的引用。`sideQuote` 带 sessionId，宿主按 Side 分队列、客户端再校验 currentSessionId；引用不进 ACP prompt，直到用户显式发送。
+- 后台 Side 权限/表单不抢活动 tab，通知点击经 `activate(..., { reveal: true })` 定位对应 Side；后台输出只标自己的 unread。权限/表单回答继续由 Bridge 校验 expected session，且每个请求恰好结算一次。
+- 关闭先 `releaseSideSession()` 清 Side scope 中指定 Side 的四张 per-session UI prefs，保留兄弟 Side、Side defaults/layout 与全部 Main prefs，再经 `deleteSession()` 结算请求、cancel/close/delete/local forget；成员/listener/panel/surface 幂等清理。无 serializer，窗口重载不恢复；Host 启动会清 Side 遗留 per-session map，但保留 Side defaults/layout。Main/Side 投影与回写收敛见 `arch/chat-panel-state.md` §5.55。
 
 **三条不变量**（踩了不会有自动检查报错）：
 
@@ -267,8 +282,8 @@ pending ──用户点按钮──► selected        （回答 optionId）
 
 | 关注点 | 规则 |
 |---|---|
-| 持久化 | `mode` / `width`（180px~50%）走**宿主 `globalState`**（077）：`setUiPref`（webview→ext）存 `vac.outlinePrefs.v1`，`uiPrefs`（ext→webview）随 boot 带回、`applyPrefs()` 恢复——跨窗口重载/编辑器面板重开存活（webview 本地 `vscode.setState` 只活在同一实例 reload） |
-| **开/关按会话记（204）** | `mode` 是**布局**偏好（"允不允许出现侧栏"），而"这个会话里它开着吗"是**另一件事**，按会话记：`outlineOpenBySession` + `outlineOpenDefault`（与 Times 200 同一套语义：有效值 = 表里的记录 ?? 默认值；拨一次两处都写）。焦点咽喉点同步（`boot.applyFocus` → `NS.outline.setSession`，与 `stickyUser.setSession` 同形）。**两个 bug 的公共根因就在这一行**：以前关侧栏只改瞬态 `isOpen`（`mode` 仍是 sidebar），于是 ①重启后 `applyPrefs` 把它重新算成 `mode === 'sidebar'` ⇒ 自己回来；②`uiPrefs` 是**广播**的（宿主在**任何** `setUiPref` 之后都回一次），客户端收到就走 `applyPrefs` ⇒ **点一下 Times（200 起它会发 setUiPref）或拖一下 tab（198）就能让刚关掉的侧栏弹回来**（用户报的两条）。现在 `isOpen` 一律由那两份持久状态推出来，**回话只是收敛、不是命令**；关（☰ / Escape / ✕）一律落盘。旧记录（没有这两项）按老行为补一次 `openDefault = true`（钉住过的人升级后侧栏不该无声消失） |
+| 持久化 | `mode` / `width`（180px~50%）走**宿主 `globalState`**（077）：`setUiPref`（webview→ext）按 Main/Side scope 分别存 `vac.outlinePrefs.v1` / `vac.sideUiPrefs.v1`，`uiPrefs`（ext→webview）随目标面 boot 带回、`applyPrefs()` 恢复——跨窗口重载/编辑器面板重开存活（webview 本地 `vscode.setState` 只活在同一实例 reload）。主 view/editor 共享 Main 布局，Side 独立；Side 重载保留布局但清 per-session map，详见 `arch/chat-panel-state.md` §5.55 |
+| **开/关按会话记（204）** | `mode` 是**布局**偏好（"允不允许出现侧栏"），而"这个会话里它开着吗"是**另一件事**，按会话记：`outlineOpenBySession` + `outlineOpenDefault`（与 Times 200 同一套语义：有效值 = 表里的记录 ?? 默认值；拨一次两处都写）。焦点咽喉点同步（`boot.applyFocus` → `NS.outline.setSession`，与 `stickyUser.setSession` 同形）。**两个 bug 的公共根因就在这一行**：以前关侧栏只改瞬态 `isOpen`（`mode` 仍是 sidebar），于是 ①重启后 `applyPrefs` 把它重新算成 `mode === 'sidebar'` ⇒ 自己回来；②当时 `uiPrefs` 是**广播**的（宿主在**任何** `setUiPref` 之后都回一次），客户端收到就走 `applyPrefs` ⇒ **点一下 Times（200 起它会发 setUiPref）或拖一下 tab（198）就能让刚关掉的侧栏弹回来**（用户报的两条）。现在 `isOpen` 一律由那两份持久状态推出来，**回话只是收敛、不是命令**；关（☰ / Escape / ✕）一律落盘。旧记录（没有这两项）按老行为补一次 `openDefault = true`（钉住过的人升级后侧栏不该无声消失） |
 | 跳转 | 侧栏模式**不关**（常驻导航）；下拉模式维持「跳完收起」 |
 | `close()` 语义 | **只关下拉**：`boot.ts` 会话切换调 `close()`，侧栏模式 no-op——否则刚恢复的侧栏会被 boot 的 close 关掉 |
 | 点击外部 | 只关下拉；侧栏是常驻面板，在 transcript 里点来点去不关 |
@@ -319,7 +334,7 @@ pending ──用户点按钮──► selected        （回答 optionId）
 > **§5.x 的编号原样保留**，所以各处引用只需换文件名，不必重编号（理由同 042）。
 >
 > 本文件保留的是**面板本体**：文件职责（§5.1）、客户端三条纪律（§5.2）、在途状态（§5.3）、
-> 消息纪律（§5.4）、安全约定（§5.5）、子 agent 分组推断（§5.6）、双 surface（§5.7）、
+> 消息纪律（§5.4）、安全约定（§5.5）、子 agent 分组推断（§5.6）、主双面与 Side surface（§5.7）、
 > 权限卡（§5.8）、会话大纲（§5.9）、长会话性能与 INV-A..F（§5.10）、引导条（§5.11）、
 > 面板审计结论表入口（§5.12）；性能细节与审计正文见顶部对应分册。
 

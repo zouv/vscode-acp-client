@@ -142,6 +142,11 @@ Webview 默认弹 **Chromium 的原生菜单**，它在这个面板上有两个�
 
 - `contextmenu` 上 `preventDefault()` **整体接管**（留着原生菜单会得到两个菜单）。
 - 项：`Copy selection`（选区，**无选区时禁用**）/ `Copy message` / `Copy code` / `Select all`。**没有 Cut/Paste**。
+  主会话 `.messages` 内存在非空选区时另有 `Side Chat with Selection`：`itemsFor()` 创建闭包时经
+  `NS.bridge.currentSessionId()` 捕获源 sessionId 与 selectedText，发送 `openSide`；**不传 entryId/messageId**，
+  所以即使右键旧消息也从打开时的会话末尾 fork。Side surface 不显示该入口，也不显示普通 `Fork from here`。
+  Side tab 右键只保留 `Copy working directory` / `Copy Session ID` / `Close`，不提供主会话的 Rename、
+  Mark as unread、New Session 或 Duplicate；关闭仍复用 running 确认。
   **禁用项比"点了没反应"诚实得多** —— 本次故障的全部体感就是"点了没反应"。
   `Copy selection` 这个名字就是那次教训：一条永远灰着的 `Copy` 会被读成"坏了/这是干什么的"，
   标签本身应当说清它复制的是**选区**（上下文专属的 `Copy`——大纲行 / 地址栏——复制的是内容与路径，不是选区）。

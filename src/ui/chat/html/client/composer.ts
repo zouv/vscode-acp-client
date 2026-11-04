@@ -65,6 +65,7 @@ export const composerClient = `
     // are mutually exclusive — 'setFocus' clears this and 'setDraft' clears
     // 'sessionId' — because 'send()' branches on it.
     draft: null,
+    sideChat: false,
     /** A create-then-send is in flight; blocks a second send. */
     draftPending: false,
     // [CUSTOM- 当前 agent 是否吃"轮次进行中的补充消息"（steering，来自 meta）。
@@ -273,6 +274,22 @@ export const composerClient = `
     sendBtn.setAttribute('aria-label', running ? 'Stop' : 'Send');
   }
 
+  function commandList() {
+    var commands = state.commands.slice();
+    if (!state.sessionId || state.draft || state.sideChat) { return commands; }
+    commands = commands.filter(function (cmd) { return cmd.name !== 'side'; });
+    commands.unshift({
+      name: 'side',
+      description: 'Open a temporary Side Chat with the current context',
+    });
+    return commands;
+  }
+
+  function isSideCommand(text) {
+    return text.trim() === '/side' && !!state.sessionId && !state.draft
+      && !state.sideChat && state.attachments.length === 0;
+  }
+
   function refreshControls() {
     // [CUSTOM- 最先算：下面两条早退分支（draftPending / draft）也会换 placeholder
     // 与禁用态，那条说明的显隐是独立的一件事，不该被它们跳过。
@@ -304,12 +321,12 @@ export const composerClient = `
     if (state.draft) {
       // Say why the tab says "New session": the first message is what creates it. The slash
       // list is mentioned when the host could give us one (the agent's last session's commands).
-      input.placeholder = state.commands.length > 0
+      input.placeholder = commandList().length > 0
         ? 'Your first message creates this session, or / for commands\\u2026'
         : 'Your first message creates this session\\u2026';
       return;
     }
-    if (state.commands.length > 0) {
+    if (commandList().length > 0) {
       input.placeholder = 'Type a message, or / for commands\\u2026';
     } else {
       input.placeholder = 'Type a message\\u2026';
@@ -317,6 +334,18 @@ export const composerClient = `
   }
 
   function send() {
+    var text = input.value;
+    if (isSideCommand(text)) {
+      NS.bridge.post({ type: 'openSide', sessionId: state.sessionId });
+      input.value = '';
+      stashDraft();
+      persistDraftsSoon();
+      hideSlash();
+      autoGrow();
+      refreshSendState();
+      refreshSteerHint();
+      return;
+    }
     // [CUSTOM- 轮次进行中：**能发就发**。
     //
     // 以前这里是 if (state.running) { return; }（"扩展会拒掉第二个 prompt，先清空输入框
@@ -326,7 +355,6 @@ export const composerClient = `
     // 后半句仍然成立，所以**不支持的 agent 照旧不发** —— 但不再静默：refreshSteerHint 会在
     // 输入卡上方写明原因（"输入框里打了字却按回车没反应"是最容易让人以为程序坏了的那种）。
     if (state.running && !state.steering) { return; }
-    var text = input.value;
     // [CUSTOM- 有附件（图片/文件）时允许空文字发送；纯文字则要求非空。
     if ((!text || text.trim().length === 0) && state.attachments.length === 0) { return; }
 
@@ -424,7 +452,7 @@ export const composerClient = `
   function refreshSteerHint() {
     if (!steerHintEl) { return; }
     var hasText = !!(input.value && input.value.trim().length > 0) || state.attachments.length > 0;
-    steerHintEl.hidden = !(state.running && !state.steering && hasText);
+    steerHintEl.hidden = !(state.running && !state.steering && hasText && !isSideCommand(input.value));
   }
 
   function cancel() {
@@ -696,11 +724,12 @@ export const composerClient = `
   function updateSlashPopup() {
     autoGrow();
     var query = currentQuery();
-    if (query === null || state.commands.length === 0) { hideSlash(); return; }
+    var commands = commandList();
+    if (query === null || commands.length === 0) { hideSlash(); return; }
 
     var matches = [];
-    for (var i = 0; i < state.commands.length; i++) {
-      var cmd = state.commands[i];
+    for (var i = 0; i < commands.length; i++) {
+      var cmd = commands[i];
       if (query.length === 0 || String(cmd.name).toLowerCase().indexOf(query) === 0) {
         matches.push(cmd);
       }
@@ -769,9 +798,10 @@ export const composerClient = `
    */
   function openSlash() {
     if (!input || input.disabled) { return; }
-    if (state.commands.length === 0) { return; }
+    var commands = commandList();
+    if (commands.length === 0) { return; }
     input.focus();
-    state.slashMatches = state.commands.slice();
+    state.slashMatches = commands;
     state.slashIndex = 0;
     renderSlash();
   }
@@ -1283,6 +1313,7 @@ export const composerClient = `
     state.running = false;
     state.loading = false;
     state.draft = draft ? { draftId: draft.draftId, cwd: draft.cwd || null } : null;
+    state.sideChat = false;
     // [CUSTOM- 用户在这个草稿页上选过的配置项（configId → value），随草稿存活。
     // 存回 boot 持有的那个 draft 对象上：切换草稿/切走再切回时它还在，而且**只有一份**
     // （composer 只读它，pitfall #19 的"两份副本"在这里要避开）。
@@ -1460,6 +1491,7 @@ export const composerClient = `
     state.draft = null;
     state.draftPending = false;
     state.sessionId = summary ? summary.sessionId : null;
+    state.sideChat = !!(summary && summary.sideChat);
     state.agentName = summary ? summary.agentName : null;
     state.running = summary ? !!summary.running : false;
     state.loading = summary ? !!summary.loading : false;
@@ -1541,6 +1573,26 @@ export const composerClient = `
     refreshControls();
   }
 
+  function appendQuote(text) {
+    var normalized = String(text || '').replace(/\\r\\n?/g, '\\n');
+    if (!normalized.trim()) { return; }
+    var quote = normalized.split('\\n').map(function (line) { return '> ' + line; }).join('\\n');
+    var current = input.value;
+    var separator = '';
+    if (current) {
+      separator = /\\n\\n$/.test(current) ? '' : (/\\n$/.test(current) ? '\\n' : '\\n\\n');
+    }
+    input.value = current + separator + quote + '\\n\\n';
+    stashDraft();
+    persistDraftsSoon();
+    hideSlash();
+    autoGrow();
+    refreshSendState();
+    refreshSteerHint();
+    if (input.setSelectionRange) { input.setSelectionRange(input.value.length, input.value.length); }
+    input.focus();
+  }
+
   function focusInput() { input.focus(); }
   // [CUSTOM- Lets boot.ts decide whether it is appropriate to move
   // the caret into the composer (no session / still loading = it is not).
@@ -1577,6 +1629,7 @@ export const composerClient = `
     setAttachments: setAttachments,
     rememberImage: rememberImage,
     setLoading: setLoading,
+    appendQuote: appendQuote,
     focusInput: focusInput,
     isComposable: isComposable,
     forgetDraft: forgetDraft,

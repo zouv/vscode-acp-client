@@ -72,7 +72,10 @@ export class SessionStore {
 
   /** Returns false when nothing changed (same focus, not forced). */
   focus(sessionId: string | null, force = false): boolean {
-    if (sessionId !== null && !this.sessions.has(sessionId)) { return false; }
+    if (sessionId !== null) {
+      const session = this.sessions.get(sessionId);
+      if (!session || session.sideChat) { return false; }
+    }
     if (this.focused === sessionId && !force) { return false; }
     this.focused = sessionId;
     if (sessionId) {
@@ -84,10 +87,13 @@ export class SessionStore {
 
   mostRecentLiveId(): string | null {
     for (let i = this.focusOrder.length - 1; i >= 0; i--) {
-      if (this.sessions.has(this.focusOrder[i])) { return this.focusOrder[i]; }
+      const session = this.sessions.get(this.focusOrder[i]);
+      if (session && !session.sideChat) { return session.sessionId; }
     }
     let last: string | null = null;
-    for (const id of this.sessions.keys()) { last = id; }
+    for (const session of this.sessions.values()) {
+      if (!session.sideChat) { last = session.sessionId; }
+    }
     return last;
   }
 

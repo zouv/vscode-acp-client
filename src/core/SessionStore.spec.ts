@@ -69,6 +69,34 @@ describe('SessionStore', () => {
     expect(store.focusedId).toBeNull();
   });
 
+  it('keeps side sessions indexed without allowing them to take main focus', () => {
+    const store = new SessionStore();
+    const side = { ...session('side'), sideChat: { parentSessionId: 's1', forkedAt: '2026-01-01T00:00:01.000Z' } };
+    store.add(session('s1'));
+    store.add(side);
+    store.focus('s1');
+
+    expect(store.focus('side')).toBe(false);
+    expect(store.focusedId).toBe('s1');
+    expect(store.idsForAgent('Claude Code')).toEqual(['s1', 'side']);
+    store.remove('s1');
+    expect(store.mostRecentLiveId()).toBeNull();
+    expect(store.get('side')).toBe(side);
+  });
+
+  it('skips side sessions when picking a main-session successor', () => {
+    const store = new SessionStore();
+    store.add(session('s1'));
+    store.add(session('s2'));
+    store.add({ ...session('side'), sideChat: { parentSessionId: 's2', forkedAt: '2026-01-01T00:00:01.000Z' } });
+    store.focus('s1');
+    store.focus('s2');
+
+    expect(store.mostRecentLiveId()).toBe('s2');
+    store.remove('s2');
+    expect(store.mostRecentLiveId()).toBe('s1');
+  });
+
   it('returns null when nothing is live', () => {
     expect(new SessionStore().mostRecentLiveId()).toBeNull();
   });

@@ -7,6 +7,7 @@ import type { SessionUpdateHandler } from '../../handlers/SessionUpdateHandler';
 import { log } from '../../utils/Logger';
 import { ChatEditorPanel } from './ChatEditorPanel';
 import { ChatPanelHost } from './ChatPanelHost';
+import { SideChatPanel } from './SideChatPanel';
 import type { PanelContext } from './panelContract';
 
 /**
@@ -19,6 +20,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private view: vscode.WebviewView | null = null;
   private readonly host: ChatPanelHost;
   private readonly editor: ChatEditorPanel;
+  private readonly side: SideChatPanel;
 
   constructor(
     extensionUri: vscode.Uri,
@@ -35,6 +37,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     );
     this.host.setStorageRoot(storageRoot);
     this.editor = new ChatEditorPanel(this.host, sessionManager, extensionUri, () => this.context());
+    this.side = new SideChatPanel(this.host, sessionManager, extensionUri);
     sessionManager.on('active-session-changed', () => this.syncFocus());
   }
 
@@ -79,6 +82,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   dispose(): void {
+    this.side.dispose();
     this.editor.dispose();
     this.host.detach();
     this.view = null;

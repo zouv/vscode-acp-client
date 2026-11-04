@@ -58,7 +58,8 @@ export const tabsClient = `
     for (i = 0; i < restoring.length; i++) {
       entries.push({ kind: 'restore', id: restoring[i].sessionId, restore: restoring[i] });
     }
-    if (tabOrder.length > 0) {
+    var sideTabs = state.sessions.length > 0 && !!state.sessions[0].sideChat;
+    if (tabOrder.length > 0 && !sideTabs) {
       var rank = {};
       for (i = 0; i < tabOrder.length; i++) { rank[tabOrder[i]] = i; }
       var known = [], unknown = [];
@@ -107,7 +108,10 @@ export const tabsClient = `
       // 宿主回包会再走一次 setFocus（同值，幂等）；切到非 live 会话失败时，下一次
       // sessionsChanged/focus 会把高亮纠正回来。
       setFocus(model.summary);
-      NS.bridge.post({ type: 'focusSession', sessionId: model.id });
+      NS.bridge.post({
+        type: model.summary && model.summary.sideChat ? 'sideFocus' : 'focusSession',
+        sessionId: model.id
+      });
     }
   }
 
@@ -123,7 +127,12 @@ export const tabsClient = `
       NS.bridge.post({ type: 'forgetRestorable', sessionId: model.id });
       return;
     }
-    var close = function () { NS.bridge.post({ type: 'closeSession', sessionId: model.id }); };
+    var close = function () {
+      NS.bridge.post({
+        type: model.summary && model.summary.sideChat ? 'sideClose' : 'closeSession',
+        sessionId: model.id
+      });
+    };
     // [CUSTOM- 2026-10-29：运行中的会话先问一句，但问在面板内（非模态浮层），
     // 不再用宿主 modal 挡住整个 IDE。summary.running 与宿主 isSessionRunning 同源
     // （轮次在飞或后台任务未结束），四个关闭入口都汇到这里，一次覆盖全部。
@@ -268,6 +277,10 @@ export const tabsClient = `
   }
 
   function tabLabel(summary) {
+    if (summary.sideChat) {
+      var parent = summary.sideChat.parentTitle || summary.sideChat.parentSessionId;
+      return parent + ' · ' + summary.sessionId.slice(0, 8);
+    }
     if (summary.title && summary.title.length > 0) { return summary.title; }
     if (summary.sessionId) { return summary.sessionId.slice(0, 8); }
     return 'session';
@@ -562,6 +575,7 @@ export const tabsClient = `
         var active = isActiveModel(model);
         var isDraft = model.kind === 'draft';
         var isRestore = model.kind === 'restore';
+        var side = !isDraft && !isRestore && !!(model.summary && model.summary.sideChat);
         var label = isDraft ? 'New session'
           : (isRestore ? tabLabel(model.restore) : tabLabel(model.summary));
         var idAttr = isDraft ? 'data-draft-id' : (isRestore ? 'data-restore-id' : 'data-session-id');
@@ -593,7 +607,11 @@ export const tabsClient = `
               { text: model.id, dim: true }]
               .concat(model.restore.app ? [{ text: '(' + model.restore.app + ')', dim: true }] : [])
               .concat([{ text: '(not loaded yet \\u2014 click to open)', dim: true }])
-            : [{ text: label }, { text: model.id, dim: true }]);
+            : (side
+              ? [{ text: 'From ' + (model.summary.sideChat.parentTitle || model.summary.sideChat.parentSessionId) },
+                { text: 'Side: ' + model.id, dim: true },
+                { text: 'Inherited: ' + model.summary.sideChat.forkedAt, dim: true }]
+              : [{ text: label }, { text: model.id, dim: true }]));
 
         // [CUSTOM- 目录标识：dot 里写目录缩写，一个字母一个 span
         // （3 个走「上 2 下 1」、4 个走 2x2，靠 styles.ts 那套两列网格排）。
@@ -663,7 +681,7 @@ export const tabsClient = `
         // 排它没有意义（它连会话都不是）。
         // [CUSTOM- 这里只留"谁被拖"与"拖完清理"；落点（dragover/drop/dragleave）
         // 在条带上，见 installDrag。
-        if (!isDraft && !isRestore) {
+        if (!isDraft && !isRestore && !side) {
           tab.setAttribute('draggable', 'true');
           tab.addEventListener('dragstart', function (event) { dragStart(tab, model, event); });
           tab.addEventListener('dragend', function () { endDrag(); });

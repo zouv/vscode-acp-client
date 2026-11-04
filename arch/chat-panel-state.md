@@ -202,8 +202,8 @@ scroll 事件**：底部留白（输入卡 / 表单抽屉 / 权限抽屉的高�
   "地址栏显示了什么就默认筛什么"这条不变量是 155 建立起来的，不让它在这里断掉。
 
 **200 Times 按会话记**。状态从"webview 本地的一个全局布尔"（`vscode.setState` 的 `showTimes`，
-关掉编辑器面板就没了）搬到**宿主 globalState**，与大纲偏好、tab 顺序共用**同一条**记录
-⇒ `setUiPref` 自此有三个写者，合并语义（缺字段 = 这一轮没改它）是硬约束。
+关掉编辑器面板就没了）搬到**宿主 globalState 的 Main 偏好记录**，与主大纲偏好、主 tab 顺序共用**同一条**记录；
+Side 后来使用独立记录（见 §5.55）⇒ `setUiPref` 自此有三个写者，合并语义（缺字段 = 这一轮没改它）是硬约束。
 
 - 规则一句话：有效值 = `timesBySession[会话] ?? timesDefault`。拨一次**既**记到当前会话名下、
   **又**把 `timesDefault` 改掉（用户要的"新会话沿用最后一次拨的值"）。
@@ -311,11 +311,11 @@ Tab 栏：`#settingsBtn` 用 `margin-left: auto` 固定在条带最右；`#newTa
 | 数据与写入 | `ChatPanelHost.settingsItems()` 生成 `SettingItem[]`；`handleSetSetting(key,value)` 按 key 决定写 **VS Code 配置**（`vac.autoConnectOnOpen` / `restoreSessionsOnOpen` / `defaultWorkingDirectory` / `autoApprovePermissions` / `logTraffic` / `customModels` / `agents`）还是 **面板 UiPrefs**（`panel.autoExpandDefault` / `panel.autoExpandKinds.*` / `panel.autoExpand.toolHeight` / `panel.autoExpand.thoughtHeight` / `panel.flatTools` / `panel.sendKey` / `panel.composerMaxWidth` / `panel.inputMaxHeight` / `panel.defaultModel.<agent>` / `panel.defaultEffort.<agent>` / `panel.recentDirectoryLimit` / `panel.markdownStyle` / `panel.timesDefault` / `panel.outlineMode` / `panel.outlineWidth`）；`handleSettingAction` 处理 `pickDefaultWorkingDirectory`（系统 `showOpenDialog`）/ `openAgentCache` / `clearAgentCache`（`rmSync`，Linux/Windows 上运行中的模块可能被锁）/ `resetPanelPrefs` / `openLog` / `copyBuildInfo`。写完**重发整张表**，被夹紧的值（宽度 160–480、展开高度 0 或 80–2000、输入卡 360–1200 / 80–800）会回显真实值。 |
 | 默认模型 / 默认推理强度 | `UiPrefs.defaultModelByAgent` / `defaultEffortByAgent`（agent → 值）。`session-created('new')` 时 `applyRememberedModel` 与记住的模式并行应用，按会话挂在 `modelApply` 上；`applyRememberedEffort` 排在模型之后（模型切换可能级联出新的 effort 候选），挂在 `effortApply` 上。草稿页的显式选择先 `await` 这三者再落地（后到的赢）。打开历史会话不套用。`defaultAgentItems` 对每个 agent 各给两行：有候选就渲染下拉（来自 `draftOptions` 快照），没候选退化成文本输入。推理强度按 ACP 的 `category === 'thought_level'` 识别（Claude 的 Effort、Codex 的 reasoning_effort 同一类目），应用前逐项校验。 |
 | Recently used 目录条数 | `UiPrefs.recentDirectoryLimit`（0–30，默认 8；**0 = 不显示「Recently used」分组**，设置面板清空输入框回落 8）。`ChatPanelHost.recentLimit()` 是唯一读取口，`recentDirectories()` 按它截断（0 时直接返回，不问 agent）；`setUiPref` 合并、`settingsItems()` 回显与 `handleSetSetting` 写入都经 `ChatPanelHost.clampRecentDirectories` 夹紧。改动在下一次打开目录抽屉时生效（`directoryChoices` 是即时计算的）。 |
-| Markdown 渲染预设 | `UiPrefs.markdownStyle`（`editor` / `github` / `obsidian` / `typora` / `atom` / `minimal` / `things`，默认 `editor`）。宿主 `resolveMarkdownStyle` 是白名单（旧值 `compact` / `reading` 回落 `editor`）；`uiPrefs` 广播到客户端后 `boot.applyMarkdownStyle` 只写 `body[data-md-style]`，具体排版与配色在 `styles.ts` 里按属性选择器覆盖：每套预设各定义一组 `--vac-md-*` 变量（`vscode-light` / `vscode-dark` 下取硬值，其余主题回落 token），规则统一作用于 `.md`。`editor` 不写任何覆盖 = 原有跟随主题的行为。 |
+| Markdown 渲染预设 | `UiPrefs.markdownStyle`（`editor` / `github` / `obsidian` / `typora` / `atom` / `minimal` / `things`，默认 `editor`）。宿主 `resolveMarkdownStyle` 是白名单（旧值 `compact` / `reading` 回落 `editor`）；该全局字段变化时 `uiPrefs` 分别投影到 Main 双面与 Side，`boot.applyMarkdownStyle` 只写 `body[data-md-style]`，具体排版与配色在 `styles.ts` 里按属性选择器覆盖：每套预设各定义一组 `--vac-md-*` 变量（`vscode-light` / `vscode-dark` 下取硬值，其余主题回落 token），规则统一作用于 `.md`。`editor` 不写任何覆盖 = 原有跟随主题的行为。 |
 | 发送快捷键 / 输入卡尺寸 | `UiPrefs.sendKey` 由 `composer.applyUiPrefs` 消费（`onKeyDown` 决定 Enter 是否发送；另一种组合留给 textarea 换行）；`composerMaxWidth` / `inputMaxHeight` 写 body 的 `--vac-composer-max` / `--vac-input-max-h`。`flatTools` 同时由标题栏的 Sub-agents 按钮写（两个写者都落到同一份 UiPrefs）。 |
 | 面板尺寸 | **固定**：`height: clamp(320px, 80vh, 640px)` + `max-height: calc(100vh - 32px)`，切换分组/改值不跳动；内容在 `#settingsBody` 内滚动。窄面板（<520px）左侧导航变成顶部横排。 |
 | 协议 | `getSettings` → `settings`（ExtToChat）；`setSetting` / `settingAction`（ChatToExt）。三者都在 `verifySession` 守卫**之前**处理（非会话作用域）。 |
-| 双向同步 | `onDidChangeConfiguration` 里 `affectsConfiguration('vac')` → `postSettings()`；面板偏好走 `uiPrefs` 广播（两个 surface 立刻跟上）。 |
+| 双向同步 | `onDidChangeConfiguration` 里 `affectsConfiguration('vac')` → `postSettings()`；面板 scoped 偏好经 `projectUiPrefs` 定向投影（主双面同域，Side 独立），真正全局字段变化才三面同步，见 §5.55。 |
 | 分组 | general / chat / appearance / advanced；**没有条目的分组不显示**（客户端 `groupsWithItems`）。窄面板（<520px）左侧导航自动变成顶部横排。 |
 | 自动展开的范围 | 有效值 = `autoExpandBySession[sessionId] ?? autoExpandDefault`（与 Times 同一条"按会话 + 默认值"模型）。卡片类型是**全局** `autoExpandKinds`（`tool` / `thought` / `diff`），默认 `thought + tool`；写过空数组才是"全不展开"（类型在 Chat 分组）。**展开后的限高**在 Appearance 分组：`autoExpandToolHeight`（默认 360）/ `autoExpandThoughtHeight`（默认 240），0 = 不限，夹在 80–2000；只作用于自动展开时打了 `.auto-expanded` 的卡（手动点开的不受限），超出部分在卡片内部滚动。 |
 | 长编辑器（子面板） | `vac.customModels`（`type:'models'`）与 `vac.agents`（`type:'json'`）在主面板只显示摘要 + `Edit…`（摘要放文字列，按钮与其它控件右缘对齐）；点击打开 `#settingsSubOverlay` 子面板。自定义模型：说明行 + 表头（Model id / Alias / Description）+ 可滚动列表，Add model 靠右紧跟列表、Done 靠右下；Agent JSON：文本框铺满剩余高度，Cancel 在左、Save 在右。模型改动即时提交（每个 input 的 change），JSON 是 Save/Cancel（Save 先本地 `JSON.parse`，非法就在子面板里报错、不发送）。Esc 先收子面板、再收主面板。 |
@@ -365,7 +365,7 @@ Outline 都是会话级**——在一个会话里拨它只影响这个会话，�
 
 | 项 | 规则 |
 |---|---|
-| 数据 | `UiPrefs.tailBySession`（会话 → 布尔）+ `tailDefault`。宿主存 `globalState`，两个面同一份。**默认 `tailDefault` = true** —— 不开按钮时也照旧"贴底跟随"，那是改动前就有的行为，按钮只是把它显式化。 |
+| 数据 | `UiPrefs.tailBySession`（会话 → 布尔）+ `tailDefault`。宿主按 Main/Side 分域存 `globalState`，主 view/editor 同一份，Side 独立。**默认 `tailDefault` = true** —— 不开按钮时也照旧"贴底跟随"，那是改动前就有的行为，按钮只是把它显式化。 |
 | 运行时 | `scroll.ts` 的 `tail` 旗标：`setTail(on, immediate)`；`follow()` 只看 **`tail`**，`reflow()` 以 **`pinned || tail`** 决定是否保持底部。**Tail 关掉 ⇒ follow 绝不自动滚**（"别动我的视口"），开着时持续跟到底，不被布局滚动留下的 `pinned=false` 锁死。`pinned` 仍如实反映几何上的"贴底"，Tail **不许伪造它**（Jump、探针都读它）。`immediate` 只在**用户点按钮**时为真（换会话由 `restore` 决定落点）。 |
 | 退出路径 | ① **真实用户滚动**改变了阅读进度 → `cancelTail('scroll')`。判据不是“非程序写入”本身（浏览器 scroll anchoring / 内容折叠后的夹紧 / 布局重排也会改 scrollTop），而是**用户意图**：wheel（document 门控）、拖 `#messages` 滚动条（pointerdown 落在 messages-bar）、中键自动滚动（button 1，持续到 pointerup）、键盘翻页（PageUp/PageDown/Home/End/方向键），窗口 800ms；② 大纲跳到某条记录（`jumpTo`）；③ 切会话恢复到用户自己选的中间位置（`restore`）。都只改这个会话那一条记录，不动默认值。 |
 | 滚轮门控与 Tail | 指针在**未聚焦**卡片的内层滚动区时，门控用 `writeTop(panel + delta)` 滚面板；它走的是程序写入口，所以该分支**显式** `cancelTail('scroll')`。滚**已聚焦**卡片的内部不关 Tail（面板没动，滚轮意图撤回）。 |
@@ -395,3 +395,20 @@ agent 的 `session/list`），删不掉源数据 ⇒ `SessionHistoryStore` 用**
 **验收**：桩 DOM 覆盖 Tail 开关、真实/布局滚动、布局滚动后的 `follow/reflowNow`、Jump，以及 stream/tool Markdown 时间片的跟随接线。
 真 Chromium `#elictailfollowprobe` 同时摆出 composer 与表单抽屉：先形成 `Tail=true / pinned=false`，再只让末条 stream Markdown 长高；
 通过判据是 Tail 仍开、`atMax=true` 且末条底边不超过最高可见遮挡层顶边（1px 容差），不能只看滚动条。真机见 `docs/03-验收清单.md`。
+
+### 5.55 Main/Side 偏好分域与重复投影收敛（2026-11-04）
+
+**根因**：Side 加入后仍沿用主双面时代的单份 `UiPrefs`、全 surface 广播和 `*BySession` 整表替换；
+客户端又只上传本面认识的 session，Main/Side 因而互删记录并用对方默认值补写。不能只把两张 map 做 union：
+四个 default 与大纲布局也必须分域，而主 view/editor 仍须共享。
+
+| 关注点 | 当前契约 |
+|---|---|
+| 存储 | `vac.outlinePrefs.v1` 保留 Main scoped + 全局字段 + 主 `tabOrder`，旧数据自然归 Main；`vac.sideUiPrefs.v1` 只保存 Side scoped，不含全局字段或主 tab 顺序。 |
+| scoped 字段 | `times/tail/outlineOpen/autoExpand` 四组 `BySession/Default`，加 `outlineMode/outlineWidth`。Main 与 Side 各自持有；`tabOrder` 仅 Main。 |
+| 全局字段 | `autoExpandKinds`、展开限高、`flatTools`、输入卡尺寸、`sendKey`、Markdown、最近目录条数、每 agent 默认 model/effort 等继续共享。 |
+| 写入与投影 | `setUiPref/patchUiPrefs` 按可信消息来源 `from` 选择 `main|side`，统一进入 `commitUiPrefs()`；`projectUiPrefs()` 按白名单组装目标 scope，`postUiPrefs()` 对 Main scoped 只发 view/editor，对 Side scoped 只发 side，全局变化则分别向三面发送各自投影。数组/Record 按值比较，完全无变化不写盘、不广播；`autoExpand.persist()` 携带相同 `autoExpandKinds` 不算全局变化。 |
+| 启动与默认值 | `pushBoot()` 先发送目标 surface 的 `uiPrefs` 再发 `boot`。没有 Side key 时使用 Side 内置 defaults/layout 和空 session map，不复制 Main scoped，但仍投影共享字段。 |
+| 客户端收敛 | `times/tail/autoExpand/outline.applyPrefs()` 以本模块消费的原始字段生成 `lastPrefsKey`；完全相同的重复投影在 `seedKnown()` 前直接返回。autoExpand 签名还包含全局 kinds 与限高，保证真全局变化仍生效。否则旧空投影每次整表替换后都会再次 `seedKnown()`，形成持续回写。 |
+| 生命周期 | `releaseSideSession()` 只清 Side scope 的目标 session，保留兄弟 Side、Side defaults/layout、Main key 与主 `tabOrder`。Extension Host 启动时清 Side 遗留四张 per-session map，避免异常重载复活孤儿状态，但保留 Side defaults/layout；不恢复 Side 会话。 |
+| Reset | `resetPanelPrefs` 同时恢复 Main、Side scoped 与全部共享字段的显式完整默认值，更新两个 Memento key，并分别向三面发送完整投影；不能只清局部字段或让客户端保留旧值。 |

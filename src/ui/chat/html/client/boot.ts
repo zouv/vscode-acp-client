@@ -93,6 +93,7 @@ export const bootClient = `
     NS.bridge.post(message);
   }
   NS.bridge.postForSession = postForSession;
+  NS.bridge.currentSessionId = function () { return currentSessionId; };
 
   // [CUSTOM- 会话恢复（重载/关闭后重开面板）：上次开着的会话由宿主随 boot 带来，
   // 面板**空着**时在卡片上问一句。回答在这里落地 —— 因为"怎么建本地 tab"是客户端的事。
@@ -159,6 +160,23 @@ export const bootClient = `
     NS.composer.setLoading(loading);
   }
 
+  function syncSideOrigin(summary) {
+    var banner = NS.dom.qs('sideOrigin');
+    if (!banner) { return; }
+    var side = summary && summary.sideChat;
+    banner.hidden = !side;
+    if (!side) { return; }
+    var parentTitle = typeof side.parentTitle === 'string' ? side.parentTitle.trim() : '';
+    var title = side.parentSessionId + (parentTitle ? ' · ' + parentTitle : '');
+    var source = NS.dom.qs('sideOriginSource');
+    var time = NS.dom.qs('sideOriginTime');
+    var when = new Date(side.forkedAt);
+    var inheritedAt = isNaN(when.getTime()) ? String(side.forkedAt || '') : when.toLocaleString();
+    if (source) { source.textContent = 'From ' + title; }
+    if (time) { time.textContent = inheritedAt; }
+    banner.title = 'Context inherited from ' + title + ' at ' + inheritedAt;
+  }
+
   function noticeNode(level, text) {
     return { id: 'notice-' + Date.now() + '-' + Math.floor(Math.random() * 100000), kind: 'notice', level: level, at: Date.now(), text: text };
   }
@@ -168,6 +186,7 @@ export const bootClient = `
     // DOM is replaced - the same session may come back later (tab switch).
     NS.scroll.remember(currentSessionId);
     currentSessionId = summary ? summary.sessionId : null;
+    syncSideOrigin(summary);
     // [CUSTOM- Times 按会话记：换会话就要换成**那个会话**的值（没有记录就是默认值，
     // 草稿页与空态走的也是这一条）。状态机在 client/times.ts，这里只做"焦点变了"这一声通知。
     if (NS.times) { NS.times.setFocus(currentSessionId); }
@@ -262,6 +281,7 @@ export const bootClient = `
     if (!currentSessionId) { return; }
     for (var i = 0; i < sessions.length; i++) {
       if (sessions[i].sessionId === currentSessionId) {
+        syncSideOrigin(sessions[i]);
         NS.composer.setRunning(!!sessions[i].running);
         NS.composer.setLoading(!!sessions[i].loading);
         setLoading(!!sessions[i].loading);
@@ -642,6 +662,13 @@ export const bootClient = `
         applyFocus(message.summary, message.snapshot, message.meta);
         // [CUSTOM- 另一个会话的表单不该跟着你走，也不该被丢掉：重新对账。
         syncDrawers();
+        break;
+
+      case 'sideQuote':
+        if (message.sessionId === currentSessionId
+          && NS.composer && NS.composer.appendQuote) {
+          NS.composer.appendQuote(message.text);
+        }
         break;
 
       // [CUSTOM- 2026-10-29：宿主请求"停止确认"（侧边栏标题栏 Stop / 命令面板）。

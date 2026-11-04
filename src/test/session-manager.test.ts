@@ -7,6 +7,7 @@ import { AgentManager, type AgentInstance } from '../core/AgentManager';
 import { setAuthSecrets, takesApiKey } from '../core/auth';
 import { ConnectionManager, type ConnectionInfo } from '../core/ConnectionManager';
 import { SessionManager } from '../core/SessionManager';
+import type { AgentCapabilitySummary } from '../core/types';
 import { SessionUpdateHandler } from '../handlers/SessionUpdateHandler';
 
 type Call = { method: string; params: unknown };
@@ -19,6 +20,7 @@ function fakeConnection(calls: Call[], opts: { failNewSession?: boolean } = {}):
       if (opts.failNewSession) { throw new Error('cwd rejected'); }
       return { sessionId: `s-${calls.length}` };
     }
+    if (method === 'unstable_forkSession') { return { sessionId: `side-${calls.length}` }; }
     return method === 'setSessionConfigOption' ? { configOptions: [] } : {};
   };
   return {
@@ -26,6 +28,9 @@ function fakeConnection(calls: Call[], opts: { failNewSession?: boolean } = {}):
     connection: {
       newSession: record('newSession'),
       setSessionConfigOption: record('setSessionConfigOption'),
+      unstable_forkSession: record('unstable_forkSession'),
+      closeSession: record('closeSession'),
+      deleteSession: record('deleteSession'),
     },
     client: {},
     initResponse: { protocolVersion: 1 },
@@ -68,6 +73,21 @@ function seed(manager: SessionManager, sessionId: string, configOptions: unknown
   } as unknown as Parameters<SessionManager['seedSession']>[0]);
 }
 
+function setCapabilities(manager: SessionManager, overrides: Partial<AgentCapabilitySummary>): void {
+  const capabilities: AgentCapabilitySummary = {
+    list: false,
+    load: false,
+    resume: false,
+    close: false,
+    delete: false,
+    fork: false,
+    additionalDirectories: false,
+    logout: false,
+    ...overrides,
+  };
+  (manager as unknown as { getCachedCapabilities: () => AgentCapabilitySummary }).getCachedCapabilities = () => capabilities;
+}
+
 suite('session manager: protocol details', () => {
   test('boolean config options go on the wire typed; select options stay strings', async () => {
     const calls: Call[] = [];
@@ -96,6 +116,99 @@ suite('session manager: protocol details', () => {
 
     assert.deepStrictEqual(agents.killed, []);
     assert.ok(manager.getSession('sibling'), 'the sibling session must survive');
+  });
+
+  test('side fork registers inherited state without loading, focusing, or exposing a main tab', async () => {
+    const calls: Call[] = [];
+    const manager = managerWith(fakeConnection(calls));
+    setCapabilities(manager, { fork: true });
+    seed(manager, 'source', [
+      { id: 'model', name: 'Model', type: 'select', currentValue: 'fast', options: [] },
+    ]);
+    const source = manager.getSession('source')!;
+    source.additionalDirectories = ['/workspace/shared'];
+    source.title = 'Main session';
+    source.modes = {
+      currentModeId: 'ask',
+      availableModes: [{ id: 'ask', name: 'Ask' }, { id: 'code', name: 'Code' }],
+    };
+    source.models = {
+      currentModelId: 'fast',
+      availableModels: [{ modelId: 'fast', name: 'Fast' }],
+    };
+    source.availableCommands = [{ name: 'review', description: 'Review' }];
+    manager.focusSession('source');
+    const origins: string[] = [];
+    manager.on('session-created', (_id, _agent, origin) => origins.push(origin));
+
+    const side = await manager.forkSideSession('Codex CLI', 'source');
+    const secondSide = await manager.forkSideSession('Codex CLI', 'source');
+
+    assert.notStrictEqual(side.sessionId, secondSide.sessionId);
+    assert.deepStrictEqual(calls.map(call => call.method), ['unstable_forkSession', 'unstable_forkSession']);
+    assert.deepStrictEqual(calls[0].params, {
+      sessionId: 'source',
+      cwd: process.cwd(),
+      additionalDirectories: ['/workspace/shared'],
+    });
+    assert.strictEqual(manager.getActiveSessionId(), 'source');
+    assert.deepStrictEqual(origins, ['side', 'side']);
+    assert.deepStrictEqual(side.sideChat, { parentSessionId: 'source', forkedAt: side.createdAt });
+    assert.deepStrictEqual(secondSide.sideChat, { parentSessionId: 'source', forkedAt: secondSide.createdAt });
+    assert.deepStrictEqual(manager.getMainLiveSessions().map(session => session.sessionId), ['source']);
+    assert.deepStrictEqual(manager.getLiveSessions().map(session => session.sessionId), ['source', side.sessionId, secondSide.sessionId]);
+    assert.deepStrictEqual(manager.getSessionIdsForAgent('Codex CLI'), ['source']);
+    assert.deepStrictEqual(manager.getSessionIdsForAgent('Codex CLI', { includeSide: true }), ['source', side.sessionId, secondSide.sessionId]);
+    assert.strictEqual(side.modes?.currentModeId, 'ask');
+    assert.strictEqual(side.models?.currentModelId, 'fast');
+    assert.strictEqual(side.configOptions?.[0]?.id, 'model');
+    assert.strictEqual(side.availableCommands[0]?.name, 'review');
+    side.modes!.currentModeId = 'code';
+    assert.strictEqual(source.modes?.currentModeId, 'ask');
+    manager.focusSession(side.sessionId);
+    assert.strictEqual(manager.getActiveSessionId(), 'source');
+    await assert.rejects(manager.forkSideSession('Codex CLI', side.sessionId), /live main session/);
+    await assert.rejects(manager.forkSession('Codex CLI', side.sessionId), /live main session/);
+  });
+
+  test('side fork fails cleanly when the agent does not advertise fork', async () => {
+    const calls: Call[] = [];
+    const manager = managerWith(fakeConnection(calls));
+    seed(manager, 'source');
+
+    await assert.rejects(manager.forkSideSession('Codex CLI', 'source'), /does not support session\/fork/);
+
+    assert.deepStrictEqual(calls, []);
+    assert.deepStrictEqual(manager.getLiveSessions().map(session => session.sessionId), ['source']);
+  });
+
+  test('deleting an idle side settles pending requests before close and delete', async () => {
+    const calls: Call[] = [];
+    const manager = managerWith(fakeConnection(calls));
+    setCapabilities(manager, { close: true, delete: true });
+    seed(manager, 'side');
+    const order: string[] = [];
+    let permissionsCancelled = false;
+    let formsCancelled = false;
+    manager.setPermissionBridge({
+      cancelSession: () => {
+        if (!permissionsCancelled) { order.push('permissions'); }
+        permissionsCancelled = true;
+      },
+    } as never);
+    manager.setElicitationBridge({
+      cancelSession: () => {
+        if (!formsCancelled) { order.push('forms'); }
+        formsCancelled = true;
+      },
+    } as never);
+    manager.on('session-closed', () => order.push('removed'));
+
+    await manager.deleteSession('Codex CLI', 'side');
+
+    assert.deepStrictEqual(order, ['permissions', 'forms', 'removed']);
+    assert.deepStrictEqual(calls.map(call => call.method), ['closeSession', 'deleteSession']);
+    assert.strictEqual(manager.getSession('side'), undefined);
   });
 
   test('auth required mid-prompt: a stored API key authenticates silently and the prompt is retried', async () => {

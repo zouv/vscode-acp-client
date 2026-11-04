@@ -56,6 +56,8 @@ export const outlineClient = `
   // 本面知道的会话 id + 宿主的偏好到没到（见 seedKnown）。
   var known = [];
   var prefsSeen = false;
+  // 重复的旧投影不能再次触发 seedKnown，否则空表会造成持续回写。
+  var lastPrefsKey = null;
   // [CUSTOM- 焦点会话（boot 在焦点咽喉点喂进来，与 stickyUser.setSession 同形）。
   var currentSessionId = null;
   var dragging = false;   // 是否正在拖调宽手柄
@@ -419,6 +421,12 @@ export const outlineClient = `
 
   /** 应用宿主带回来的偏好（boot 后由 boot.ts 调一次，之后**每次** setUiPref 的广播也会到这儿）。 */
   function applyPrefs(prefs) {
+    var prefsKey = JSON.stringify([
+      prefs && prefs.outlineMode, prefs && prefs.outlineWidth,
+      prefs && prefs.outlineOpenBySession, prefs && prefs.outlineOpenDefault
+    ]);
+    if (prefsKey === lastPrefsKey) { return; }
+    lastPrefsKey = prefsKey;
     if (!prefs) { return; }
     prefsSeen = true;
     mode = prefs.outlineMode === 'sidebar' ? 'sidebar' : 'popup';

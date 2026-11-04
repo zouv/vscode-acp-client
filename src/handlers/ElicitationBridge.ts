@@ -183,10 +183,19 @@ export class ElicitationBridge {
    * Answer from the panel. Returns false for an unknown / already-resolved prompt
    * (double click, both surfaces racing, stale card) or one owned by the dialog.
    */
-  submit(promptId: string, action: ElicitationAction, content?: ElicitationContent): boolean {
+  submit(
+    promptId: string,
+    action: ElicitationAction,
+    content?: ElicitationContent,
+    expectedPanelSessionId?: string,
+  ): boolean {
     const item = this.pending.get(promptId);
     if (!item || item.resolved) {
       log(`${LOG_PREFIX}: ignoring answer for unknown/resolved form ${promptId}`);
+      return false;
+    }
+    if (expectedPanelSessionId && item.panelSessionId !== expectedPanelSessionId) {
+      log(`${LOG_PREFIX}: ignoring answer for form ${promptId} from another session`);
       return false;
     }
     if (item.owner !== 'panel') {

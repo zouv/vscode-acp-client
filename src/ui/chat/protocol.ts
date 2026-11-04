@@ -45,6 +45,11 @@ export interface SessionSummary {
    * the pulsing ring).
    */
   waiting: boolean;
+  sideChat?: {
+    parentSessionId: string;
+    parentTitle: string | null;
+    forkedAt: string;
+  };
 }
 
 /** Everything the panel needs to render one session's header + composer. */
@@ -133,15 +138,15 @@ export type RestoreChoice = 'ask' | 'always' | 'never';
 export interface UiPrefs {
   outlineMode: 'popup' | 'sidebar';
   outlineWidth: number;
-  // [CUSTOM- Tab 栏的手工顺序（会话 id 数组）。与大纲偏好共用**同一条**
-  // globalState 记录：顺序是工作区级的事（两个面、两个窗口看到的是同一条），
-  // 而 **不是**会话作用域的（`setUiPref` 因此仍在 verifySession 守卫之前处理）。
+  // [CUSTOM- Tab 栏的手工顺序（主会话 id 数组）。与 Main 大纲偏好共用同一条
+  // globalState 记录：顺序是工作区级的事（主双面、两个窗口看到的是同一条），
+  // 而 **不是**会话作用域的（`setUiPref` 因此仍在 verifySession 守卫之前处理）。Side 不使用这张表。
   tabOrder?: string[];
   // [CUSTOM- 记录区「Times」（每条记录的时刻）开关。**不是**一个布尔：
   // · timesBySession 记用户**在那个会话里**最后一次拨动的值；
-  // · timesDefault 是用户最后一次在**任何地方**拨动的值 —— 没有记录的会话与草稿页用它。
-  // 有效值 = timesBySession[id] ?? timesDefault。存在宿主而不是 webview 本地：关掉编辑器面板、
-  // 重载窗口之后它还该在（vscode.setState 会随文档一起没），两个面也该看到同一条。
+  // · timesDefault 是用户最后一次在**同一 Main/Side 作用域**拨动的值 —— 没有记录的会话与草稿页用它。
+  // 有效值 = timesBySession[id] ?? timesDefault。状态存在宿主而不是 webview 本地：关掉编辑器面板、
+  // 重载窗口之后它还该在。Main 的 view/editor 共享一份；Side 使用独立存储，不能与 Main 互相覆盖。
   timesBySession?: Record<string, boolean>;
   timesDefault?: boolean;
   // [CUSTOM- 右侧大纲栏的**开/关**：同样"按会话记 + 一个默认值"（与 Times 同一形态）。
@@ -272,6 +277,7 @@ export type ExtToChat =
   | { type: 'boot'; focused: SessionSummary | null; sessions: SessionSummary[]; snapshot: TranscriptSnapshotWire | null; meta: SessionMeta | null; agentConnected?: boolean; autoConnect?: boolean; defaultCwd?: string; recoverable?: RecoverableSession[]; restorePref?: RestoreChoice }
   | { type: 'focus'; summary: SessionSummary | null; snapshot: TranscriptSnapshotWire | null; meta: SessionMeta | null; agentConnected?: boolean }
   | { type: 'sessionsChanged'; sessions: SessionSummary[]; agentConnected?: boolean }
+  | { type: 'sideQuote'; sessionId: string; text: string }
   // [CUSTOM- 2026-10-29：宿主请求弹出"停止本轮"确认条（侧边栏标题栏 Stop / 命令面板）。
   // 客户端只负责显示；真正的 cancelTurn 仍由用户在 #stopConfirm 上点 Stop 后发出。
   | { type: 'stopAsk'; sessionId: string }
@@ -388,6 +394,9 @@ export type ChatToExt =
   | { type: 'forgetRestorable'; sessionId: string }
   | { type: 'setRestorePref'; value: RestoreChoice }
   | { type: 'sendPrompt'; sessionId: string; text: string }
+  | { type: 'openSide'; sessionId: string; selectedText?: string }
+  | { type: 'sideFocus'; sessionId: string }
+  | { type: 'sideClose'; sessionId: string }
   | { type: 'cancelTurn'; sessionId: string }
   | { type: 'newSession'; agentName: string }
   // /033 - 面板内的两个新入口。

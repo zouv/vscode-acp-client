@@ -188,10 +188,14 @@ export class PermissionBridge {
    * Answer a prompt from the panel. Returns false for an unknown or
    * already-resolved prompt (double click, both surfaces racing, stale card).
    */
-  answer(promptId: string, optionId?: string): boolean {
+  answer(promptId: string, optionId?: string, expectedPanelSessionId?: string): boolean {
     const item = this.pending.get(promptId);
     if (!item || item.resolved) {
       log(`${LOG_PREFIX}: ignoring answer for unknown/resolved prompt ${promptId}`);
+      return false;
+    }
+    if (expectedPanelSessionId && item.panelSessionId !== expectedPanelSessionId) {
+      log(`${LOG_PREFIX}: ignoring answer for prompt ${promptId} from another session`);
       return false;
     }
     if (item.owner !== 'panel') {

@@ -24,6 +24,10 @@ export interface SessionInfo {
   configOptions: SessionConfigOption[] | null;
   availableCommands: AvailableCommand[];
   title?: string;
+  sideChat?: {
+    parentSessionId: string;
+    forkedAt: string;
+  };
 }
 
 export interface AgentCapabilitySummary {
@@ -40,7 +44,7 @@ export interface AgentCapabilitySummary {
 
 export type SessionCloseReason = 'user' | 'agent-disconnected';
 
-export type SessionOrigin = 'new' | 'load' | 'resume';
+export type SessionOrigin = 'new' | 'load' | 'resume' | 'side';
 
 export type AgentConnectionError =
   | { kind: 'auth-cancelled' }

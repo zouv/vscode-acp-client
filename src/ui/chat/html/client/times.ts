@@ -27,6 +27,8 @@ export const timesClient = `
   var timesKnown = [];
   // 宿主的偏好到了之前不许"落定"任何会话（见 seedKnown）。
   var prefsSeen = false;
+  // 重复的旧投影不能再次触发 seedKnown，否则空表会造成持续回写。
+  var lastPrefsKey = null;
 
   /**
    * 显示开 / 关。只翻两个类，不重渲染：.rec-time 元素一直在 DOM 里
@@ -124,6 +126,9 @@ export const timesClient = `
    * Times 关掉。收完按当前焦点应用：改它的可能是**另一个面**。
    */
   function applyPrefs(prefs) {
+    var prefsKey = JSON.stringify([prefs && prefs.timesBySession, prefs && prefs.timesDefault]);
+    if (prefsKey === lastPrefsKey) { return; }
+    lastPrefsKey = prefsKey;
     prefsSeen = true;
     if (prefs && prefs.timesBySession && typeof prefs.timesBySession === 'object') {
       var next = {};

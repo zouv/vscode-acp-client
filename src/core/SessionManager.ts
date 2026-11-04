@@ -365,13 +365,15 @@ export class SessionManager extends EventEmitter {
     const session = this.store.get(sessionId);
     if (!session || session.agentName !== agentName) { return; }
 
-    // An in-flight turn must be cancelled first so pending permission requests get answered
     if (this.isTurnInFlight(sessionId)) {
       try {
         await this.cancelTurn(sessionId);
       } catch (e) {
         logError(`cancel before close failed for ${sessionId} (closing anyway)`, e);
       }
+    } else {
+      this.permissionBridge?.cancelSession(sessionId);
+      this.elicitationBridge?.cancelSession(sessionId);
     }
 
     if (this.getCachedCapabilities(agentName)?.close) {
@@ -878,9 +880,48 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     opts: { messageId?: string } = {},
   ): Promise<SessionInfo> {
+    const { source, response } = await this.requestFork(agentName, sessionId, opts.messageId);
+    log(`forkSession: ${sessionId} -> ${response.sessionId}${opts.messageId ? ` @ ${opts.messageId}` : ''}`);
+
+    await this.openExistingSession(agentName, response.sessionId, { cwd: source.cwd, title: source.title });
+    const forked = this.store.get(response.sessionId);
+    if (!forked) { throw new Error('The forked session could not be opened.'); }
+    return forked;
+  }
+
+  async forkSideSession(agentName: string, sourceSessionId: string): Promise<SessionInfo> {
+    const { source, conn, agentId, response } = await this.requestFork(agentName, sourceSessionId);
+    const side = this.buildSession(conn, agentName, agentId, response.sessionId, source.cwd, response, {
+      title: source.title,
+      additionalDirectories: source.additionalDirectories,
+    });
+    if (!side.modes && source.modes) {
+      side.modes = {
+        ...source.modes,
+        availableModes: source.modes.availableModes.map(mode => ({ ...mode })),
+      };
+    }
+    if (!side.models && source.models) {
+      side.models = {
+        ...source.models,
+        availableModels: source.models.availableModels.map(model => ({ ...model })),
+      };
+    }
+    if (!side.configOptions && source.configOptions) {
+      side.configOptions = source.configOptions.map(option => ({ ...option }));
+    }
+    side.availableCommands = source.availableCommands.map(command => ({ ...command }));
+    side.sideChat = { parentSessionId: sourceSessionId, forkedAt: side.createdAt };
+    this.registerSession(side);
+    this.emit('session-created', side.sessionId, agentName, 'side' satisfies SessionOrigin);
+    log(`forkSideSession: ${sourceSessionId} -> ${side.sessionId}`);
+    return side;
+  }
+
+  private async requestFork(agentName: string, sessionId: string, messageId?: string) {
     const source = this.store.get(sessionId);
-    if (!source || source.agentName !== agentName) {
-      throw new Error('Fork needs a live session of the same agent.');
+    if (!source || source.agentName !== agentName || source.sideChat) {
+      throw new Error('Fork needs a live main session of the same agent.');
     }
     const conn = await this.ensureConnected(agentName, source.cwd);
     if (!this.getCachedCapabilities(agentName)?.fork) {
@@ -891,14 +932,9 @@ export class SessionManager extends EventEmitter {
       sessionId,
       cwd: source.cwd,
       ...(source.additionalDirectories?.length ? { additionalDirectories: source.additionalDirectories } : {}),
-      ...(opts.messageId ? { _meta: forkPointMeta(opts.messageId) } : {}),
+      ...(messageId ? { _meta: forkPointMeta(messageId) } : {}),
     }));
-    log(`forkSession: ${sessionId} -> ${response.sessionId}${opts.messageId ? ` @ ${opts.messageId}` : ''}`);
-
-    await this.openExistingSession(agentName, response.sessionId, { cwd: source.cwd, title: source.title });
-    const forked = this.store.get(response.sessionId);
-    if (!forked) { throw new Error('The forked session could not be opened.'); }
-    return forked;
+    return { source, conn, agentId, response };
   }
 
   // --- Queries ---------------------------------------------------------------
@@ -923,9 +959,13 @@ export class SessionManager extends EventEmitter {
   }
 
   getLiveSessions(): SessionInfo[] { return this.store.all(); }
+  getMainLiveSessions(): SessionInfo[] { return this.store.all().filter(session => !session.sideChat); }
 
   /** Creation order; callers treat the last as newest. */
-  getSessionIdsForAgent(agentName: string): string[] { return this.store.idsForAgent(agentName); }
+  getSessionIdsForAgent(agentName: string, opts: { includeSide?: boolean } = {}): string[] {
+    const ids = this.store.idsForAgent(agentName);
+    return opts.includeSide ? ids : ids.filter(id => !this.store.get(id)?.sideChat);
+  }
 
   getConnectionForSession(sessionId: string): ConnectionInfo | undefined {
     const session = this.store.get(sessionId);

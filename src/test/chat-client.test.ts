@@ -45,6 +45,7 @@ import { stickyUserClient } from '../ui/chat/html/client/stickyUser';
 import { stateCardClient } from '../ui/chat/html/client/stateCard';
 // [CUSTOM- 面板静态标记：版心的承重结构断言（下面那个 suite）。
 import { body as chatPanelMarkup } from '../ui/chat/html/body';
+import { styles as chatPanelStyles } from '../ui/chat/html/styles';
 // [CUSTOM- 客户端 boot 的日志桥（构建指纹 + 转发配额）。
 import { bootClient } from '../ui/chat/html/client/boot';
 // [CUSTOM- 视口判定的再计算（scroll.reflowNow）。
@@ -1438,6 +1439,54 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     assert.strictEqual(els.cwdBtn.textContent, '/work/two', 'and the address bar follows at once');
   });
 
+  test('Side tabs keep creation order, identify their source and use Side-only messages', () => {
+    const { NS, els } = tabStrip();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    const side = (id: string, parentTitle?: string) => ({
+      ...summary(id), title: '', sideChat: {
+        parentSessionId: 'main-1', parentTitle, forkedAt: '2026-11-03T00:01:00.000Z',
+      },
+    });
+    NS.tabs.applyPrefs({ tabOrder: ['side-2', 'side-1'] });
+    NS.tabs.setSessions([side('side-1', 'Main question'), side('side-2')]);
+
+    const tabs = els.tabs.querySelectorAll('.tab');
+    assert.deepStrictEqual(orderOf(els), ['side-1', 'side-2'], 'main drag preferences do not reorder Side tabs');
+    assert.strictEqual(tabs[0].querySelector('.tab-label')!.textContent, 'Main question · side-1');
+    assert.strictEqual(tabs[1].querySelector('.tab-label')!.textContent, 'main-1 · side-2');
+    assert.strictEqual(tabs[0].getAttribute('draggable'), null);
+
+    dispatchClick(tabs[0], {});
+    tabs[1].querySelector('.tab-close')!.dispatch('click', {
+      preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted, [
+      { type: 'sideFocus', sessionId: 'side-1' },
+      { type: 'sideClose', sessionId: 'side-2' },
+    ]);
+  });
+
+  test('a running Side keeps the close confirmation and confirms through sideClose', () => {
+    const { NS, els, pop } = tabStrip();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.tabs.setSessions([{
+      ...summary('side-1'), running: true,
+      sideChat: { parentSessionId: 'main-1', parentTitle: 'Main', forkedAt: '2026-11-03T00:01:00.000Z' },
+    }]);
+    const tab = els.tabs.querySelector('.tab')!;
+    tab.dispatch('auxclick', {
+      button: 1, target: tab, preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted, []);
+    assert.strictEqual(pop.root.hidden, false);
+    popoverButton(pop.root, 'confirm')!.dispatch('click', {
+      preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted, [{ type: 'sideClose', sessionId: 'side-1' }]);
+  });
+
   // [CUSTOM- 中键关闭（2026-10-21）：四种关闭入口共用 closeModel；中键的默认行为
   // （WebView 的自动滚动）必须在 mousedown 里就先按住。
   test('middle-click closes a session tab through the same closeModel path', () => {
@@ -1666,6 +1715,23 @@ suite('chat client logic: Times 开关按会话记忆 (stub DOM, )', () => {
     NS.times.init();
     assert.strictEqual(setUiPrefPosts(posted).length, 1, 'once per document');
   });
+
+  test('重复投影与重复焦点通知只落定一次，不持续回写', () => {
+    const { NS, posted } = timesWith();
+    NS.times.init();
+    const sessions = [{ sessionId: 'A' }, { sessionId: 'B' }];
+    const prefs = { timesBySession: {}, timesDefault: false };
+    NS.times.noteSessions(sessions);
+    NS.times.applyPrefs(prefs);
+    assert.strictEqual(setUiPrefPosts(posted).length, 1);
+
+    NS.times.applyPrefs(prefs);
+    NS.times.noteSessions(sessions);
+    NS.times.setFocus('A');
+    NS.times.setFocus('A');
+    NS.times.applyPrefs(prefs);
+    assert.strictEqual(setUiPrefPosts(posted).length, 1);
+  });
 });
 
 // [CUSTOM- 地址栏「Tail」（消息面板自动追尾，2026-10-28）。与 Times 同一套状态机
@@ -1770,14 +1836,33 @@ suite('chat client logic: Tail 开关（按会话记忆 + 滚动即取消）', (
     assert.deepStrictEqual(posts(posted),
       [{ type: 'setUiPref', tailBySession: { A: false }, tailDefault: false }]);
   });
+
+  test('重复投影与重复焦点通知只落定一次，不持续回写', () => {
+    const { NS, posted } = tailWith();
+    NS.tail.init();
+    const sessions = [{ sessionId: 'A' }, { sessionId: 'B' }];
+    const prefs = { tailBySession: {}, tailDefault: true };
+    NS.tail.noteSessions(sessions);
+    NS.tail.applyPrefs(prefs);
+    assert.strictEqual(posts(posted).length, 1);
+
+    NS.tail.applyPrefs(prefs);
+    NS.tail.noteSessions(sessions);
+    NS.tail.setFocus('A');
+    NS.tail.setFocus('A');
+    NS.tail.applyPrefs(prefs);
+    assert.strictEqual(posts(posted).length, 1);
+  });
 });
 
 suite('chat client logic: Tail 的无会话焦点同步', () => {
   function bootWithTail() {
     const focused: Array<string | null> = [];
+    const quotes: string[] = [];
     const noop = () => { /* stub */ };
     const elements: Record<string, StubNode> = {
       emptyState: new StubNode('div'), loadOverlay: new StubNode('div'), messages: new StubNode('div'),
+      sideOrigin: new StubNode('div'), sideOriginSource: new StubNode('div'), sideOriginTime: new StubNode('div'),
     };
     const NS: Record<string, any> = {
       dom: { qs: (id: string) => elements[id] ?? null },
@@ -1794,7 +1879,7 @@ suite('chat client logic: Tail 的无会话焦点同步', () => {
       composer: {
         init: noop, setDraft: noop, setFocus: noop, setAttachments: noop, setLoading: noop,
         setRunning: noop, installGlobalEscape: noop, isComposable: () => false,
-        focusInput: noop, forgetDraft: noop,
+        focusInput: noop, forgetDraft: noop, appendQuote: (text: string) => { quotes.push(text); },
       },
       links: { installDelegatedHandlers: noop },
       contextMenu: { install: noop },
@@ -1828,7 +1913,7 @@ suite('chat client logic: Tail 的无会话焦点同步', () => {
       for (const fn of winListeners.message ?? []) { fn({ data: message }); }
     }
     return {
-      NS, focused, send,
+      NS, focused, quotes, elements, send,
       focusA: () => {
         const summary = { sessionId: 'A', loading: false, running: false };
         send({ type: 'boot', focused: summary, sessions: [summary], snapshot: null, meta: null, agentConnected: true });
@@ -1858,6 +1943,58 @@ suite('chat client logic: Tail 的无会话焦点同步', () => {
       h.focusA();
       h.send({ type: 'sessionClosed', sessionId: 'A' });
       assert.deepStrictEqual(h.focused, ['A', null]);
+    } finally {
+      h.restore();
+    }
+  });
+
+  test('Side quotes and source updates stay scoped to the active tab', () => {
+    const h = bootWithTail();
+    try {
+      const side = (id: string, parentTitle: string) => ({
+        sessionId: id, loading: false, running: false,
+        sideChat: { parentSessionId: 'main-1', parentTitle, forkedAt: '2026-11-03T00:01:00.000Z' },
+      });
+      const a = side('side-a', 'Before rename');
+      const b = side('side-b', 'Before rename');
+      h.send({ type: 'boot', focused: a, sessions: [a, b], snapshot: null, meta: null, agentConnected: true });
+      h.send({ type: 'sideQuote', sessionId: 'side-b', text: 'wrong tab' });
+      h.send({ type: 'sideQuote', sessionId: 'side-a', text: 'for A' });
+      assert.deepStrictEqual(h.quotes, ['for A']);
+      assert.strictEqual(h.elements.sideOriginSource.textContent, 'From main-1 · Before rename');
+
+      const renamed = side('side-a', 'After rename');
+      h.send({ type: 'sessionsChanged', sessions: [renamed, b] });
+      assert.strictEqual(h.elements.sideOriginSource.textContent, 'From main-1 · After rename');
+      assert.deepStrictEqual(h.focused, ['side-a'], 'a summary refresh does not hydrate again');
+
+      h.send({ type: 'focus', summary: b, snapshot: null, meta: null, agentConnected: true });
+      h.send({ type: 'sideQuote', sessionId: 'side-a', text: 'late for A' });
+      h.send({ type: 'sideQuote', sessionId: 'side-b', text: 'for B' });
+      assert.deepStrictEqual(h.quotes, ['for A', 'for B']);
+      assert.deepStrictEqual(h.focused, ['side-a', 'side-b']);
+    } finally {
+      h.restore();
+    }
+  });
+
+  test('Side source keeps the UUID for missing titles and appends a late title without rehydrating', () => {
+    const h = bootWithTail();
+    try {
+      const side = (parentTitle: string | null) => ({
+        sessionId: 'side-a', loading: false, running: false,
+        sideChat: { parentSessionId: 'main-1', parentTitle, forkedAt: '2026-11-03T00:01:00.000Z' },
+      });
+      h.send({ type: 'boot', focused: side(null), sessions: [side(null)], snapshot: null, meta: null, agentConnected: true });
+      assert.strictEqual(h.elements.sideOriginSource.textContent, 'From main-1');
+
+      h.send({ type: 'sessionsChanged', sessions: [side('   ')] });
+      assert.strictEqual(h.elements.sideOriginSource.textContent, 'From main-1');
+
+      h.send({ type: 'sessionsChanged', sessions: [side('Late title')] });
+      assert.strictEqual(h.elements.sideOriginSource.textContent, 'From main-1 · Late title');
+      assert.ok(h.elements.sideOrigin.title.includes('main-1 · Late title'));
+      assert.deepStrictEqual(h.focused, ['side-a']);
     } finally {
       h.restore();
     }
@@ -2817,19 +2954,23 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
 suite('chat client logic: composer input bar (stub DOM)', () => {
   function composerBar(): {
     NS: Record<string, any>; input: StubNode; sendBtn: StubNode; contextMeter: StubNode;
-    attachments: StubNode; steerHint: StubNode; sent: Array<Record<string, unknown>>;
+    attachments: StubNode; steerHint: StubNode; slashPopup: StubNode; slashBtn: StubNode;
+    sent: Array<Record<string, unknown>>;
   } {
     const input = new StubNode('textarea');
     const sendBtn = new StubNode('button');
     const contextMeter = new StubNode('div');
     const attachments = new StubNode('div');
+    const slashPopup = new StubNode('div');
+    const slashBtn = new StubNode('button');
     // [CUSTOM- 轮次中发不出去时那条说明（#steerHint），以及发出去的消息。
     const steerHint = new StubNode('div');
     const sent: Array<Record<string, unknown>> = [];
     const { NS } = loadClient({
       promptInput: input,
       sendStopBtn: sendBtn,
-      slashPopup: new StubNode('div'),
+      slashPopup,
+      slashBtn,
       attachments,
       configPickers: new StubNode('div'),
       contextMeter,
@@ -2838,7 +2979,7 @@ suite('chat client logic: composer input bar (stub DOM)', () => {
     NS.bridge.post = (msg: Record<string, unknown>) => { sent.push(msg); };
     NS.bridge.postForSession = (msg: Record<string, unknown>) => { sent.push(msg); };
     NS.composer.init();
-    return { NS, input, sendBtn, contextMeter, attachments, steerHint, sent };
+    return { NS, input, sendBtn, contextMeter, attachments, steerHint, slashPopup, slashBtn, sent };
   }
 
   const session = (id: string) => ({
@@ -2923,6 +3064,93 @@ suite('chat client logic: composer input bar (stub DOM)', () => {
     input.value = '补充一句';
     enter(input);
     assert.deepStrictEqual(sent, [], 'an unknown capability means unsupported, not "send and hope"');
+  });
+
+  test('local /side is discoverable without agent commands and overrides an agent namesake', () => {
+    const { NS, input, slashPopup, slashBtn } = composerBar();
+    NS.composer.setFocus(session('s-1'), { availableCommands: [], configOptions: [], usage: null });
+    assert.match(input.placeholder, /\/ for commands/);
+
+    slashBtn.dispatch('click', { stopPropagation: () => {} });
+    let items = slashPopup.querySelectorAll('.slash-item');
+    assert.strictEqual(items.length, 1);
+    assert.match(items[0].textContent, /\/side/);
+    assert.match(items[0].textContent, /temporary Side Chat/);
+
+    NS.composer.setMeta({
+      availableCommands: [
+        { name: 'side', description: 'agent command' },
+        { name: 'compact', description: 'Compact' },
+      ],
+      configOptions: [], usage: null,
+    });
+    input.value = '/';
+    input.dispatch('input', {});
+    items = slashPopup.querySelectorAll('.slash-item');
+    assert.strictEqual(items.filter(item => item.textContent.includes('/side')).length, 1);
+    assert.match(items[0].textContent, /temporary Side Chat/);
+    assert.ok(!items[0].textContent.includes('agent command'));
+  });
+
+  test('/side opens during a running turn with or without steering, never as a prompt', () => {
+    const { NS, input, sent, steerHint } = composerBar();
+    for (const steering of [false, true]) {
+      sent.length = 0;
+      NS.composer.setFocus(session(steering ? 's-steering' : 's-running'), {
+        availableCommands: [], configOptions: [], usage: null, steering,
+      });
+      NS.composer.setRunning(true);
+      input.value = '/side';
+      input.dispatch('input', {});
+      assert.strictEqual(steerHint.hidden, true, '/side is available even when ordinary prompts are not');
+      input.dispatch('keydown', { key: 'Escape', preventDefault: () => {} });
+
+      enter(input);
+      assert.deepStrictEqual(sent, [{
+        type: 'openSide', sessionId: steering ? 's-steering' : 's-running',
+      }]);
+      assert.strictEqual(input.value, '');
+    }
+  });
+
+  test('Side Chat and drafts do not offer the local /side command', () => {
+    const { NS, input, slashPopup } = composerBar();
+    NS.composer.setFocus({
+      ...session('side-1'),
+      sideChat: { parentSessionId: 'main-1', parentTitle: 'Main', forkedAt: '2026-11-03T00:00:00.000Z' },
+    }, { availableCommands: [], configOptions: [], usage: null });
+    input.value = '/';
+    input.dispatch('input', {});
+    assert.strictEqual(slashPopup.hidden, true);
+
+    NS.composer.setDraft({ draftId: 'd1', cwd: '/tmp' });
+    input.value = '/';
+    input.dispatch('input', {});
+    assert.strictEqual(slashPopup.hidden, true);
+  });
+
+  test('a Side selection is appended as a Markdown quote without replacing or sending the draft', () => {
+    const { NS, input, sent } = composerBar();
+    NS.composer.setFocus({
+      ...session('side-1'),
+      sideChat: { parentSessionId: 'main-1', parentTitle: 'Main', forkedAt: '2026-11-03T00:00:00.000Z' },
+    }, { availableCommands: [], configOptions: [], usage: null });
+    input.value = 'existing draft\n';
+
+    NS.composer.appendQuote('first\r\nsecond\rthird');
+    assert.strictEqual(input.value, 'existing draft\n\n> first\n> second\n> third\n\n');
+    NS.composer.appendQuote('fourth');
+    assert.strictEqual(input.value, 'existing draft\n\n> first\n> second\n> third\n\n> fourth\n\n');
+    assert.deepStrictEqual(sent, [], 'prefilling a quote never sends a prompt');
+  });
+
+  test('blank Side selections leave the existing draft untouched', () => {
+    const { NS, input, sent } = composerBar();
+    NS.composer.setFocus(session('side-1'), null);
+    input.value = 'keep me';
+    NS.composer.appendQuote(' \r\n ');
+    assert.strictEqual(input.value, 'keep me');
+    assert.deepStrictEqual(sent, []);
   });
 
   // [CUSTOM- 新建会话（草稿页）不该显示上一个会话的上下文数字。
@@ -5507,6 +5735,21 @@ suite('build fingerprint: 宿主 / 标记 / 客户端三处自报身份 ()', () 
   const looksLikeStamp = (text: string): boolean =>
     /^v\S+·.*[0-9a-f]{12}\(\d+B\)$/.test(text);
 
+  test('Side markup carries its surface and a source banner before the transcript', () => {
+    const side = chatPanelMarkup('side');
+    assert.ok(side.includes('<body class="surface-side"'));
+    const header = side.indexOf('<div id="sessionHeader"');
+    const origin = side.indexOf('<div id="sideOrigin"');
+    const messages = side.indexOf('<div id="messageArea"');
+    assert.ok(header >= 0 && origin > header && messages > origin,
+      'the Side source banner sits between the reusable header and message area');
+    assert.ok(side.includes('id="sideOriginSource"'));
+    assert.ok(side.includes('id="sideOriginTime"'));
+    assert.ok(chatPanelStyles().includes('.surface-side #settingsBtn'),
+      'the Side gear is hidden because settings messages are Main-only');
+    assert.ok(chatPanelMarkup('view').includes('id="settingsBtn"'), 'Main keeps its settings entry');
+  });
+
   test('buildStamp() 稳定、非空、只含属性安全字符', () => {
     const first = buildStamp();
     assert.strictEqual(first, buildStamp(), '同一次运行里必须稳定（算一次缓存）');
@@ -6714,6 +6957,7 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
 
   function withEntry() {
     const messages = new StubNode('div');
+    messages.className = 'messages';
     const pop = popoverElements();
     const harness = loadClient({ messages, popover: pop.root });
     const { NS } = harness;
@@ -6724,7 +6968,7 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     // 「entryTextOf → transcriptView.entry」的前提，桩里同样要走一遍。
     NS.transcriptView.init(messages);
     NS.transcriptView.append({ id: 'u1', kind: 'user', at: 1, text }, undefined);
-    return { NS, posted, pop };
+    return { NS, posted, pop, messages, win: harness.win, doc: harness.doc };
   }
 
   function labels(items: Array<{ label: string }>): string {
@@ -6763,6 +7007,52 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     user.setAttribute('data-entry-id', 'u1');
     const userItems = NS.contextMenu.itemsFor(user) as Array<{ label: string }>;
     assert.ok(!userItems.some(i => i.label === 'Fork from here'), 'a user record is not a fork point');
+  });
+
+  test('Side Chat with Selection captures the source session and selection when the menu opens', () => {
+    const { NS, posted, messages, win } = withEntry();
+    let current = 'main-1';
+    let selected = 'chosen text';
+    NS.bridge.currentSessionId = () => current;
+    win.getSelection = () => ({ toString: () => selected });
+    const record = new StubNode('div');
+    record.setAttribute('data-entry-id', 'u1');
+    messages.appendChild(record);
+
+    const items = NS.contextMenu.itemsFor(record) as Array<{ label: string; run: () => void }>;
+    const open = items.find(item => item.label === 'Side Chat with Selection');
+    assert.ok(open, `expected the Side selection action, got: ${labels(items)}`);
+    current = 'main-2';
+    selected = 'changed after opening';
+    open.run();
+    assert.deepStrictEqual(posted, [{
+      type: 'openSide', sessionId: 'main-1', selectedText: 'chosen text',
+    }]);
+    assert.ok(!('entryId' in posted[0]), 'Side always forks from the session tail, not the selected record');
+
+    selected = '';
+    assert.ok(!NS.contextMenu.itemsFor(record).some((item: { label: string }) =>
+      item.label === 'Side Chat with Selection'), 'an empty selection has no Side action');
+    selected = 'outside messages';
+    const outside = new StubNode('div');
+    assert.ok(!NS.contextMenu.itemsFor(outside).some((item: { label: string }) =>
+      item.label === 'Side Chat with Selection'), 'selections outside the transcript have no Side action');
+  });
+
+  test('Side Chat hides both recursive Side and ordinary message fork actions', () => {
+    const { NS, messages, win, doc } = withEntry();
+    doc.body.className = 'surface-side';
+    NS.bridge.currentSessionId = () => 'side-1';
+    win.getSelection = () => ({ toString: () => 'selected in Side' });
+    NS.transcriptView.append(
+      { id: 'a1', kind: 'assistant', at: 2, text: 'answer', streaming: false }, undefined);
+    const record = new StubNode('div');
+    record.setAttribute('data-entry-id', 'a1');
+    messages.appendChild(record);
+
+    const items = NS.contextMenu.itemsFor(record) as Array<{ label: string }>;
+    assert.ok(!items.some(item => item.label === 'Side Chat with Selection'));
+    assert.ok(!items.some(item => item.label === 'Fork from here'));
   });
 
   test('the sticky card offers it from its own whitespace (197)', () => {
@@ -6891,6 +7181,17 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     draft.setAttribute('data-draft-id', 'd1');
     const draftItems = NS.contextMenu.itemsFor(draft) as Array<{ label: string }>;
     assert.strictEqual(labels(draftItems), 'Close', '草稿没有会话可新建/复制/改名');
+  });
+
+  test('Side tab menus retain only copy and close actions', () => {
+    const { NS, doc } = withEntry();
+    doc.body.className = 'surface-side';
+    const tab = new StubNode('button');
+    tab.className = 'tab';
+    tab.setAttribute('data-session-id', 'side-1');
+    tab.setAttribute('data-cwd', '/work/main');
+    const items = NS.contextMenu.itemsFor(tab) as Array<{ label: string }>;
+    assert.strictEqual(labels(items), 'Copy working directory / Copy Session ID / Close');
   });
 
   test('历史列表行：右键也给 Archive / Delete / Rename（键盘用户的入口）', () => {
@@ -7028,6 +7329,25 @@ suite('chat client logic: 大纲侧栏的开/关按会话记（stub DOM, ）', (
     h.NS.outline.applyPrefs({ outlineMode: 'sidebar', outlineWidth: 240 });
     h.NS.outline.setSession('s1');
     assert.strictEqual(visible(h.sidebar), true, '以前"钉住"就等于每个会话都开着');
+  });
+
+  test('⑤重复投影与重复焦点通知只落定一次，不持续回写', () => {
+    const h = sideOutline();
+    const sessions = [{ sessionId: 'A' }, { sessionId: 'B' }];
+    const prefs = {
+      outlineMode: 'sidebar', outlineWidth: 240,
+      outlineOpenBySession: {}, outlineOpenDefault: false,
+    };
+    h.NS.outline.noteSessions(sessions);
+    h.NS.outline.applyPrefs(prefs);
+    assert.strictEqual(h.posted.filter(m => m.type === 'setUiPref').length, 1);
+
+    h.NS.outline.applyPrefs(prefs);
+    h.NS.outline.noteSessions(sessions);
+    h.NS.outline.setSession('A');
+    h.NS.outline.setSession('A');
+    h.NS.outline.applyPrefs(prefs);
+    assert.strictEqual(h.posted.filter(m => m.type === 'setUiPref').length, 1);
   });
 });
 
@@ -7579,6 +7899,28 @@ suite('chat client logic: auto-expand new output (stub DOM)', () => {
     NS.transcriptView.setAutoExpand(true, ['thought']);
     NS.transcriptView.append({ id: 'e3', kind: 'tool', toolCallId: 't3', at: 1 } as any, toolView());
     assert.strictEqual((NS.transcriptView.node('e3')!.querySelector('.tool-body') as StubNode).hidden, true);
+  });
+
+  test('重复投影携带相同 kinds 时只落定一次，不持续回写', () => {
+    const els = { autoExpandBtn: new StubNode('button') };
+    const { NS } = loadClient(els);
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.autoExpand.init();
+    const sessions = [{ sessionId: 'A' }, { sessionId: 'B' }];
+    const prefs = {
+      autoExpandBySession: {}, autoExpandDefault: false, autoExpandKinds: ['thought', 'tool'],
+    };
+    NS.autoExpand.noteSessions(sessions);
+    NS.autoExpand.applyPrefs(prefs);
+    assert.strictEqual(posted.filter(m => m.type === 'setUiPref').length, 1);
+
+    NS.autoExpand.applyPrefs(prefs);
+    NS.autoExpand.noteSessions(sessions);
+    NS.autoExpand.setFocus('A');
+    NS.autoExpand.setFocus('A');
+    NS.autoExpand.applyPrefs(prefs);
+    assert.strictEqual(posted.filter(m => m.type === 'setUiPref').length, 1);
   });
 });
 

@@ -95,6 +95,12 @@ export function body(surface: SurfaceKey = 'view'): string {
     </div>
   </div>
 
+  <div id="sideOrigin" class="side-origin" hidden>
+    <span class="side-origin-label">Side Chat</span>
+    <span id="sideOriginSource" class="side-origin-source"></span>
+    <span id="sideOriginTime" class="side-origin-time"></span>
+  </div>
+
   <div id="messageArea" class="message-area">
     <!-- 引导条 #rail 与「Jump to latest」原本都是这一层
          的子节点，现已搬进 .messages-column（见下）。原因是版心：消息列有了 max-width 并

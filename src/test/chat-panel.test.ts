@@ -511,13 +511,13 @@ suite('chat panel: recent directories for the picker', () => {
   // 原因是两个来源（本地缓存 / agent 的 session/list）各记一种写法，而去重比的是**原字符串**。
   test('同一目录只差大小写 ⇒ 只留一条（第一次出现的写法胜出）', () => {
     const list = recentDirectoryList([
-      'F:/Developer/AI/vibe/agent_claude',
-      'f:/Developer/AI/vibe/agent_claude',
-      'D:/Git/zgithub/vscode-acp-client',
+      'D:/work/example-project',
+      'd:/work/example-project',
+      'D:/work/other-project',
     ], 8, [], 'win32');
     assert.deepStrictEqual(list, [
-      'F:/Developer/AI/vibe/agent_claude',
-      'D:/Git/zgithub/vscode-acp-client',
+      'D:/work/example-project',
+      'D:/work/other-project',
     ], '重复行消失，顺序不变');
   });
 
@@ -3742,13 +3742,12 @@ suite('chat panel: ui prefs merge ()', () => {
 
   // [CUSTOM- 2026-10-30：范围 0–30。0 必须原样保留（隐藏分组），清空输入框则回落默认 8。
   test('the recent-directory limit is clamped to 0–30, and an empty box means the default', async () => {
-    const harness = makeHarness('s-1');
+    const memento = new FakeMemento();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
 
-    async function write(value: unknown): Promise<unknown> {
-      harness.surface.sent.length = 0;
+    function write(value: unknown): unknown {
       harness.host.onMessage({ type: 'setSetting', key: 'panel.recentDirectoryLimit', value });
-      await waitForPrefs(harness);
-      return prefsOf(harness).recentDirectoryLimit;
+      return memento.get<Record<string, unknown>>('vac.outlinePrefs.v1')?.recentDirectoryLimit;
     }
 
     assert.strictEqual(await write(0), 0, '0 is a real value (hide the group), not "unset"');
@@ -5539,5 +5538,575 @@ suite('chat panel: sub-agent child sessions', () => {
     await waitFor(() => manager.cancels.length === 1, 'the child cancel to be requested');
     assert.deepStrictEqual(manager.cancels, [{ parent: 'parent', child: 'child-1' }],
       '取消打在子会话 id 上，父会话与兄弟子会话不受影响');
+  });
+});
+
+suite('chat panel: Side Chat surface isolation', () => {
+  type BootMessage = Extract<ExtToChatMessage, { type: 'boot' }>;
+
+  async function waitFor(check: () => boolean, label: string): Promise<void> {
+    for (let i = 0; i < 100 && !check(); i++) { await new Promise(resolve => setTimeout(resolve, 5)); }
+    assert.ok(check(), label);
+  }
+
+  const sideSurfaces = new WeakMap<Harness, RecordingSurface>();
+  const sideStubs = new WeakMap<Harness, {
+    ids: string[];
+    opened: Array<{ sessionId: string; selectedText?: string }>;
+    closed: string[];
+  }>();
+
+  function sideStub(harness: Harness) {
+    let stub = sideStubs.get(harness);
+    if (stub) { return stub; }
+    const ids: string[] = [];
+    const opened: Array<{ sessionId: string; selectedText?: string }> = [];
+    const closed: string[] = [];
+    stub = { ids, opened, closed };
+    sideStubs.set(harness, stub);
+    harness.host.setSideChatOpener({
+      open: async (sessionId, selectedText) => { opened.push({ sessionId, selectedText }); },
+      has: sessionId => ids.includes(sessionId),
+      sessionIds: () => ids,
+      activate: (sessionId, options) => {
+        const activated = harness.host.activateSideSession(sessionId);
+        if (activated && options?.reveal) { sideSurfaces.get(harness)?.reveal(); }
+        return activated;
+      },
+      close: async sessionId => { closed.push(sessionId); },
+    });
+    return stub;
+  }
+
+  function attachSide(harness: Harness, sideId = 'side-1', agentName = harness.agentName): RecordingSurface {
+    sideStub(harness).ids.push(sideId);
+    registerFakeSession(harness.sessionManager, sideId, agentName, {
+      sideChat: {
+        parentSessionId: harness.sessionId,
+        forkedAt: '2026-11-03T00:01:00.000Z',
+      },
+    });
+    let surface = sideSurfaces.get(harness);
+    if (!surface) {
+      surface = new RecordingSurface('side');
+      sideSurfaces.set(harness, surface);
+    }
+    harness.host.attachSurface(surface, { agentName, sessionId: sideId });
+    return surface;
+  }
+
+  function lastBoot(surface: RecordingSurface): BootMessage {
+    const boot = surface.sent.filter(m => m.type === 'boot').pop();
+    assert.ok(boot?.type === 'boot');
+    return boot;
+  }
+
+  function prefMessages(surface: RecordingSurface): Array<Record<string, unknown>> {
+    return surface.sent.filter(m => m.type === 'uiPrefs') as Array<Record<string, unknown>>;
+  }
+
+  function latestPrefs(surface: RecordingSurface): Record<string, unknown> {
+    const prefs = prefMessages(surface).pop();
+    assert.ok(prefs);
+    return prefs;
+  }
+
+  function askSide(sessionId: string): CreateElicitationRequest {
+    return {
+      mode: 'form', sessionId, toolCallId: 'side-form', message: 'Side question?',
+      requestedSchema: {
+        type: 'object',
+        properties: { answer: { type: 'string', title: 'Answer' } },
+      },
+    } as unknown as CreateElicitationRequest;
+  }
+
+  test('Side boot lists every member but hydrates only the active Side without changing main state', async () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('main-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    harness.sessionManager.getSession('main-1')!.title = 'Main title';
+    harness.sessionManager.focusSession('main-1');
+    const side = attachSide(harness);
+    attachSide(harness, 'side-2');
+
+    assert.deepStrictEqual(sideStub(harness).ids, ['side-1', 'side-2']);
+    assert.strictEqual(harness.host.activeSideSessionId(), 'side-2');
+    assert.strictEqual(harness.sessionManager.getActiveSessionId(), 'main-1');
+    const boot = lastBoot(side);
+    assert.strictEqual(boot.focused?.sessionId, 'side-2');
+    assert.deepStrictEqual(boot.sessions.map(s => s.sessionId), ['side-1', 'side-2']);
+    assert.deepStrictEqual(boot.focused?.sideChat, {
+      parentSessionId: 'main-1', parentTitle: 'Main title', forkedAt: '2026-11-03T00:01:00.000Z',
+    });
+    assert.strictEqual(boot.autoConnect, false);
+    assert.strictEqual('defaultCwd' in boot, false);
+    assert.strictEqual('recoverable' in boot, false);
+    assert.strictEqual(boot.snapshot?.entries.length ?? 0, 0);
+
+    harness.host.onMessage({ type: 'sideFocus', sessionId: 'side-1' }, 'side');
+    const focus = side.sent.filter(m => m.type === 'focus').pop();
+    assert.ok(focus?.type === 'focus');
+    assert.strictEqual(focus.summary?.sessionId, 'side-1');
+    assert.strictEqual(harness.sessionManager.getActiveSessionId(), 'main-1');
+
+    registerFakeSession(harness.sessionManager, 'main-2', harness.agentName);
+    harness.surface.sent.length = 0;
+    side.sent.length = 0;
+    harness.sessionManager.emit('session-created', 'main-2', harness.agentName, 'load');
+    harness.sessionManager.emit('active-session-changed', 'main-1', 'Claude Code');
+    const mainSessions = harness.surface.sent.find(m => m.type === 'sessionsChanged');
+    assert.ok(mainSessions?.type === 'sessionsChanged');
+    assert.deepStrictEqual(mainSessions.sessions.map(s => s.sessionId), ['main-1', 'main-2']);
+    assert.strictEqual(side.sent.some(m => m.type === 'focus'), false);
+
+    harness.sessionManager.getSession('main-1')!.title = 'Renamed main';
+    harness.sessionManager.emit('session-info-changed', 'main-1');
+    const sideSessions = side.sent.find(m => m.type === 'sessionsChanged');
+    assert.ok(sideSessions?.type === 'sessionsChanged');
+    assert.deepStrictEqual(sideSessions.sessions.map(s => s.sessionId), ['side-1', 'side-2']);
+    assert.ok(sideSessions.sessions.every(s => s.sideChat?.parentTitle === 'Renamed main'));
+
+    await new Promise(resolve => setTimeout(resolve, 350));
+    const snapshot = memento.get<{ sessions: Array<{ sessionId: string }> }>('vac.openSessions.v1');
+    assert.deepStrictEqual(snapshot?.sessions.map(s => s.sessionId), ['main-1', 'main-2']);
+  });
+
+  test('only the main surface showing the source may open a Side', async () => {
+    const harness = makeHarness('main-1');
+    attachSide(harness);
+    const opened = sideStub(harness).opened;
+
+    harness.host.onMessage({ type: 'openSide', sessionId: 'main-1', selectedText: 'quoted' }, 'side');
+    harness.host.onMessage({ type: 'openSide', sessionId: 'missing' });
+    harness.host.onMessage({ type: 'openSide', sessionId: 'main-1', selectedText: 'quoted' });
+    await waitFor(() => opened.length === 1, 'the valid open request');
+    assert.deepStrictEqual(opened, [{ sessionId: 'main-1', selectedText: 'quoted' }]);
+  });
+
+  test('session guards allow only the active Side and reject cross-surface prompts', async () => {
+    const harness = makeHarness('main-1');
+    harness.sessionManager.focusSession('main-1');
+    attachSide(harness);
+    attachSide(harness, 'side-2');
+    const sent: string[] = [];
+    Object.assign(harness.sessionManager, {
+      sendPrompt: (sessionId: string) => {
+        sent.push(sessionId);
+        return Promise.resolve({ stopReason: 'end_turn' });
+      },
+    });
+
+    harness.host.onMessage({ type: 'sendPrompt', sessionId: 'main-1', text: 'wrong' }, 'side');
+    harness.host.onMessage({ type: 'sendPrompt', sessionId: 'side-1', text: 'stale' }, 'side');
+    harness.host.onMessage({ type: 'sendPrompt', sessionId: 'side-2', text: 'wrong' });
+    harness.host.onMessage({ type: 'sendPrompt', sessionId: 'side-2', text: 'right' }, 'side');
+    await waitFor(() => sent.length === 1, 'only the bound Side prompt');
+    assert.deepStrictEqual(sent, ['side-2']);
+
+    harness.host.onMessage({ type: 'newSession', agentName: 'Claude Code' }, 'side');
+    harness.host.onMessage({ type: 'focusSession', sessionId: 'main-1' }, 'side');
+    assert.strictEqual(harness.sessionManager.getActiveSessionId(), 'main-1');
+  });
+
+  test('Side tab commands validate surface and membership without focusing main', async () => {
+    const harness = makeHarness('main-1');
+    harness.sessionManager.focusSession('main-1');
+    const side = attachSide(harness);
+    attachSide(harness, 'side-2');
+    side.sent.length = 0;
+
+    harness.host.onMessage({ type: 'sideFocus', sessionId: 'side-1' });
+    harness.host.onMessage({ type: 'sideFocus', sessionId: 'missing' }, 'side');
+    assert.strictEqual(side.sent.some(m => m.type === 'focus'), false);
+    harness.host.onMessage({ type: 'sideFocus', sessionId: 'side-1' }, 'side');
+    await waitFor(() => side.sent.some(m => m.type === 'focus'), 'the active Side switch');
+    assert.strictEqual(harness.sessionManager.getActiveSessionId(), 'main-1');
+
+    harness.host.onMessage({ type: 'sideClose', sessionId: 'side-2' });
+    harness.host.onMessage({ type: 'sideClose', sessionId: 'side-2' }, 'side');
+    await waitFor(() => sideStub(harness).closed.length === 1, 'the Side close request');
+    assert.deepStrictEqual(sideStub(harness).closed, ['side-2']);
+  });
+
+  test('Side agent connection follows the active tab and closed active bindings are cleared', () => {
+    const harness = makeHarness('main-1');
+    harness.sessionManager.focusSession('main-1');
+    const side = attachSide(harness);
+    Object.assign(harness.sessionManager, {
+      isAgentConnected: (agentName: string) => agentName === harness.agentName,
+    });
+    attachSide(harness, 'side-2', 'Other Agent');
+    harness.sessionManager.emit('agent-connected', 'Other Agent');
+    assert.strictEqual(lastBoot(side).agentConnected, false);
+    let change = side.sent.filter(m => m.type === 'sessionsChanged').pop();
+    assert.ok(change?.type === 'sessionsChanged');
+    assert.strictEqual(change.agentConnected, false);
+
+    harness.host.onMessage({ type: 'sideFocus', sessionId: 'side-1' }, 'side');
+    const focus = side.sent.filter(m => m.type === 'focus').pop();
+    assert.ok(focus?.type === 'focus');
+    assert.strictEqual(focus.agentConnected, true);
+    change = side.sent.filter(m => m.type === 'sessionsChanged').pop();
+    assert.ok(change?.type === 'sessionsChanged');
+    assert.strictEqual(change.agentConnected, true);
+
+    harness.sessionManager.emit('session-closed', 'side-1', harness.agentName, 'user');
+    assert.strictEqual(harness.host.activeSideSessionId(), null);
+    assert.strictEqual(harness.sessionManager.getActiveSessionId(), 'main-1');
+  });
+
+  test('permission and form answers cannot settle another session\'s request', async () => {
+    const permission = new PermissionBridge();
+    const elicitation = new ElicitationBridge();
+    const harness = makeHarness('main-1', 'Claude Code', undefined, new StubPrefs(), { permission, elicitation });
+    attachSide(harness);
+    const fallback = (async () => { throw new Error('dialog must not open'); }) as never;
+
+    const mainPermission = permission.request({
+      sessionId: 'main-1', toolCall: { toolCallId: 'main-tool', title: 'Main permission' },
+    } as never, fallback);
+    const sidePermission = permission.request({
+      sessionId: 'side-1', toolCall: { toolCallId: 'side-tool', title: 'Side permission' },
+    } as never, fallback);
+    const mainForm = elicitation.request(askSide('main-1'), fallback);
+    const sideForm = elicitation.request(askSide('side-1'), fallback);
+
+    harness.host.onMessage({ type: 'permissionAnswer', sessionId: 'main-1', promptId: 'side-1:2', optionId: 'allow' });
+    harness.host.onMessage({
+      type: 'elicitationAnswer', sessionId: 'main-1', promptId: 'side-1:2', action: 'accept', content: { answer: 'wrong' },
+    });
+    assert.strictEqual(permission.pendingCount, 2);
+    assert.strictEqual(elicitation.pendingCount, 2);
+
+    attachSide(harness, 'side-2');
+    harness.host.onMessage({ type: 'permissionAnswer', sessionId: 'side-1', promptId: 'side-1:2', optionId: 'allow' }, 'side');
+    harness.host.onMessage({
+      type: 'elicitationAnswer', sessionId: 'side-1', promptId: 'side-1:2', action: 'accept', content: { answer: 'stale' },
+    }, 'side');
+    assert.strictEqual(permission.pendingCount, 2);
+    assert.strictEqual(elicitation.pendingCount, 2);
+
+    harness.host.onMessage({ type: 'sideFocus', sessionId: 'side-1' }, 'side');
+    harness.host.onMessage({ type: 'permissionAnswer', sessionId: 'side-1', promptId: 'side-1:2', optionId: 'allow' }, 'side');
+    harness.host.onMessage({
+      type: 'elicitationAnswer', sessionId: 'side-1', promptId: 'side-1:2', action: 'accept', content: { answer: 'right' },
+    }, 'side');
+    assert.deepStrictEqual((await sidePermission).outcome, { outcome: 'selected', optionId: 'allow' });
+    assert.deepStrictEqual(await sideForm, { action: 'accept', content: { answer: 'right' } });
+    assert.strictEqual(permission.pendingCount, 1);
+    assert.strictEqual(elicitation.pendingCount, 1);
+
+    permission.cancelSession('main-1');
+    elicitation.cancelSession('main-1');
+    assert.deepStrictEqual((await mainPermission).outcome, { outcome: 'cancelled' });
+    assert.deepStrictEqual(await mainForm, { action: 'cancel' });
+  });
+
+  test('Side metadata is targeted and a background notification activates its Side, not main', async () => {
+    const permission = new PermissionBridge();
+    const harness = makeHarness('main-1', 'Claude Code', undefined, new StubPrefs(), { permission });
+    harness.sessionManager.focusSession('main-1');
+    const side = attachSide(harness);
+    Object.assign(harness.sessionManager, { setMode: () => Promise.resolve() });
+    harness.surface.sent.length = 0;
+    side.sent.length = 0;
+
+    harness.host.onMessage({ type: 'setMode', sessionId: 'side-1', modeId: 'side-mode' }, 'side');
+    await waitFor(() => side.sent.some(m => m.type === 'meta'), 'the Side meta reply');
+    assert.strictEqual(harness.surface.sent.some(m => m.type === 'meta'), false);
+    assert.strictEqual(side.sent.some(m => m.type === 'meta' && m.sessionId === 'side-1'), true);
+
+    attachSide(harness, 'side-2');
+    harness.host.onMessage({ type: 'sideFocus', sessionId: 'side-1' }, 'side');
+    side.sent.length = 0;
+    side.visibleFlag = false;
+    const revealsBefore = side.reveals;
+    const response = permission.request({
+      sessionId: 'side-2', toolCall: { toolCallId: 'side-tool-2', title: 'Background Side permission' },
+    } as never, (async () => { throw new Error('dialog must not open'); }) as never);
+    assert.strictEqual(harness.notices.shown.length, 1);
+    assert.strictEqual(side.reveals, revealsBefore, 'a background request does not reveal or steal the tab');
+    assert.strictEqual(side.sent.some(m => m.type === 'focus' && m.summary?.sessionId === 'side-2'), false);
+    await harness.notices.click(0);
+    assert.ok(side.reveals > revealsBefore);
+    assert.strictEqual(side.sent.some(m => m.type === 'focus' && m.summary?.sessionId === 'side-2'), true);
+    assert.strictEqual(harness.sessionManager.getActiveSessionId(), 'main-1');
+    permission.cancelSession('side-2');
+    await response;
+  });
+
+  test('Main and Side persist four toolbar states independently and share only global changes', () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('main-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    registerFakeSession(harness.sessionManager, 'main-2', harness.agentName);
+    const editor = new RecordingSurface('editor');
+    harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 'main-1' });
+    const side = attachSide(harness, 'side-1');
+    attachSide(harness, 'side-2');
+
+    harness.host.onMessage({
+      type: 'setUiPref',
+      outlineMode: 'sidebar', outlineWidth: 320, tabOrder: ['main-2', 'main-1'],
+      timesBySession: { 'main-1': true, 'main-2': false }, timesDefault: true,
+      tailBySession: { 'main-1': false, 'main-2': true }, tailDefault: false,
+      outlineOpenBySession: { 'main-1': true, 'main-2': false }, outlineOpenDefault: true,
+      autoExpandBySession: { 'main-1': false, 'main-2': true }, autoExpandDefault: false,
+      autoExpandKinds: ['thought', 'tool'],
+    }, 'view');
+    assert.strictEqual(prefMessages(harness.surface).length, 1);
+    assert.strictEqual(prefMessages(editor).length, 1);
+    assert.strictEqual(prefMessages(side).length, 1, 'the initial global kinds value reaches Side too');
+    assert.deepStrictEqual(latestPrefs(side).autoExpandKinds, ['thought', 'tool']);
+    assert.strictEqual(latestPrefs(side).tailBySession, undefined);
+
+    harness.surface.sent.length = 0;
+    editor.sent.length = 0;
+    side.sent.length = 0;
+    harness.host.onMessage({
+      type: 'setUiPref',
+      outlineMode: 'popup', outlineWidth: 280,
+      timesBySession: { 'side-1': false, 'side-2': true }, timesDefault: false,
+      tailBySession: { 'side-1': true, 'side-2': false }, tailDefault: true,
+      outlineOpenBySession: { 'side-1': false, 'side-2': true }, outlineOpenDefault: false,
+      autoExpandBySession: { 'side-1': true, 'side-2': false }, autoExpandDefault: true,
+      autoExpandKinds: ['thought', 'tool'],
+    }, 'side');
+
+    assert.strictEqual(prefMessages(harness.surface).length, 0, 'unchanged global kinds do not echo to Main');
+    assert.strictEqual(prefMessages(editor).length, 0);
+    assert.strictEqual(prefMessages(side).length, 1);
+    assert.deepStrictEqual(memento.get('vac.outlinePrefs.v1'), {
+      outlineMode: 'sidebar', outlineWidth: 320, tabOrder: ['main-2', 'main-1'],
+      timesBySession: { 'main-1': true, 'main-2': false }, timesDefault: true,
+      tailBySession: { 'main-1': false, 'main-2': true }, tailDefault: false,
+      outlineOpenBySession: { 'main-1': true, 'main-2': false }, outlineOpenDefault: true,
+      autoExpandBySession: { 'main-1': false, 'main-2': true }, autoExpandDefault: false,
+      autoExpandKinds: ['thought', 'tool'],
+    });
+    assert.deepStrictEqual(memento.get('vac.sideUiPrefs.v1'), {
+      outlineMode: 'popup', outlineWidth: 280,
+      timesBySession: { 'side-1': false, 'side-2': true }, timesDefault: false,
+      tailBySession: { 'side-1': true, 'side-2': false }, tailDefault: true,
+      outlineOpenBySession: { 'side-1': false, 'side-2': true }, outlineOpenDefault: false,
+      autoExpandBySession: { 'side-1': true, 'side-2': false }, autoExpandDefault: true,
+    });
+
+    harness.surface.sent.length = 0;
+    editor.sent.length = 0;
+    side.sent.length = 0;
+    harness.host.onMessage({
+      type: 'setUiPref',
+      autoExpandBySession: { 'side-1': true, 'side-2': false }, autoExpandDefault: true,
+      autoExpandKinds: ['thought', 'tool'],
+    }, 'side');
+    assert.strictEqual(prefMessages(harness.surface).length, 0);
+    assert.strictEqual(prefMessages(editor).length, 0);
+    assert.strictEqual(prefMessages(side).length, 0, 'an identical projection is a no-op');
+
+    harness.surface.sent.length = 0;
+    editor.sent.length = 0;
+    side.sent.length = 0;
+    harness.host.onMessage({
+      type: 'setUiPref',
+      autoExpandBySession: { 'side-1': true, 'side-2': false }, autoExpandDefault: true,
+      autoExpandKinds: ['tool'],
+    }, 'side');
+
+    assert.strictEqual(prefMessages(harness.surface).length, 1);
+    assert.strictEqual(prefMessages(editor).length, 1);
+    assert.strictEqual(prefMessages(side).length, 1);
+    for (const surface of [harness.surface, editor]) {
+      const prefs = latestPrefs(surface);
+      assert.deepStrictEqual(prefs.autoExpandKinds, ['tool']);
+      assert.deepStrictEqual(prefs.tailBySession, { 'main-1': false, 'main-2': true });
+      assert.deepStrictEqual(prefs.tabOrder, ['main-2', 'main-1']);
+    }
+    const sidePrefs = latestPrefs(side);
+    assert.deepStrictEqual(sidePrefs.autoExpandKinds, ['tool']);
+    assert.deepStrictEqual(sidePrefs.tailBySession, { 'side-1': true, 'side-2': false });
+    assert.strictEqual('tabOrder' in sidePrefs, false);
+    assert.deepStrictEqual((memento.get<Record<string, unknown>>('vac.outlinePrefs.v1'))?.autoExpandKinds, ['tool']);
+    assert.strictEqual((memento.get<Record<string, unknown>>('vac.sideUiPrefs.v1'))?.autoExpandKinds, undefined);
+  });
+
+  test('editor and view still synchronize Main preferences without notifying Side', () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('main-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    const editor = new RecordingSurface('editor');
+    harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 'main-1' });
+    const side = attachSide(harness);
+    harness.surface.sent.length = 0;
+    editor.sent.length = 0;
+    side.sent.length = 0;
+
+    harness.host.onMessage({
+      type: 'setUiPref', tailBySession: { 'main-1': false }, tailDefault: false,
+    }, 'editor');
+    assert.strictEqual(prefMessages(harness.surface).length, 1);
+    assert.strictEqual(prefMessages(editor).length, 1);
+    assert.strictEqual(prefMessages(side).length, 0);
+    assert.deepStrictEqual(latestPrefs(harness.surface).tailBySession, { 'main-1': false });
+
+    harness.surface.sent.length = 0;
+    editor.sent.length = 0;
+    harness.host.onMessage({
+      type: 'setUiPref', timesBySession: { 'main-1': true }, timesDefault: true,
+    }, 'view');
+    assert.strictEqual(prefMessages(harness.surface).length, 1);
+    assert.strictEqual(prefMessages(editor).length, 1);
+    assert.strictEqual(prefMessages(side).length, 0);
+    assert.deepStrictEqual(latestPrefs(editor).timesBySession, { 'main-1': true });
+    assert.strictEqual(memento.get('vac.sideUiPrefs.v1'), undefined);
+  });
+
+  test('boot projects the target scope and reload keeps Side defaults but drops orphan session maps', () => {
+    const memento = new FakeMemento();
+    const mainPrefs = {
+      outlineMode: 'sidebar', outlineWidth: 310, tabOrder: ['main-1'],
+      timesBySession: { 'main-1': true }, timesDefault: true,
+      tailBySession: { 'main-1': false }, tailDefault: false,
+      outlineOpenBySession: { 'main-1': true }, outlineOpenDefault: true,
+      autoExpandBySession: { 'main-1': true }, autoExpandDefault: true,
+      flatTools: true,
+    };
+    void memento.update('vac.outlinePrefs.v1', mainPrefs);
+    void memento.update('vac.sideUiPrefs.v1', {
+      outlineMode: 'popup', outlineWidth: 275,
+      timesBySession: { orphan: true }, timesDefault: false,
+      tailBySession: { orphan: false }, tailDefault: true,
+      outlineOpenBySession: { orphan: true }, outlineOpenDefault: false,
+      autoExpandBySession: { orphan: true }, autoExpandDefault: true,
+    });
+    const harness = makeHarness('main-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    const editor = new RecordingSurface('editor');
+    harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 'main-1' });
+    const side = attachSide(harness);
+
+    assert.deepStrictEqual(memento.get('vac.outlinePrefs.v1'), mainPrefs);
+    assert.deepStrictEqual(memento.get('vac.sideUiPrefs.v1'), {
+      outlineMode: 'popup', outlineWidth: 275,
+      timesBySession: {}, timesDefault: false,
+      tailBySession: {}, tailDefault: true,
+      outlineOpenBySession: {}, outlineOpenDefault: false,
+      autoExpandBySession: {}, autoExpandDefault: true,
+    });
+
+    for (const surface of [harness.surface, editor, side]) {
+      surface.sent.length = 0;
+      harness.host.onMessage({ type: 'ready' }, surface.key);
+      const sequence = surface.sent.filter(m => m.type === 'uiPrefs' || m.type === 'boot');
+      assert.deepStrictEqual(sequence.slice(-2).map(m => m.type), ['uiPrefs', 'boot']);
+    }
+    assert.deepStrictEqual(latestPrefs(harness.surface).tailBySession, { 'main-1': false });
+    assert.deepStrictEqual(latestPrefs(editor).tailBySession, { 'main-1': false });
+    const sidePrefs = latestPrefs(side);
+    assert.strictEqual(sidePrefs.outlineWidth, 275);
+    assert.strictEqual(sidePrefs.flatTools, true);
+    assert.deepStrictEqual(sidePrefs.timesBySession, {});
+    assert.deepStrictEqual(sidePrefs.tailBySession, {});
+    assert.deepStrictEqual(sidePrefs.outlineOpenBySession, {});
+    assert.deepStrictEqual(sidePrefs.autoExpandBySession, {});
+    assert.strictEqual('tabOrder' in sidePrefs, false);
+  });
+
+  test('Side boot uses built-in scoped defaults when only legacy Main preferences exist', () => {
+    const memento = new FakeMemento();
+    void memento.update('vac.outlinePrefs.v1', {
+      outlineMode: 'sidebar', outlineWidth: 333, tailDefault: false,
+      tailBySession: { 'main-1': false }, flatTools: true,
+    });
+    const harness = makeHarness('main-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    const side = attachSide(harness);
+    side.sent.length = 0;
+    harness.host.onMessage({ type: 'ready' }, 'side');
+
+    const prefs = latestPrefs(side);
+    assert.strictEqual(prefs.outlineMode, 'popup');
+    assert.strictEqual(prefs.outlineWidth, 240);
+    assert.strictEqual(prefs.flatTools, true);
+    assert.strictEqual(prefs.tailDefault, undefined);
+    assert.strictEqual(prefs.tailBySession, undefined);
+    assert.strictEqual('tabOrder' in prefs, false);
+  });
+
+  test('Reset restores complete Main, Side and shared defaults on every surface', () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('main-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    const editor = new RecordingSurface('editor');
+    harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 'main-1' });
+    const side = attachSide(harness);
+    harness.host.onMessage({
+      type: 'setUiPref', outlineMode: 'sidebar', outlineWidth: 400,
+      tailBySession: { 'main-1': false }, tailDefault: false,
+      flatTools: true, markdownStyle: 'github', recentDirectoryLimit: 20,
+    }, 'view');
+    harness.host.onMessage({
+      type: 'setUiPref', outlineMode: 'sidebar', outlineWidth: 350,
+      timesBySession: { 'side-1': true }, timesDefault: true,
+      autoExpandBySession: { 'side-1': true }, autoExpandDefault: true,
+    }, 'side');
+
+    harness.host.onMessage({ type: 'settingAction', action: 'resetPanelPrefs' }, 'view');
+    const defaults = {
+      outlineMode: 'popup', outlineWidth: 240, tabOrder: [],
+      timesBySession: {}, timesDefault: false,
+      tailBySession: {}, tailDefault: true,
+      outlineOpenBySession: {}, outlineOpenDefault: false,
+      autoExpandBySession: {}, autoExpandDefault: false,
+      autoExpandKinds: ['thought', 'tool'], autoExpandToolHeight: 360, autoExpandThoughtHeight: 240,
+      flatTools: false, composerMaxWidth: 720, inputMaxHeight: 320, sendKey: 'enter',
+      defaultModelByAgent: {}, defaultEffortByAgent: {}, recentDirectoryLimit: 8, markdownStyle: 'editor',
+    };
+    const expected = { type: 'uiPrefs', ...defaults };
+    assert.deepStrictEqual(latestPrefs(harness.surface), expected);
+    assert.deepStrictEqual(latestPrefs(editor), expected);
+    assert.deepStrictEqual({ ...latestPrefs(side), tabOrder: [] }, expected);
+    assert.deepStrictEqual(memento.get('vac.outlinePrefs.v1'), defaults);
+    const sideStored = memento.get<Record<string, unknown>>('vac.sideUiPrefs.v1');
+    assert.deepStrictEqual(sideStored?.timesBySession, {});
+    assert.deepStrictEqual(sideStored?.tailBySession, {});
+    assert.deepStrictEqual(sideStored?.outlineOpenBySession, {});
+    assert.deepStrictEqual(sideStored?.autoExpandBySession, {});
+    assert.strictEqual(sideStored?.outlineMode, 'popup');
+    assert.strictEqual(sideStored?.outlineWidth, 240);
+    assert.strictEqual(sideStored?.flatTools, undefined);
+    assert.strictEqual(sideStored?.tabOrder, undefined);
+  });
+
+  test('releasing a Side removes only its per-session UI preferences', () => {
+    const memento = new FakeMemento();
+    const mainPrefs = {
+      outlineMode: 'popup', outlineWidth: 240,
+      tabOrder: ['main-1', 'side-1'],
+      timesBySession: { 'main-1': true, 'side-1': false },
+      tailBySession: { 'main-1': true, 'side-1': false },
+      outlineOpenBySession: { 'main-1': true, 'side-1': false },
+      autoExpandBySession: { 'main-1': true, 'side-1': false },
+    };
+    void memento.update('vac.outlinePrefs.v1', mainPrefs);
+    const harness = makeHarness('main-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    const side = attachSide(harness, 'side-1');
+    attachSide(harness, 'side-2');
+    harness.host.onMessage({
+      type: 'setUiPref', outlineMode: 'sidebar', outlineWidth: 300,
+      timesBySession: { 'side-1': true, 'side-2': false }, timesDefault: true,
+      tailBySession: { 'side-1': false, 'side-2': true }, tailDefault: false,
+      outlineOpenBySession: { 'side-1': true, 'side-2': false }, outlineOpenDefault: true,
+      autoExpandBySession: { 'side-1': false, 'side-2': true }, autoExpandDefault: false,
+    }, 'side');
+    harness.surface.sent.length = 0;
+    side.sent.length = 0;
+
+    harness.host.releaseSideSession('side-1');
+    assert.deepStrictEqual(memento.get('vac.outlinePrefs.v1'), mainPrefs);
+    assert.deepStrictEqual(memento.get('vac.sideUiPrefs.v1'), {
+      outlineMode: 'sidebar', outlineWidth: 300,
+      timesBySession: { 'side-2': false }, timesDefault: true,
+      tailBySession: { 'side-2': true }, tailDefault: false,
+      outlineOpenBySession: { 'side-2': false }, outlineOpenDefault: true,
+      autoExpandBySession: { 'side-2': true }, autoExpandDefault: false,
+    });
+    assert.strictEqual(prefMessages(harness.surface).length, 0);
+    assert.strictEqual(prefMessages(side).length, 1);
   });
 });

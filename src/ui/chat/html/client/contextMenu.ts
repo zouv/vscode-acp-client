@@ -76,6 +76,8 @@ export const contextMenuClient = `
    * ever a no-op (that was the whole complaint about the native menu).
    */
   function itemsFor(target) {
+    var sideSurface = !!(document.body && document.body.classList
+      && document.body.classList.contains('surface-side'));
     // 三个上下文专属格。它们**必须**排在通用清单之前：
     // 这几处右键时通常没有选区，通用的 'Copy selection' 只会灰着（"有个 Copy 但点不动"——用户报的
     // 就是它），而用户要的拷贝内容与"选区"根本不是一回事：
@@ -114,46 +116,48 @@ export const contextMenuClient = `
       // [CUSTOM- 2026-10-29] 用户要求的顺序：Rename 置顶、Close 置底；Mark as unread 紧跟
       // Rename；Copy working directory 在 Copy Session ID 上方。
       if (tab.getAttribute('data-session-id')) {
-        tabItems.push({
-          label: 'Rename',
-          run: function (event) {
-            if (NS.tabs && NS.tabs.startRename && NS.tabs.startRename(tab, event)) { return; }
-            var tabLabelEl = tab.querySelector ? tab.querySelector('.tab-label') : null;
-            NS.bridge.post({
-              type: 'renameSession',
-              sessionId: tab.getAttribute('data-session-id'),
-              currentTitle: tabLabelEl ? String(tabLabelEl.textContent || '') : ''
-            });
-          }
-        });
-        // [CUSTOM- 2026-10-29] 手动标记未读：与后台输出点亮的是同一个 attention 圆点
-        // （浅绿）；聚焦到该会话时由宿主清掉。已经是未读时置灰。
-        var dot = tab.querySelector ? tab.querySelector('.tab-dot') : null;
-        var alreadyUnread = tab.getAttribute('data-unread') !== null
-          || !!(dot && String(dot.className || '').split(/\\s+/).indexOf('attention') >= 0);
-        tabItems.push({
-          label: 'Mark as unread',
-          disabled: alreadyUnread,
-          disabledTitle: 'Already marked as unread',
-          run: function () {
-            NS.bridge.postForSession({ type: 'markUnread', sessionId: tab.getAttribute('data-session-id') });
-          }
-        });
-        // [CUSTOM- 会话 tab 右键：在这个会话的目录里再开一个新会话（目录与额外根目录
-        // 都由宿主从源会话取，客户端不猜）。会话作用域 ⇒ 走 postForSession（守卫按 sessionId 校验）。
-        tabItems.push({
-          label: 'New Session in This Folder',
-          run: function () {
-            NS.bridge.postForSession({ type: 'newSessionInDirectory', sessionId: tab.getAttribute('data-session-id') });
-          }
-        });
-        // [CUSTOM- 复制会话 = 在末尾 fork（不带 messageId），新会话继承源会话的上下文与消息记录。
-        tabItems.push({
-          label: 'Duplicate',
-          run: function () {
-            NS.bridge.postForSession({ type: 'duplicateSession', sessionId: tab.getAttribute('data-session-id') });
-          }
-        });
+        if (!sideSurface) {
+          tabItems.push({
+            label: 'Rename',
+            run: function (event) {
+              if (NS.tabs && NS.tabs.startRename && NS.tabs.startRename(tab, event)) { return; }
+              var tabLabelEl = tab.querySelector ? tab.querySelector('.tab-label') : null;
+              NS.bridge.post({
+                type: 'renameSession',
+                sessionId: tab.getAttribute('data-session-id'),
+                currentTitle: tabLabelEl ? String(tabLabelEl.textContent || '') : ''
+              });
+            }
+          });
+          // [CUSTOM- 2026-10-29] 手动标记未读：与后台输出点亮的是同一个 attention 圆点
+          // （浅绿）；聚焦到该会话时由宿主清掉。已经是未读时置灰。
+          var dot = tab.querySelector ? tab.querySelector('.tab-dot') : null;
+          var alreadyUnread = tab.getAttribute('data-unread') !== null
+            || !!(dot && String(dot.className || '').split(/\\s+/).indexOf('attention') >= 0);
+          tabItems.push({
+            label: 'Mark as unread',
+            disabled: alreadyUnread,
+            disabledTitle: 'Already marked as unread',
+            run: function () {
+              NS.bridge.postForSession({ type: 'markUnread', sessionId: tab.getAttribute('data-session-id') });
+            }
+          });
+          // [CUSTOM- 会话 tab 右键：在这个会话的目录里再开一个新会话（目录与额外根目录
+          // 都由宿主从源会话取，客户端不猜）。会话作用域 ⇒ 走 postForSession（守卫按 sessionId 校验）。
+          tabItems.push({
+            label: 'New Session in This Folder',
+            run: function () {
+              NS.bridge.postForSession({ type: 'newSessionInDirectory', sessionId: tab.getAttribute('data-session-id') });
+            }
+          });
+          // [CUSTOM- 复制会话 = 在末尾 fork（不带 messageId），新会话继承源会话的上下文与消息记录。
+          tabItems.push({
+            label: 'Duplicate',
+            run: function () {
+              NS.bridge.postForSession({ type: 'duplicateSession', sessionId: tab.getAttribute('data-session-id') });
+            }
+          });
+        }
         // [CUSTOM- 2026-10-29] Copy working directory：没有 cwd 的会话置灰。
         var tabCwd = tab.getAttribute('data-cwd') || '';
         tabItems.push({
@@ -219,6 +223,8 @@ export const contextMenuClient = `
 
     var items = [];
     var selected = selectionText();
+    var sourceSessionId = NS.bridge.currentSessionId ? NS.bridge.currentSessionId() : '';
+    var inMessages = !!(target && target.closest && target.closest('.messages'));
     // [CUSTOM- 通用项叫 'Copy selection'，不叫 'Copy'：用户看到一条**永远灰着**的
     // Copy 会问"这是干什么的"（实际上它就是复制当前选区，右键时通常没有选区）。
     // 标签本身说明语义，灰态才不显得像坏了。上下文专属的 Copy（大纲行 / 地址栏）
@@ -227,6 +233,14 @@ export const contextMenuClient = `
       label: 'Copy selection', disabled: selected.length === 0,
       run: function () { copy(selected); }
     });
+    if (!sideSurface && inMessages && selected.trim() && sourceSessionId) {
+      items.push({
+        label: 'Side Chat with Selection',
+        run: function () {
+          NS.bridge.post({ type: 'openSide', sessionId: sourceSessionId, selectedText: selected });
+        }
+      });
+    }
 
     var message = entryTextOf(target);
     if (message) {
@@ -239,7 +253,7 @@ export const contextMenuClient = `
     var forkId = entryIdOf(target);
     var forkEntry = forkId && NS.transcriptView && NS.transcriptView.entry
       ? NS.transcriptView.entry(forkId) : null;
-    if (forkEntry && forkEntry.kind === 'assistant') {
+    if (!sideSurface && forkEntry && forkEntry.kind === 'assistant') {
       items.push({
         label: 'Fork from here',
         // postForSession：这条是**会话作用域**消息，宿主会按 sessionId 校验后处理；

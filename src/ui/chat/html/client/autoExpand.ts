@@ -28,6 +28,8 @@ export const autoExpandClient = `
   var known = [];
   // 宿主的偏好到了之前不许"落定"任何会话（见 seedKnown）。
   var prefsSeen = false;
+  // 重复的旧投影不能再次触发 seedKnown，否则空表会造成持续回写。
+  var lastPrefsKey = null;
 
   function enabledFor(sessionId) {
     if (sessionId && Object.prototype.hasOwnProperty.call(bySession, sessionId)) {
@@ -120,6 +122,13 @@ export const autoExpandClient = `
 
   /** 收下宿主那份偏好。缺字段 = 那一项从来没被写过 ⇒ 保留本地值（同 times.applyPrefs）。 */
   function applyPrefs(prefs) {
+    var prefsKey = JSON.stringify([
+      prefs && prefs.autoExpandBySession, prefs && prefs.autoExpandDefault,
+      prefs && prefs.autoExpandKinds, prefs && prefs.autoExpandToolHeight,
+      prefs && prefs.autoExpandThoughtHeight
+    ]);
+    if (prefsKey === lastPrefsKey) { return; }
+    lastPrefsKey = prefsKey;
     prefsSeen = true;
     if (prefs && prefs.autoExpandBySession && typeof prefs.autoExpandBySession === 'object') {
       var next = {};
