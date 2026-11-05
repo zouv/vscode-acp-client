@@ -36,6 +36,11 @@ export const sessionMenuClient = `
   var filterChip = null;
   var filterMenu = null;
   var menuOpen = false;
+  // [CUSTOM- Free-text filter over the rows already in the client. The directory
+  // filter keeps its own meaning; the two are combined with AND.
+  var searchEl = null;
+  var searchClearEl = null;
+  var query = '';
   // The last reply, so switching the filter re-renders without asking the agent again.
   var lastMessage = null;
   var dirOptions = [];
@@ -126,15 +131,37 @@ export const sessionMenuClient = `
    */
   function optionLabel(option) { return option.label || option.name; }
 
-  /** Rows that pass the filter ('all folders' / a folder / the unknown bucket). */
+  /** Rows that pass the directory filter and the free-text search. */
   function visibleRows(items) {
-    if (!filterKey) { return items; }
-    if (filterKey === UNKNOWN_KEY) { return unknownRows(items); }
     var out = [];
-    for (var i = 0; i < items.length; i++) {
-      if (items[i].dirKey === filterKey) { out.push(items[i]); }
+    if (filterKey === UNKNOWN_KEY) {
+      out = unknownRows(items);
+    } else if (filterKey) {
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].dirKey === filterKey) { out.push(items[i]); }
+      }
+    } else {
+      out = items;
     }
-    return out;
+    if (!query) { return out; }
+    var matched = [];
+    for (var j = 0; j < out.length; j++) {
+      var item = out[j];
+      var hit = NS.dom.textMatches(query, [item.title, item.sessionId, item.cwd, folderName(item.cwd)]);
+      if (hit) { matched.push(item); }
+    }
+    return matched;
+  }
+
+  function syncSearchClear() {
+    if (searchClearEl) { searchClearEl.hidden = !query; }
+  }
+
+  function clearSearch() {
+    query = '';
+    if (searchEl) { searchEl.value = ''; }
+    syncSearchClear();
+    renderList(lastMessage);
   }
 
   function plural(n) { return n + (n === 1 ? ' session' : ' sessions'); }
@@ -309,7 +336,7 @@ export const sessionMenuClient = `
     var hidden = filterKey && filterKey !== UNKNOWN_KEY ? unknownRows(all).length : 0;
     // Filtered: "12 of 232 sessions" — the total is what makes the filter legible
     // (a bare "12 sessions" would read like the agent lost the rest).
-    var count = filterKey ? items.length + ' of ' + all.length : String(all.length);
+    var count = filterKey || query ? items.length + ' of ' + all.length : String(all.length);
     headEl.appendChild(NS.dom.el('span', 'outline-count',
       all.length === 0 ? 'No previous sessions'
         : count + (all.length === 1 ? ' session' : ' sessions') + ' \\u00b7 ' + origin
@@ -317,15 +344,23 @@ export const sessionMenuClient = `
     if (message && message.error) {
       headEl.appendChild(NS.dom.el('span', 'outline-more', message.error));
     }
-    // Nothing in this folder: say so, and leave a way back (the chip is easy to miss).
-    if (items.length === 0 && filterKey) {
-      listEl.appendChild(NS.dom.el('div', 'outline-group', 'No sessions in this folder'));
-      var showAll = NS.dom.el('button', 'outline-item', 'Show all folders');
-      showAll.type = 'button';
-      // [CUSTOM- 空态逃生口用独立标记：click 里走 applyFilter('', false)，
-      // 只临时显示全部、不写偏好（别跟菜单里的「All folders」那个显式决定混）。
-      showAll.setAttribute('data-show-all', '');
-      listEl.appendChild(showAll);
+    if (items.length === 0 && (filterKey || query)) {
+      if (query) {
+        var shown = query.length > 80 ? query.slice(0, 80) + '\\u2026' : query;
+        listEl.appendChild(NS.dom.el('div', 'outline-group', 'No sessions match "' + shown + '"'));
+        var clear = NS.dom.el('button', 'outline-item', 'Clear search');
+        clear.type = 'button';
+        clear.setAttribute('data-clear-search', '');
+        listEl.appendChild(clear);
+      } else {
+        listEl.appendChild(NS.dom.el('div', 'outline-group', 'No sessions in this folder'));
+        var showAll = NS.dom.el('button', 'outline-item', 'Show all folders');
+        showAll.type = 'button';
+        // [CUSTOM- 空态逃生口用独立标记：click 里走 applyFilter('', false)，
+        // 只临时显示全部、不写偏好（别跟菜单里的「All folders」那个显式决定混）。
+        showAll.setAttribute('data-show-all', '');
+        listEl.appendChild(showAll);
+      }
       return;
     }
     for (var i = 0; i < items.length; i++) {
@@ -465,6 +500,7 @@ export const sessionMenuClient = `
   function show() {
     open = true;
     drawer.hidden = false;
+    if (NS.dom.fitDrawer) { NS.dom.fitDrawer(drawer); }
     button.classList.add('on');
     pending = true;
     // A fresh list: drop the previous run's rows, candidates AND the directory choice
@@ -474,6 +510,9 @@ export const sessionMenuClient = `
     filterKey = null;
     supplementedDirs = {};
     menuOpen = false;
+    query = '';
+    if (searchEl) { searchEl.value = ''; }
+    syncSearchClear();
     // [CUSTOM- Ask the ADDRESS BAR for the filter's default directory. The
     // host cannot guess it: a draft's directory is client-local (058), and even for a
     // session it is the button up there — not the host's bookkeeping — that says which
@@ -590,6 +629,11 @@ export const sessionMenuClient = `
     }
     var row = event.target;
     while (row && row !== drawer) {
+      if (row.getAttribute && row.getAttribute('data-clear-search') !== null) {
+        event.preventDefault();
+        clearSearch();
+        return;
+      }
       // [CUSTOM- 空态「Show all folders」：临时显示全部，不写持久化偏好（见 applyFilter）。
       if (row.getAttribute && row.getAttribute('data-show-all') !== null) {
         event.preventDefault();
@@ -639,6 +683,23 @@ export const sessionMenuClient = `
     drawer = NS.dom.qs('history');
     filterChip = NS.dom.qs('historyFilter');
     filterMenu = NS.dom.qs('historyFilterMenu');
+    searchEl = NS.dom.qs('historySearch');
+    searchClearEl = NS.dom.qs('historySearchClear');
+    if (searchEl) {
+      searchEl.addEventListener('input', function () {
+        query = String(searchEl.value || '');
+        syncSearchClear();
+        renderList(lastMessage);
+      });
+    }
+    if (searchClearEl) {
+      searchClearEl.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        clearSearch();
+        if (searchEl && searchEl.focus) { searchEl.focus(); }
+      });
+    }
     if (drawer) {
       // [CUSTOM- The DYNAMIC container, not '.outline-head': render()
       // clears what it gets, and it must not take the filter chip with it (the 077
@@ -674,6 +735,11 @@ export const sessionMenuClient = `
       }
       button.addEventListener('click', function (event) { event.preventDefault(); toggle(); });
     }
+    if (window.addEventListener) {
+      window.addEventListener('resize', function () {
+        if (open && NS.dom.fitDrawer) { NS.dom.fitDrawer(drawer); }
+      });
+    }
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape' && open) {
         event.preventDefault();
@@ -685,6 +751,10 @@ export const sessionMenuClient = `
           menuOpen = false;
           renderMenu();
           renderChip();
+          return;
+        }
+        if (query) {
+          clearSearch();
           return;
         }
         close();

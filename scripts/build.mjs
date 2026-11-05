@@ -1,8 +1,19 @@
 import { execSync } from 'node:child_process';
+import { copyFileSync, mkdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { build, context } from 'esbuild';
 
 const watch = process.argv.includes('--watch');
 const production = process.argv.includes('--production');
+const require = createRequire(import.meta.url);
+
+/** The webview loads this lazily; node_modules is not shipped in the VSIX. */
+function copyMermaidAsset() {
+  mkdirSync('dist/media', { recursive: true });
+  copyFileSync(require.resolve('@mermaid-js/tiny'), 'dist/media/mermaid.tiny.js');
+}
+
+copyMermaidAsset();
 
 function git(args, fallback) {
   try {

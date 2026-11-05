@@ -1324,6 +1324,21 @@ export const transcriptViewClient = `
     NS.icons.attach(node, entry);
   }
 
+  // Tool entries have no 'streaming' field; their body is still growing until the call ends.
+  function toolRunning(tool) {
+    return !!tool && (tool.status === 'pending' || tool.status === 'in_progress');
+  }
+
+  function isStreamingEntry(entry, toolView) {
+    if (entry && entry.kind === 'tool') { return toolRunning(toolView || entry.toolView); }
+    return !!(entry && entry.streaming);
+  }
+
+  /** Mermaid renders only once the record has settled (or the tool call ended). */
+  function decorateMermaid(node, streaming) {
+    if (node && NS.mermaid && NS.mermaid.decorate) { NS.mermaid.decorate(node, !!streaming); }
+  }
+
   function place(entry, toolView) {
     var node;
     if (entry.kind === 'tool') {
@@ -1363,6 +1378,9 @@ export const transcriptViewClient = `
       node.title = fullStamp(entry.at, elapsed);
     }
     syncNodeMetadata(node, entry);
+    if (entry.kind === 'tool') {
+      node.setAttribute('data-streaming', toolRunning(toolView || entry.toolView) ? 'true' : 'false');
+    }
     objects[entry.id] = entry;
     nodes[entry.id] = node;
     order.push(entry.id);
@@ -1414,6 +1432,7 @@ export const transcriptViewClient = `
       var node = place(entry, entry.toolView);
       messagesEl.appendChild(node);
       watchNode(node);
+      decorateMermaid(node, isStreamingEntry(entry, entry.toolView));
       if (entry.kind === 'user') { folds.push({ node: node, entry: entry }); }
     }
     for (var f = 0; f < folds.length; f++) {
@@ -1447,6 +1466,7 @@ export const transcriptViewClient = `
           existing.parentNode.replaceChild(rebuilt, existing);
           nodes[entry.id] = rebuilt;
           watchNode(rebuilt);
+          decorateMermaid(rebuilt, toolRunning(toolView));
           if (autoExpandOn) { expandEntry(rebuilt, 'tool'); }
           refreshGroupingSoon();
         } else {
@@ -1460,6 +1480,7 @@ export const transcriptViewClient = `
     var placed = place(entry, toolView);
     messagesEl.appendChild(placed);
     watchNode(placed);
+    decorateMermaid(placed, isStreamingEntry(entry, toolView));
     // [CUSTOM- 自动展开：在 follow 之前改高度，视口按最终尺寸跟到底。
     if (autoExpandOn) { expandEntry(placed, entry.kind); }
     // [CUSTOM- The fold decision for a user message is a measurement.
@@ -1590,6 +1611,7 @@ export const transcriptViewClient = `
       patchSubagent(node, entry);
     }
     nodes[entryId].setAttribute('data-streaming', entry.streaming ? 'true' : 'false');
+    decorateMermaid(nodes[entryId], !!entry.streaming);
     NS.scroll.follow();
   }
 
@@ -1617,6 +1639,9 @@ export const transcriptViewClient = `
     }
     // [CUSTOM- 正文重建（空壳卡）会把折叠面重置成收起 —— 自动展开且勾了工具卡时补回来。
     if (wantsKind('tool')) { expandToolCard(nodes[entryId]); }
+    var running = toolRunning(tool);
+    nodes[entryId].setAttribute('data-streaming', running ? 'true' : 'false');
+    decorateMermaid(nodes[entryId], running);
     NS.scroll.follow();
   }
 
@@ -1647,6 +1672,86 @@ export const transcriptViewClient = `
   function userAnchorCount() { return userCount; }
   function messageAnchorCount() { return messageCount; }
 
+  /** Compact one-line description for the Cards tab; all kinds share this shape. */
+  function cardInfo(id) {
+    var entry = objects[id];
+    if (!entry) { return null; }
+    var label = '';
+    var typeLabel = entry.kind;
+    var status = '';
+    if (entry.kind === 'tool') {
+      var tool = entry.toolView || {};
+      label = tool.description || tool.title || entry.toolCallId || 'Tool call';
+      typeLabel = tool.toolName || tool.kind || 'tool';
+      status = tool.status || '';
+    } else if (entry.kind === 'thought') {
+      label = thoughtLabel(entry);
+      typeLabel = 'thinking';
+    } else if (entry.kind === 'compact') {
+      label = compactLabel(entry);
+      typeLabel = 'compact';
+    } else if (entry.kind === 'subagent') {
+      label = subagentTitle(entry);
+      typeLabel = 'sub-agent';
+      status = entry.state || '';
+    } else if (entry.kind === 'plan') {
+      var firstPlan = entry.entries && entry.entries[0];
+      label = (firstPlan && firstPlan.content) || 'Plan';
+      typeLabel = 'plan';
+    } else if (entry.kind === 'content') {
+      var block = entry.blocks && entry.blocks[0];
+      label = (block && (block.name || block.uri || block.text)) || 'Content';
+      typeLabel = 'content';
+    } else if (entry.kind === 'permission') {
+      label = (entry.permission && entry.permission.title) || 'Permission request';
+      typeLabel = 'permission';
+      status = (entry.permission && entry.permission.status) || '';
+    } else if (entry.kind === 'elicitation') {
+      label = (entry.elicitation && entry.elicitation.message) || 'Question';
+      typeLabel = 'form';
+      status = (entry.elicitation && entry.elicitation.status) || '';
+    } else if (entry.kind === 'notice') {
+      label = entry.text || 'Notice';
+    } else if (entry.kind === 'user') {
+      label = entry.text || 'User message';
+    } else if (entry.kind === 'assistant') {
+      label = entry.text || 'Assistant message';
+    }
+    label = String(label || '').replace(/\\s+/g, ' ').trim();
+    if (label.length > 160) { label = label.slice(0, 160) + '\\u2026'; }
+    return {
+      id: entry.id,
+      kind: entry.kind,
+      label: label || 'Card',
+      typeLabel: typeLabel,
+      status: status,
+      at: entry.at,
+      atIsElapsed: entry.atIsElapsed
+    };
+  }
+
+  function cardCount() { return order.length; }
+
+  /** Unhide a card folded under a parent tool before jumping to it. */
+  function reveal(id) {
+    var node = nodes[id];
+    if (!node) { return null; }
+    var current = node.parentNode;
+    while (current && current !== messagesEl) {
+      if (current.hidden) {
+        current.hidden = false;
+        var head = current.querySelector ? current.querySelector('.tool-head') : null;
+        if (head) {
+          head.setAttribute('aria-expanded', 'true');
+          var caret = head.querySelector('.tool-caret');
+          if (caret) { caret.textContent = '\\u25be'; }
+        }
+      }
+      current = current.parentNode;
+    }
+    return node;
+  }
+
   NS.transcriptView = {
     init: init,
     reset: reset,
@@ -1672,6 +1777,9 @@ export const transcriptViewClient = `
     node: nodeOf,
     userAnchorCount: userAnchorCount,
     messageAnchorCount: messageAnchorCount,
+    cardInfo: cardInfo,
+    cardCount: cardCount,
+    reveal: reveal,
     // [CUSTOM- 内容版本（place/reset 里自增）：置顶条据此缓存用户消息列表。
     version: function () { return contentVersion; }
   };

@@ -64,6 +64,18 @@ export const outlineClient = `
   var dragStartX = 0;
   var dragStartW = 0;
   var tops = null;        // 缓存的 [{ id, top }]，DOM 变化后置 null 惰性重建
+  // 'messages' = user/assistant；'cards' = 全部记录（含工具卡/思考/计划等）。
+  var tab = 'messages';
+  var tabContainers = [];
+  var cardsPending = false;
+
+  var CARD_ICON = {
+    content: 'document',
+    permission: 'notice',
+    elicitation: 'document',
+    subagent: 'agent',
+    compact: 'archive'
+  };
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -100,8 +112,8 @@ export const outlineClient = `
     return text || '';
   }
 
-  /** Anchor entries, in transcript order. [CUSTOM- user + assistant。 */
-  function anchors() {
+  /** Anchor entries, in transcript order. Messages tab: user + assistant. */
+  function messageAnchors() {
     var out = [];
     if (!NS.transcriptView.ordered) { return out; }
     var ids = NS.transcriptView.ordered();
@@ -110,6 +122,22 @@ export const outlineClient = `
       if (entry && (entry.kind === 'user' || entry.kind === 'assistant')) { out.push(entry); }
     }
     return out;
+  }
+
+  /** Cards tab: every record, described by transcriptView.cardInfo. */
+  function cardAnchors() {
+    var out = [];
+    if (!NS.transcriptView.ordered || !NS.transcriptView.cardInfo) { return out; }
+    var ids = NS.transcriptView.ordered();
+    for (var i = 0; i < ids.length; i++) {
+      var info = NS.transcriptView.cardInfo(ids[i]);
+      if (info) { out.push(info); }
+    }
+    return out;
+  }
+
+  function anchors() {
+    return tab === 'cards' ? cardAnchors() : messageAnchors();
   }
 
   /**
@@ -132,12 +160,16 @@ export const outlineClient = `
   function syncButton() {
     // [ / 075] O(1)：计数由 transcriptView 维护（messageAnchorCount
     // 覆盖 user+assistant），不要在每次 append 上全量走 anchors()。
-    anchorsPresent = NS.transcriptView.messageAnchorCount() > 0;
+    // Cards can exist without any user/assistant message (a tool-only transcript).
+    var messages = NS.transcriptView.messageAnchorCount();
+    var cards = NS.transcriptView.cardCount ? NS.transcriptView.cardCount() : 0;
+    anchorsPresent = messages > 0 || cards > 0;
     if (button) { button.hidden = !anchorsPresent; }
     renderVisibility();
   }
 
   function renderInto(head, list) {
+    var cards = tab === 'cards';
     var items = anchors();
     var hidden = 0;
     if (items.length > MAX_ITEMS) {
@@ -146,8 +178,11 @@ export const outlineClient = `
     }
     NS.dom.clear(list);
     NS.dom.clear(head);
+    var noun = cards ? 'card' : 'message';
     head.appendChild(NS.dom.el('span', 'outline-count',
-      items.length === 0 ? 'No messages yet' : items.length + (items.length === 1 ? ' message' : ' messages')));
+      items.length === 0
+        ? (cards ? 'No cards yet' : 'No messages yet')
+        : items.length + ' ' + noun + (items.length === 1 ? '' : 's')));
     if (hidden > 0) {
       head.appendChild(NS.dom.el('span', 'outline-more', '\\u2026 ' + hidden + ' earlier hidden'));
     }
@@ -157,6 +192,25 @@ export const outlineClient = `
       // [CUSTOM- 行上带 kind 类：这是"这一行是**谁说的**"在列表里的唯一载体。
       // 之前只有图标那一小格带 kind（076/077），于是整排看起来一模一样（用户报"用户消息区分度
       // 不明显"）—— 样式需要按 kind 给**整行**换字重/颜色/缩进，所以类要挂在行上。
+      if (cards) {
+        var statusClass = String(entry.status || '').replace(/[^a-z0-9_-]/gi, '');
+        var cardRow = NS.dom.el('button', 'outline-item outline-card kind-' + entry.kind
+          + (statusClass ? ' status-' + statusClass : ''));
+        cardRow.type = 'button';
+        cardRow.setAttribute('data-jump-id', entry.id);
+        cardRow.setAttribute('data-card-kind', entry.kind);
+        if (entry.status) { cardRow.setAttribute('data-card-status', entry.status); }
+        cardRow.title = entry.typeLabel + ' \\u00b7 ' + entry.label;
+        var cardIcon = NS.icons.icon(CARD_ICON[entry.kind] || entry.kind, 'outline-kind outline-kind-' + entry.kind);
+        if (cardIcon) { cardRow.appendChild(cardIcon); }
+        cardRow.appendChild(NS.dom.el('span', 'outline-type', entry.typeLabel));
+        cardRow.appendChild(NS.dom.el('span', 'outline-text', entry.label));
+        cardRow.appendChild(NS.dom.el('span',
+          entry.atIsElapsed ? 'outline-time elapsed' : 'outline-time',
+          timeLabel(entry.at, entry.atIsElapsed)));
+        list.appendChild(cardRow);
+        continue;
+      }
       var row = NS.dom.el('button', 'outline-item kind-' + entry.kind);
       row.type = 'button';
       row.setAttribute('data-jump-id', entry.id);
@@ -197,13 +251,22 @@ export const outlineClient = `
     applyReserve();
   }
 
+  function hiddenNode(node) {
+    var current = node;
+    while (current && current !== messagesEl) {
+      if (current.hidden) { return true; }
+      current = current.parentNode;
+    }
+    return false;
+  }
+
   /** Measure each anchor's position. Only ever called from the rAF pass. */
   function measure() {
     var items = anchors();
     var next = [];
     for (var i = 0; i < items.length; i++) {
       var node = NS.transcriptView.node(items[i].id);
-      if (node) { next.push({ id: items[i].id, top: node.offsetTop - messagesEl.offsetTop }); }
+      if (node && !hiddenNode(node)) { next.push({ id: items[i].id, top: node.offsetTop - messagesEl.offsetTop }); }
     }
     tops = next;
   }
@@ -286,9 +349,13 @@ export const outlineClient = `
   }
 
   function jump(id) {
-    var node = NS.transcriptView.node(id);
+    var node = NS.transcriptView.reveal
+      ? NS.transcriptView.reveal(id)
+      : NS.transcriptView.node(id);
     if (!node) { return; }
+    tops = null;
     NS.scroll.jumpTo(node);
+    if (NS.rail && NS.rail.reflow) { NS.rail.reflow(); }
     setActive(id);
     // [CUSTOM- 侧栏是常驻导航：跳转后不关；下拉维持「跳完收起」。
     if (mode === 'popup') { hide(); }
@@ -403,6 +470,67 @@ export const outlineClient = `
     }
   }
 
+  function makeTabButton(value, label) {
+    var button = NS.dom.el('button', 'outline-tab', label);
+    button.type = 'button';
+    button.setAttribute('data-outline-tab', value);
+    button.setAttribute('role', 'tab');
+    button.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      setTab(value, true);
+    });
+    return button;
+  }
+
+  function buildTabs(container) {
+    if (!container) { return; }
+    NS.dom.clear(container);
+    container.appendChild(makeTabButton('messages', 'Messages'));
+    container.appendChild(makeTabButton('cards', 'Cards'));
+  }
+
+  function syncTabs() {
+    for (var c = 0; c < tabContainers.length; c++) {
+      var buttons = tabContainers[c].querySelectorAll('.outline-tab');
+      for (var i = 0; i < buttons.length; i++) {
+        var on = buttons[i].getAttribute('data-outline-tab') === tab;
+        if (on) { buttons[i].classList.add('active'); } else { buttons[i].classList.remove('active'); }
+        buttons[i].setAttribute('aria-selected', on ? 'true' : 'false');
+      }
+    }
+  }
+
+  /** Switch the outline's data source; only a user click persists the choice. */
+  function setTab(next, persist) {
+    if (next !== 'messages' && next !== 'cards') { return; }
+    if (next === tab) { return; }
+    tab = next;
+    tops = null;
+    syncTabs();
+    syncButton();
+    render();
+    if (persist) { persistPrefs(); }
+    NS.dom.schedule(function () {
+      if (!isOpen) { return; }
+      tops = null;
+      syncActive();
+    });
+  }
+
+  /** Tool status/title updates only matter to the Cards tab; coalesce them. */
+  function noteToolUpdate() {
+    if (!isOpen || tab !== 'cards' || cardsPending) { return; }
+    cardsPending = true;
+    NS.dom.schedule(function () {
+      cardsPending = false;
+      if (isOpen && tab === 'cards') {
+        tops = null;
+        render();
+      }
+    });
+  }
+
   // [CUSTOM- 持久化搬到扩展宿主 globalState：webview 本地 setState 只在
   // 同一实例 reload 时存活，窗口重载 / 编辑器面板关闭重开都会丢。发一条非会话作用域的
   // 'setUiPref'，宿主存 globalState，boot 时通过 'uiPrefs' 消息带回。
@@ -415,6 +543,7 @@ export const outlineClient = `
         // [CUSTOM- "侧栏开/关"也一起落盘（整份表 + 一个默认值，同 Times）。
         outlineOpenBySession: openBySession,
         outlineOpenDefault: openDefault === true,
+        outlineTab: tab
       });
     }
   }
@@ -423,13 +552,15 @@ export const outlineClient = `
   function applyPrefs(prefs) {
     var prefsKey = JSON.stringify([
       prefs && prefs.outlineMode, prefs && prefs.outlineWidth,
-      prefs && prefs.outlineOpenBySession, prefs && prefs.outlineOpenDefault
+      prefs && prefs.outlineOpenBySession, prefs && prefs.outlineOpenDefault,
+      prefs && prefs.outlineTab
     ]);
     if (prefsKey === lastPrefsKey) { return; }
     lastPrefsKey = prefsKey;
     if (!prefs) { return; }
     prefsSeen = true;
     mode = prefs.outlineMode === 'sidebar' ? 'sidebar' : 'popup';
+    if (prefs.outlineTab === 'cards' || prefs.outlineTab === 'messages') { tab = prefs.outlineTab; }
     if (prefs.outlineOpenBySession && typeof prefs.outlineOpenBySession === 'object') {
       var next = {};
       for (var key in prefs.outlineOpenBySession) {
@@ -450,6 +581,7 @@ export const outlineClient = `
     // 都变成"重新打开侧栏"（用户报的第 1 条：点一下 Times 就弹回来）。开/关一律从上面那两份
     // 按会话的状态推出来 —— 回话只是让两端收敛，不再是"命令"。
     if (mode === 'sidebar') { isOpen = sidebarOpenFor(currentSessionId); }
+    syncTabs();
     renderVisibility();
     if (isOpen) {
       render();
@@ -554,6 +686,15 @@ export const outlineClient = `
     unpinBtn = NS.dom.qs('outlineUnpin');
     resizeEl = NS.dom.qs('outlineResize');
     messageArea = NS.dom.qs('messageArea');
+    tabContainers = [];
+    var tabHosts = drawer.querySelectorAll ? drawer.querySelectorAll('[data-outline-tabs]') : [];
+    for (var t = 0; t < tabHosts.length; t++) { tabContainers.push(tabHosts[t]); }
+    if (sidebar && sidebar.querySelectorAll) {
+      var sideTabs = sidebar.querySelectorAll('[data-outline-tabs]');
+      for (var s = 0; s < sideTabs.length; s++) { tabContainers.push(sideTabs[s]); }
+    }
+    for (var b = 0; b < tabContainers.length; b++) { buildTabs(tabContainers[b]); }
+    syncTabs();
 
     button.addEventListener('click', function (event) {
       event.preventDefault();
@@ -608,6 +749,8 @@ export const outlineClient = `
     isOpen: function () { return isOpen; },
     invalidate: invalidate,
     applyPrefs: applyPrefs,
+    setTab: setTab,
+    noteToolUpdate: noteToolUpdate,
     // [CUSTOM- 焦点会话（boot 在焦点咽喉点喂）：侧栏的开/关是按会话记的。
     setSession: setSession,
     // [CUSTOM- 会话列表的旁观者：给"已开启的会话"落定开/关状态（2026-10-28）。

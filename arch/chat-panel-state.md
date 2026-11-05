@@ -367,7 +367,8 @@ Outline 都是会话级**——在一个会话里拨它只影响这个会话，�
 |---|---|
 | 数据 | `UiPrefs.tailBySession`（会话 → 布尔）+ `tailDefault`。宿主按 Main/Side 分域存 `globalState`，主 view/editor 同一份，Side 独立。**默认 `tailDefault` = true** —— 不开按钮时也照旧"贴底跟随"，那是改动前就有的行为，按钮只是把它显式化。 |
 | 运行时 | `scroll.ts` 的 `tail` 旗标：`setTail(on, immediate)`；`follow()` 只看 **`tail`**，`reflow()` 以 **`pinned || tail`** 决定是否保持底部。**Tail 关掉 ⇒ follow 绝不自动滚**（"别动我的视口"），开着时持续跟到底，不被布局滚动留下的 `pinned=false` 锁死。`pinned` 仍如实反映几何上的"贴底"，Tail **不许伪造它**（Jump、探针都读它）。`immediate` 只在**用户点按钮**时为真（换会话由 `restore` 决定落点）。 |
-| 退出路径 | ① **真实用户滚动**改变了阅读进度 → `cancelTail('scroll')`。判据不是“非程序写入”本身（浏览器 scroll anchoring / 内容折叠后的夹紧 / 布局重排也会改 scrollTop），而是**用户意图**：wheel（document 门控）、拖 `#messages` 滚动条（pointerdown 落在 messages-bar）、中键自动滚动（button 1，持续到 pointerup）、键盘翻页（PageUp/PageDown/Home/End/方向键），窗口 800ms；② 大纲跳到某条记录（`jumpTo`）；③ 切会话恢复到用户自己选的中间位置（`restore`）。都只改这个会话那一条记录，不动默认值。 |
+| 退出路径 | ① **真实用户滚动**改变了阅读进度 → `cancelTail('scroll')`。判据不是“非程序写入”本身（浏览器 scroll anchoring / 内容折叠后的夹紧 / 布局重排也会改 scrollTop），而是**用户意图 + 实际位移**：wheel（document 门控）、拖 `#messages` 滚动条（pointerdown 记 `barStartTop`，scrollTop 位移 >1 才算）、中键自动滚动（button 1 记 `middleStartTop`，位移 >1 才算）、键盘翻页（PageUp/PageDown/Home/End/方向键），窗口 800ms；仅按下滚动条/中键但没有位移**不取消**。② 大纲跳到某条记录（`jumpTo`）；③ 切会话恢复到用户自己选的中间位置（`restore`，静默清手势）。都只改这个会话那一条记录，不动默认值。 |
+| 手势闸门（2026-11-05） | `gestureHeld() = barDragging || middleScrolling`。手势期间 `follow()` 的 rAF、`reflow()`、`reassert()/settleAnchor()` 都不写 `scrollTop`；`healIfTailCovered` 跳过；`writeTop` 在手势中 re-baseline 起点。松手时 `settleGesture()` 先按真实位移结算（有位移则取消 Tail）再清状态，避免旧起点污染后续 follow/Jump。原生 scroll 事件在无手势时仍同步 `recompute()`，手势时改为 rAF 合并，减少慢速拖条的强制重排。 |
 | 滚轮门控与 Tail | 指针在**未聚焦**卡片的内层滚动区时，门控用 `writeTop(panel + delta)` 滚面板；它走的是程序写入口，所以该分支**显式** `cancelTail('scroll')`。滚**已聚焦**卡片的内部不关 Tail（面板没动，滚轮意图撤回）。 |
 | Markdown 异步回填 | `transcriptView.afterMarkdownSlice` 在 `reassert()` 后调一次 `follow()`，覆盖 stream / tool key / 普通 patch 三条路径；普通 patch 的重复通知由现有 rAF 合帧。恢复中间阅读位置已取消 Tail，所以不会与 `reassert()` 抢视口。 |
 | Tail 关闭时的 Jump | `follow()` 在 `!tail` 时每帧最多调度一次 `recompute()`（只读几何、更新 pinned/Jump，**不写 scrollTop**）。没有它，Tail 关闭后内容长高但无 scroll 事件，Jump 会一直不出现（真机日志出现过 `pin=1 dist=13327`）。 |
@@ -375,6 +376,7 @@ Outline 都是会话级**——在一个会话里拨它只影响这个会话，�
 | 无会话焦点 | `focusDraft()` 与关闭聚焦会话的 `sessionClosed` 分支绕过 `applyFocus()`，因此在 `currentSessionId=null` 后都必须显式 `tail.setFocus(null)`；否则按钮仍显示并改写旧会话。 |
 | 启动偏好顺序 | `ChatPanelHost.pushBoot()` 对目标 surface 先发已有 `uiPrefs`、再发 `boot`。`boot → applyFocus → scroll.restore()` 恢复到中间位置会立即取消 Tail 并写回；偏好必须先到，否则会用未 hydrate 的整表覆盖其他会话记录。 |
 | 诊断 | `scroll#` 行带 `tail=0|1`；`setTail` / `cancelTail` 真正翻转时强制记 `tail:on` / `tail:off <scroll|restore>`；scroll 来源分 `user-scroll` / `layout-scroll` / `scroll-after-program`。 |
+| 视觉提示（2026-11-05） | `tail.apply()` 同时写 `body[data-tail="on|off"]`。CSS 在 `.messages-column` 上画左右两个 L 形角（`::before` / `::after`，约 28×16、2px 边框、竖臂 mask 向上渐隐），中间由 `.tail-fade` 提供一层全宽淡渐隐（不画实线）；`bottom` 跟随 `--vac-composer-h/--vac-elic-h/--vac-perm-h`，`pointer-events:none`，不占布局；`data-composer="off"` 与 disconnected/connecting 相位下不显示。`scroll.recompute()` 另写 `body[data-messages-scroll="on|off"]`（`scrollHeight > clientHeight + 1`），**消息区没有滚动条时角标与渐隐都不显示**；同时写 `--vac-scrollbar-w`（`offsetWidth - clientWidth`），右侧角标/渐隐用 `right: calc(var(--vac-scrollbar-w,0px) + 2px)` 让出滚动条。`.jump-latest` 显式 `z-index:7`，避免窄面板下角压住 Jump。 |
 
 **「落定」（`seedKnown`，四个模块同一件事）**：光有"按会话 + 默认值"还不够 —— 一个没有记录的
 **已开启**会话会跟着默认值走，于是"A 里拨开关，切到 B 发现它也变了"。所以 `noteSessions`（boot 在
@@ -405,10 +407,10 @@ agent 的 `session/list`），删不掉源数据 ⇒ `SessionHistoryStore` 用**
 | 关注点 | 当前契约 |
 |---|---|
 | 存储 | `vac.outlinePrefs.v1` 保留 Main scoped + 全局字段 + 主 `tabOrder`，旧数据自然归 Main；`vac.sideUiPrefs.v1` 只保存 Side scoped，不含全局字段或主 tab 顺序。 |
-| scoped 字段 | `times/tail/outlineOpen/autoExpand` 四组 `BySession/Default`，加 `outlineMode/outlineWidth`。Main 与 Side 各自持有；`tabOrder` 仅 Main。 |
+| scoped 字段 | `times/tail/outlineOpen/autoExpand` 四组 `BySession/Default`，加 `outlineMode/outlineWidth` 与 `outlineTab`。Main 与 Side 各自持有；`tabOrder` 仅 Main。 |
 | 全局字段 | `autoExpandKinds`、展开限高、`flatTools`、输入卡尺寸、`sendKey`、Markdown、最近目录条数、每 agent 默认 model/effort 等继续共享。 |
 | 写入与投影 | `setUiPref/patchUiPrefs` 按可信消息来源 `from` 选择 `main|side`，统一进入 `commitUiPrefs()`；`projectUiPrefs()` 按白名单组装目标 scope，`postUiPrefs()` 对 Main scoped 只发 view/editor，对 Side scoped 只发 side，全局变化则分别向三面发送各自投影。数组/Record 按值比较，完全无变化不写盘、不广播；`autoExpand.persist()` 携带相同 `autoExpandKinds` 不算全局变化。 |
 | 启动与默认值 | `pushBoot()` 先发送目标 surface 的 `uiPrefs` 再发 `boot`。没有 Side key 时使用 Side 内置 defaults/layout 和空 session map，不复制 Main scoped，但仍投影共享字段。 |
 | 客户端收敛 | `times/tail/autoExpand/outline.applyPrefs()` 以本模块消费的原始字段生成 `lastPrefsKey`；完全相同的重复投影在 `seedKnown()` 前直接返回。autoExpand 签名还包含全局 kinds 与限高，保证真全局变化仍生效。否则旧空投影每次整表替换后都会再次 `seedKnown()`，形成持续回写。 |
 | 生命周期 | `releaseSideSession()` 只清 Side scope 的目标 session，保留兄弟 Side、Side defaults/layout、Main key 与主 `tabOrder`。Extension Host 启动时清 Side 遗留四张 per-session map，避免异常重载复活孤儿状态，但保留 Side defaults/layout；不恢复 Side 会话。 |
-| Reset | `resetPanelPrefs` 同时恢复 Main、Side scoped 与全部共享字段的显式完整默认值，更新两个 Memento key，并分别向三面发送完整投影；不能只清局部字段或让客户端保留旧值。 |
+| Reset | `resetPanelPrefs` 同时恢复 Main、Side scoped 与全部共享字段的显式完整默认值（含 `outlineTab: 'messages'`），更新两个 Memento key，并分别向三面发送完整投影；不能只清局部字段或让客户端保留旧值。 |

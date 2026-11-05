@@ -2,7 +2,7 @@
   "name": "vscode-acp-client",
   "displayName": "VAC - Agent Client for VS Code",
   "description": "Chat with Claude Code and Codex inside VS Code through the Agent Client Protocol (ACP): multi-session chat, permissions, forms, usage dashboard.",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "publisher": "zouv",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -456,9 +456,11 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.7.0",
+    "highlight.js": "^11.12.0",
     "marked": "^15.0.0"
   },
   "devDependencies": {
+    "@mermaid-js/tiny": "11.12.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
@@ -468,10 +470,10 @@
     "@vscode/vsce": "^3.7.1",
     "esbuild": "^0.25.0",
     "eslint": "^10.14.0",
+    "mocha": "^12.0.3",
     "typescript": "^5.5.0",
     "typescript-eslint": "^8.72.1",
-    "vitest": "^4.1.12",
-    "mocha": "^12.0.3"
+    "vitest": "^4.1.12"
   },
   "overrides": {
     "glob": "^14.0.3",

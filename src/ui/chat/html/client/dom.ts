@@ -120,6 +120,36 @@ export const domClient = `
     return minutes + 'm ' + Math.round(seconds - minutes * 60) + 's';
   }
 
+  /**
+   * Case-insensitive, whitespace-separated AND match over a list of values.
+   * Shared by the two list filters so "search" means the same thing in both.
+   */
+  function textMatches(query, values) {
+    var tokens = String(query || '').toLowerCase().split(' ');
+    var hay = '';
+    for (var i = 0; i < values.length; i++) {
+      if (values[i]) { hay += String(values[i]).toLowerCase() + '\\n'; }
+    }
+    for (var t = 0; t < tokens.length; t++) {
+      if (tokens[t] && hay.indexOf(tokens[t]) < 0) { return false; }
+    }
+    return true;
+  }
+
+  /**
+   * Cap a dropdown to the remaining space between its top and the Chat panel
+   * bottom. The caller must unhide it first (a hidden node reports top = 0).
+   */
+  function fitDrawer(drawer) {
+    if (!drawer || !drawer.getBoundingClientRect || !drawer.style) { return; }
+    var rect = drawer.getBoundingClientRect();
+    var viewport = (document.documentElement && document.documentElement.clientHeight)
+      || window.innerHeight || 0;
+    if (!viewport) { return; }
+    var top = rect && typeof rect.top === 'number' ? rect.top : 0;
+    drawer.style.maxHeight = Math.max(0, viewport - top - 8) + 'px';
+  }
+
   NS.dom = {
     sanitize: sanitize,
     duration: duration,
@@ -127,7 +157,9 @@ export const domClient = `
     clear: clear,
     setSanitizedHtml: setSanitizedHtml,
     qs: qs,
-    schedule: schedule
+    schedule: schedule,
+    textMatches: textMatches,
+    fitDrawer: fitDrawer
   };
 })(window.__vac = window.__vac || {});
 `;

@@ -40,7 +40,7 @@ export const scrollClient = `
   var ACTIVE_CLASS = 'scroll-active';
   // 卡片里可能带纵向滚动条的已知容器：点标题栏（落点不在任何滚动区里）时按它找焦点面。
   // 新增这类容器要加进来；点内容本身仍经祖先链找到，不受这张表限制。
-  var INNER_SCROLL_SELECTOR = '.thought-body, .tool-body, .tool-seg-out, .diff-body, .elic-preview';
+  var INNER_SCROLL_SELECTOR = '.thought-body, .tool-body, .tool-seg-out, .diff-body, .elic-preview, .mermaid-chart';
   var activeScroller = null;
   var activeCard = null;
   var middleGuard = null;
@@ -62,6 +62,47 @@ export const scrollClient = `
   var userScrollAt = 0;
   var middleScrolling = false;
   var barDragging = false;
+  // Gesture snapshots: only a real scrollTop delta counts as user intent. A press
+  // alone (scrollbar or middle button) must not cancel Tail.
+  var middleStartTop = -1;
+  var middleMoved = false;
+  var barStartTop = -1;
+  var barMoved = false;
+
+  function gestureHeld() { return barDragging || middleScrolling; }
+
+  function resetMiddleGesture() {
+    middleScrolling = false;
+    middleMoved = false;
+    middleStartTop = -1;
+  }
+
+  function resetBarGesture() {
+    barDragging = false;
+    barMoved = false;
+    barStartTop = -1;
+  }
+
+  function resetGesture() {
+    resetBarGesture();
+    resetMiddleGesture();
+  }
+
+  /** Settle a release: a moved press is user intent; a motionless press is not. */
+  function settleGesture() {
+    var moved = false;
+    if (container) {
+      moved = (barDragging && barStartTop >= 0
+          && Math.abs(container.scrollTop - barStartTop) > 1)
+        || (middleScrolling && middleStartTop >= 0
+          && Math.abs(container.scrollTop - middleStartTop) > 1);
+    }
+    if (moved) {
+      cancelTail('scroll');
+      onScroll(true);
+    }
+    resetGesture();
+  }
   // 上一次"被门控吞掉滚轮"的卡片 —— 只在换卡片时记一条日志。滚动热路径上每 700ms 记一条
   // 会把日志桥的共享配额（10s/30 条）吃掉，反而埋掉 pinned/unpinned 那些关键信号。
   var lastGateCard = null;
@@ -287,12 +328,21 @@ export const scrollClient = `
     // （程序写 scrollTop 也会派发 scroll）。分开记，读的时候才不会把"我们跟到底了"
     // 看成"用户自己滚到底了"。判据沿用 restore 那套记账（写完之后回读一次）。
     container.addEventListener('scroll', function () {
-      var fromProgram = lastProgrammaticTop >= 0
+      if (barDragging && barStartTop >= 0
+          && Math.abs(container.scrollTop - barStartTop) > 1) { barMoved = true; }
+      if (middleScrolling && middleStartTop >= 0
+          && Math.abs(container.scrollTop - middleStartTop) > 1) { middleMoved = true; }
+      var gestureActive = gestureHeld();
+      var gestureMoved = barMoved || middleMoved;
+      // During an active gesture, a program write can look like "no move" to
+      // lastProgrammaticTop; moved must win so a slow drag still counts as user.
+      var fromProgram = !gestureActive && lastProgrammaticTop >= 0
         && Math.abs(container.scrollTop - lastProgrammaticTop) <= 2;
       var fromUser = false;
       if (!fromProgram) {
-        fromUser = middleScrolling || barDragging
-          || (Date.now() - userScrollAt <= USER_SCROLL_WINDOW_MS);
+        fromUser = gestureActive
+          ? gestureMoved
+          : (Date.now() - userScrollAt <= USER_SCROLL_WINDOW_MS);
         // [CUSTOM- 2026-10-29] 只有真实用户滚动才关闭 Tail；浏览器自身造成的 scroll
         // （anchoring / 夹紧 / 布局变化）不关。
         if (fromUser) { cancelTail('scroll'); }
@@ -395,10 +445,14 @@ export const scrollClient = `
       if ((!event.deltaY && !event.deltaX) || event.cancelable === false) { return; }
       var delta = wheelDelta(event);
       if (!delta.y) { return; }
-      // [CUSTOM- 2026-10-29] 面板空白处的滚轮也走浏览器默认滚动，同样应该关掉 Tail。
-      userScrollAt = Date.now();
       var card = topCardOf(target);
-      if (!card) { return; }
+      if (!card) {
+        // Native scroll on the panel background: the scroll event will carry the
+        // real position, so record the intent here (a clamped bottom wheel will
+        // produce no scroll event and therefore cannot cancel Tail).
+        userScrollAt = Date.now();
+        return;
+      }
       var focused = !!(activeCard && card === activeCard);
       // 聚焦卡片的滚动目标是"它自己的滚动区"；滚动区被重建（工具 body 每个 chunk 都会重建）
       // 或内容缩到装不下时，退回落点所在的那一个。
@@ -415,9 +469,15 @@ export const scrollClient = `
         scrollInner(scroller, delta.y);
       } else {
         if (focused) { setActive(null); }
-        writeTop(container.scrollTop + delta.y);
-        // 门控滚面板走程序写入口，但用户确实滚了面板，显式取消 Tail。
-        cancelTail('scroll');
+        var before = container.scrollTop;
+        writeTop(before + delta.y);
+        // A wheel down at the very bottom is clamped to the same position. That is
+        // not a reading change, so it must neither cancel Tail nor open the 800ms
+        // "user scrolled" window.
+        if (Math.abs(container.scrollTop - before) > 0.5) {
+          userScrollAt = Date.now();
+          cancelTail('scroll');
+        }
       }
       if (card !== lastGateCard) {
         lastGateCard = card;
@@ -462,13 +522,18 @@ export const scrollClient = `
       // [CUSTOM- 2026-10-29] 真实用户滚动意图：拖 #messages 滚动条 / 中键自动滚动。
       // 只有这些（以及 wheel / 键盘翻页）之后产生的 scroll 事件才允许关闭 Tail。
       // 新的一次按下意味着上一次手势已结束（pointerup 可能收不到）⇒ 先清旧状态。
-      if (label !== 'messages-bar') { barDragging = false; }
-      if (!event || event.button !== 1) { middleScrolling = false; }
-      if (label === 'messages-bar') { barDragging = true; userScrollAt = Date.now(); }
+      if (label !== 'messages-bar') { resetBarGesture(); }
+      if (!event || event.button !== 1) { resetMiddleGesture(); }
+      if (label === 'messages-bar') {
+        barDragging = true;
+        barStartTop = container ? container.scrollTop : -1;
+        barMoved = false;
+      }
       if (event && event.button === 1 && event.target && container
           && container.contains && container.contains(event.target)) {
         middleScrolling = true;
-        userScrollAt = Date.now();
+        middleStartTop = container.scrollTop;
+        middleMoved = false;
       }
       // 只记**有意义**的那几类：点滚动条（拖了没动就是它）、点大纲栏（会触发 jumpTo）、
       // 以及落在面板外。点记录/点输入框（打字）太频繁，记了只会把这套诊断自己的配额吃光。
@@ -478,7 +543,7 @@ export const scrollClient = `
     }, true); }
     // [CUSTOM- 2026-10-29] 松手即结束"滚动进行中"状态；blur / 隐藏时也清（可能收不到 pointerup）。
     if (document.addEventListener) {
-      var endUserScroll = function () { barDragging = false; middleScrolling = false; };
+      var endUserScroll = function () { settleGesture(); };
       document.addEventListener('pointerup', endUserScroll, true);
       document.addEventListener('pointercancel', endUserScroll, true);
       document.addEventListener('mouseup', endUserScroll, true);
@@ -505,9 +570,8 @@ export const scrollClient = `
     if (document.addEventListener) {
       document.addEventListener('visibilitychange', function () {
         if (document.visibilityState && document.visibilityState !== 'visible') {
-          // 窗口隐藏可能收不到 pointerup：清掉"滚动进行中"，别让下一个 scroll 误判。
-          barDragging = false;
-          middleScrolling = false;
+          // 窗口隐藏可能收不到 pointerup：先结算位移，再清掉手势状态。
+          settleGesture();
           pendingUnfocus = null;
           restoreMiddleGuard();
           return;
@@ -517,8 +581,7 @@ export const scrollClient = `
     }
     if (window.addEventListener) { window.addEventListener('resize', reflow); }
     if (window.addEventListener) { window.addEventListener('blur', function () {
-      barDragging = false;
-      middleScrolling = false;
+      settleGesture();
       pendingUnfocus = null;
       restoreMiddleGuard();
     }); }
@@ -541,11 +604,16 @@ export const scrollClient = `
   }
 
   function onScroll(fromUser) {
-    recompute();
-    // 用户接管了视口：放弃待恢复的位置，不要跟他抢。
+    // Drop pending restoration synchronously: tests (and real gestures) call
+    // reassert() immediately after a user scroll and must not be pulled back.
     if (fromUser && restoreTarget !== null && container && Math.abs(container.scrollTop - expectedTop) > 2) {
       restoreTarget = null;
     }
+    // Layout reads stay in the rAF pass while a user gesture is held (scroll
+    // events can arrive several times per frame and a forced layout each time
+    // makes native thumb drags lag). Normal wheel/keyboard/layout scrolls keep
+    // the synchronous recompute so remember() never reads a stale pinned state.
+    if (gestureHeld()) { scheduleRecompute(); } else { recompute(); }
   }
 
   /**
@@ -629,6 +697,10 @@ export const scrollClient = `
     if (!container) { return; }
     container.scrollTop = value;
     lastProgrammaticTop = container.scrollTop;
+    // A program write during a held gesture (Jump / restore / wheel) becomes the
+    // new start point; the old press position must not look like user movement.
+    if (barDragging) { barStartTop = container.scrollTop; barMoved = false; }
+    if (middleScrolling) { middleStartTop = container.scrollTop; middleMoved = false; }
   }
 
   /**
@@ -731,6 +803,24 @@ export const scrollClient = `
     var distance = container.scrollHeight - pad - container.scrollTop - container.clientHeight;
     var wasPinned = pinned;
     pinned = distance < PIN_THRESHOLD;
+    // Tail's corner brackets only make sense when the message area actually
+    // overflows; an empty/short transcript has no scrollbar to follow.
+    if (document.body && document.body.setAttribute) {
+      var scrollMark = container.scrollHeight > container.clientHeight + 1 ? 'on' : 'off';
+      if (!document.body.getAttribute || document.body.getAttribute('data-messages-scroll') !== scrollMark) {
+        document.body.setAttribute('data-messages-scroll', scrollMark);
+      }
+      // Publish the vertical scrollbar width so the right Tail corner can sit
+      // left of the bar instead of overlapping it.
+      var barWidth = container.offsetWidth - container.clientWidth;
+      if (typeof barWidth === 'number' && isFinite(barWidth) && barWidth >= 0
+          && document.body.style && document.body.style.setProperty) {
+        var barCss = barWidth + 'px';
+        var previous = document.body.style.getPropertyValue
+          ? document.body.style.getPropertyValue('--vac-scrollbar-w') : '';
+        if (previous !== barCss) { document.body.style.setProperty('--vac-scrollbar-w', barCss); }
+      }
+    }
     // [CUSTOM- 贴底状态翻转 = 一次"视口归属"的交接，正是这个 bug 唯一会留下痕迹的地方。
     if (wasPinned !== pinned) { logScrollState(pinned ? 'pinned' : 'unpinned'); }
     if (pinned) { hideJump(); } else { showJump(); }
@@ -765,6 +855,7 @@ export const scrollClient = `
     logScrollState('heal-skip:' + reason, true);
   }
   function healIfTailCovered(distance) {
+    if (gestureHeld()) { noteHealSkip('gesture'); return; }
     if (healing || distance >= PIN_THRESHOLD) { noteHealSkip('unpinned'); return; }
     if (!container || !container.lastElementChild) { noteHealSkip('no-tail'); return; }
     var max = container.scrollHeight - container.clientHeight;
@@ -816,6 +907,7 @@ export const scrollClient = `
    */
   function reflow() {
     if (!container) { return; }
+    if (gestureHeld()) { scheduleRecompute(); return; }
     var keepBottom = pinned || tail;
     recompute();
     if (keepBottom) {
@@ -880,6 +972,7 @@ export const scrollClient = `
     NS.dom.schedule(function () {
       followPending = false;
       if (!container) { return; }
+      if (gestureHeld()) { scheduleRecompute(); return; }
       if (!tail) { logScrollState('unpinned-before-frame'); recompute(); return; }
       var height = container.scrollHeight;
       lastScrollHeight = height;
@@ -926,7 +1019,7 @@ export const scrollClient = `
     showJump();
     restoreTarget = null;
     writeTop(top);
-    onScroll();
+    recompute();
     logScrollState('jumpTo', true);
   }
 
@@ -994,6 +1087,10 @@ export const scrollClient = `
   function restore(sessionId) {
     restoreEpoch++;
     restoreAnchor = null;
+    // A late scroll from the previous session must not cancel the new session's
+    // Tail: clear the gesture silently (no cancelTail) and drop the wheel window.
+    resetGesture();
+    userScrollAt = 0;
     if (!container) { return; }
     // 切会话 = 换了一批卡片：上一张卡片的焦点环不能跟过来。
     setActive(null);
@@ -1028,7 +1125,7 @@ export const scrollClient = `
    * leave the viewport somewhere else). No-op once the user has scrolled.
    */
   function reassert() {
-    if (!container || restoreTarget === null) { return; }
+    if (!container || restoreTarget === null || gestureHeld()) { return; }
     var top = restoreTarget;
     if (restoreAnchor && container.contains(restoreAnchor.node)) {
       var delta = restoreAnchor.node.getBoundingClientRect().top - container.getBoundingClientRect().top - restoreAnchor.offset;

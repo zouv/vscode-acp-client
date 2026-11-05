@@ -11,16 +11,18 @@
 >
 > **维护约定**：本文件只留「**进行中**的临时状态」。**本文件超过 150 行即视为堆积超标。**
 
-
 ## 状态快照
 
-- **最近更新**：2026-11-04
+- **最近更新**：2026-11-05
 - **整体状态**：v1.10.0 已发布为 Latest（release commit `6bd0609`，tag `v1.10.0`）；VSIX 已上传并核对摘要。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
 - **当前分支（必填）**：`main`；v1.10.0 已按授权提交推送、打包并上传 GitHub Release，不另建分支。
-- **最后验证状态**（2026-11-04）：Webview 语法检查、lint/typecheck、check-docs ✅，unit **177 / 27 文件** ✅，完整宿主 **701 passing** ✅；GitHub Actions 四格 CI 通过。VSIX `vscode-acp-client-1.10.0.vsix`（517684 字节）SHA256 `0a39e0e6cb0fcb6d1f65b3bf8f5678f5cea0ba9701ab616ee46c50eaf232897f`，Release 附件摘要一致。真实 agent 的 `npm run dev:host` 人工验收尚未执行；真机验收 257–258 未做。
-
+- **最后验证状态**（2026-11-05）：check-webview-client、lint/typecheck、`sh check-docs.sh` ✅；unit **183 / 28 文件** ✅；客户端 mocha **395 passing** ✅；完整宿主 **725 passing** ✅（用 `VSCODE_TEST_VERSION=1.144.1` 且 `env -u ELECTRON_RUN_AS_NODE`；1.85 宿主上剪贴板用例本机偶发失败，非本轮代码路径）。真机 `npm run dev:host` 的验收（清单 259–266）尚未执行。v1.10.0 已发布为 Latest（release commit `6bd0609`，tag `v1.10.0`）；VSIX 已上传并核对摘要。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
 
 ## 当前任务（In Progress）
+
+- **2026-11-05 第二轮交互修复（代码与自动验证完成 / 待真机验收）**：① 滚动条拖拽手势闸门/位移分类 ② 中键/滚轮在底部无实际位移时不取消 Tail ③ Mermaid 限高与 50–200% 缩放 ④ Tail 左右 L 形两角 + 中间淡渐隐（无滚动条时隐藏、右角让出滚动条）⑤ `#history` / `#cwdMenu` 最大高度改为面板剩余高度。自动验证：check-webview-client、typecheck、lint、unit **183 / 28 文件**、客户端 mocha **395**、完整宿主 **725 passing** 通过。下一步 `npm run dev:host` 按 `docs/03-验收清单.md` 264–266 真机验收。计划见 `C:\Users\zouwei\.claude\plans\1-markdown-mermaid-fizzy-willow.md`。
+
+- **2026-11-05 面板五项增强（代码与自动验证完成 / 待真机验收）**：Mermaid 图表与原文切换、代码高亮、双列表搜索、大纲 Messages/Cards、Tail 初始视觉；自动验证 unit 183、宿主 717 通过，真机 259–263 待做。
 
 - **Side Chat 真实验收（已随 v1.10.0 发布 / 待做）**：按「下一步」第一条执行 `npm run dev:host`，覆盖主/Side 工具栏隔离、主双面同步、全局设置共享、来源标题、Side 关闭/重载/Reset，以及真实 agent fork、权限/表单、通知与关闭清理。
 
@@ -41,7 +43,6 @@
 - **P1-1 Codex 真机验证**（代码已就绪）：步骤见「下一步」5。
 - **「滚动条到底、消息仍被截断」待复现**（用户 2026-10-26 报，现场已消失）：日志 2300+ 条 `scroll#` 全部自洽（`cov=0`），现有判据打不到这种形态。**下次出现时先别关面板**，直接读 `~/.vac/vac.log` 抓现场。
 
-
 ## 待归档暂存区（仅本轮未归档的完成项）
 
 - （无。）
@@ -54,8 +55,11 @@
 
 - **上架前的截图**：README 与 Marketplace 列表都还没有截图（`ROADMAP.md` P2-5 待办项之一）。
 
-
 ## 下一步（Next Steps）
+
+- **2026-11-05 第二轮真机验收（最高优先）**：`npm run dev:host` → 按 `docs/03-验收清单.md` 264–266 确认：Tail 两角/淡渐隐/无滚动条隐藏/右角让位；流式时慢速拖滚动条 thumb 跟手、仅按下不取消；底部中键/滚轮无位移不取消；Mermaid 大图限高、±10% 缩放与 Reset；两个下拉按面板剩余高度滚动。
+
+- **2026-11-05 五项增强真机验收**：`npm run dev:host` → 按清单 259–263 确认 Mermaid 流式/切换/坏语法、代码高亮、两个搜索框、Cards 大纲定位与重载记忆。
 
 - **Side Chat 第一条动作（真实验收）**：`npm run dev:host` 验证主 A/B 与 Side S/T 的 Tail/Times/Expand/Outline 互不联动、主双面同步、全局设置共享、新会话分别继承本 scope 默认值，以及来源无标题/晚到标题/父改名/长标题 tooltip、Side 关闭/Reload Window/Reset 和无设置齿轮。既有真实 agent 验收继续覆盖同源多个、跨源并存、上下文继承、引用/草稿/附件、后台权限/通知、关闭清理与能力边界。
 
@@ -97,14 +101,13 @@
 7. **历史遗留验收（低优先）**：v1.4.0/M4、v1.3.1、v1.3.0 的验收清单仍挂着，先按 1–5 走。
 8. **之后按 ROADMAP**：P1-8 连接健壮性 → P1-9 SDK 新更新类型 → P1-3 打包瘦身 → P2-*。
 
-
 ## 如何运行 / 测试（Quick Verify）
 
 - 运行（开发宿主）：`npm run dev:host`（宿主窗口内 `Ctrl+R` 重载生效）
 - 构建：`npm run compile`；生产打包：`npm run package`；打 `.vsix`：`npm run vsix`（产物落 `release/`）
 - **图标**：`npm run icon`（改 `scripts/make-icon.mjs` 顶部的 `MARKS` 几何后重跑；
   `--preview` 另出多尺寸预览图到系统临时目录）。`resources/icon.*` 是生成物，不要手改。
-- 校验/测试：`npm run test:unit`（vitest，秒级）· `npm test`（编译 + lint + 真实宿主测试）
+- 校验/测试：`npm run test:unit`（vitest，秒级）· `npm test`（编译 + lint + 真实宿主测试；若 shell 带 `ELECTRON_RUN_AS_NODE=1`，用 `env -u ELECTRON_RUN_AS_NODE npm test`；最低宿主可用 `VSCODE_TEST_VERSION=1.85.0`，本机剪贴板用例偶发失败时可换 1.144.1）
 - lint / 类型：`npm run lint` · `npm run typecheck`
 - 文档体检：`sh check-docs.sh`
 - agent 能力探针：`node scripts/probe-agent-init.mjs --agent "npx -y @agentclientprotocol/codex-acp" --session`

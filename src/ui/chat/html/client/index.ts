@@ -6,6 +6,7 @@
 // 运行时引用（如 NS.bridge 由 boot 提供）不受顺序影响。
 import { domClient } from './dom';
 import { iconsClient } from './icons';
+import { mermaidClient } from './mermaid';
 import { scrollClient } from './scroll';
 import { linksClient } from './links';
 import { permissionViewClient } from './permissionView';
@@ -51,6 +52,8 @@ const MODULES: ReadonlyArray<string> = [
   // Record-type icons are used by both transcriptView and toolCallView, so they
   // are registered before either of them.
   iconsClient,
+  // Lazy Mermaid renderer; transcriptView/link handlers call it at runtime.
+  mermaidClient,
   scrollClient,
   linksClient,
   // Must precede transcriptView: build() dispatches on entry kind at runtime,

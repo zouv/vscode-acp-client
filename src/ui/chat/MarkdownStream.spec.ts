@@ -7,6 +7,7 @@ const corpus = [
   'Title\n=====\n\n- one\n\n- two\n  continued\n\nAfter list.\n',
   '> quote\n> continued\n\n> another\n\nAfter.\n',
   '~~~ts\nconst x = 1;\n\nconst y = 2;\n~~~\n\nDone.\n',
+  '```mermaid\ngraph TD\n  A[Start] --> B[End]\n```\n\nAfter.\n',
   '| A | B |\n| - | - |\n| a | b |\n\nEnd.\n',
   'A [reference][id].\n\nAnother paragraph.\n\n[id]: https://example.com\n',
   'A &amp; B\n\n<div>unsafe</div>\n\nAfter.\n',

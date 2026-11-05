@@ -4,6 +4,8 @@
 // 'unsafe-inline'（webview 需要内联样式表），但 `script-src` **只有 nonce**——没有 'unsafe-inline'，
 // 因此内联事件处理器（onerror=）与 javascript: URL 都无法执行。`cspSource` 只进 img/style，
 // 绝不进 script-src。
+// Mermaid 通过 `client/mermaid.ts` 动态插入的**带 nonce 的外部脚本**加载；外部脚本同样满足
+// `script-src 'nonce-…'`，不需要放宽 cspSource。
 import type * as vscode from 'vscode';
 
 export function shell(webview: vscode.Webview, nonce: string): string {

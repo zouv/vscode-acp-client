@@ -323,11 +323,22 @@ export const toolCallViewClient = `
     });
   }
 
+  function streamingAncestor(node) {
+    var current = node;
+    while (current && current.getAttribute) {
+      if (current.getAttribute('data-streaming') === 'true') { return true; }
+      current = current.parentNode;
+    }
+    return false;
+  }
+
   function applyRendered(host, html) {
     NS.dom.setSanitizedHtml(host, html);
     // Code blocks need their Copy button and tables their scroll wrapper - the same
     // decoration assistant bubbles get.
     NS.links.decorateScrollables(host);
+    // Tool output can contain Mermaid too; a running tool defers until updateTool.
+    if (NS.mermaid && NS.mermaid.decorate) { NS.mermaid.decorate(host, streamingAncestor(host)); }
   }
 
   /** Items to ask the host for (merged with the assistant bubbles' own batch). */

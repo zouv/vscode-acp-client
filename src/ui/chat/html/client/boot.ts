@@ -743,6 +743,7 @@ export const bootClient = `
           NS.transcriptView.updateTool(message.entryId, message.tool);
           // [CUSTOM- A tool's status is what colours its rail dot.
           NS.rail.invalidate();
+          if (NS.outline && NS.outline.noteToolUpdate) { NS.outline.noteToolUpdate(); }
           // [CUSTOM- 工具卡的收展会改变它下面那些用户消息的自然位置。
           NS.stickyUser.schedule();
         }

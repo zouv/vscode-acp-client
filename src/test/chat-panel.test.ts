@@ -3708,6 +3708,36 @@ suite('chat panel: ui prefs merge ()', () => {
     assert.deepStrictEqual(prefsOf(harness).tailBySession, { s1: false });
   });
 
+  test('outlineTab is persisted and survives unrelated writes', async () => {
+    const harness = makeHarness('s-1');
+    harness.surface.sent.length = 0;
+
+    harness.host.onMessage({ type: 'setUiPref', outlineTab: 'cards' });
+    await waitForPrefs(harness);
+    assert.strictEqual(prefsOf(harness).outlineTab, 'cards');
+
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'setUiPref', outlineTab: 'bogus' });
+    harness.host.onMessage({ type: 'setUiPref', tailDefault: false });
+    await waitForPrefs(harness);
+    assert.strictEqual(prefsOf(harness).outlineTab, 'messages', 'an unknown value falls back to messages');
+    assert.strictEqual(prefsOf(harness).tailDefault, false, 'the other writer still lands');
+  });
+
+  test('the webview HTML carries the lazy mermaid URI without widening script-src', () => {
+    const harness = makeHarness('s-1');
+    const surface = new RecordingSurface();
+    (surface.webview as unknown as { asWebviewUri: (uri: vscode.Uri) => string }).asWebviewUri =
+      (uri: vscode.Uri) => 'vscode-webview://test' + uri.path;
+    harness.host.attachSurface(surface, { agentName: harness.agentName, sessionId: 's-1' });
+
+    assert.ok(surface.html.includes('data-mermaid-src="vscode-webview://test'),
+      'the lazy asset URI reaches the document');
+    assert.ok(surface.html.includes("script-src 'nonce-"), 'still nonce-only');
+    assert.ok(!/script-src[^;]*vscode-webview/.test(surface.html),
+      'the extension resource host is NOT added to script-src');
+  });
+
   test('stored ui prefs arrive before boot restores the scroll position', async () => {
     const globalState = new FakeMemento();
     await globalState.update('vac.outlinePrefs.v1', {
@@ -6051,7 +6081,7 @@ suite('chat panel: Side Chat surface isolation', () => {
       outlineMode: 'popup', outlineWidth: 240, tabOrder: [],
       timesBySession: {}, timesDefault: false,
       tailBySession: {}, tailDefault: true,
-      outlineOpenBySession: {}, outlineOpenDefault: false,
+      outlineOpenBySession: {}, outlineOpenDefault: false, outlineTab: 'messages',
       autoExpandBySession: {}, autoExpandDefault: false,
       autoExpandKinds: ['thought', 'tool'], autoExpandToolHeight: 360, autoExpandThoughtHeight: 240,
       flatTools: false, composerMaxWidth: 720, inputMaxHeight: 320, sendKey: 'enter',

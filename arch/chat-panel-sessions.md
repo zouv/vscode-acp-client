@@ -198,6 +198,9 @@ key 由宿主算好。
 | Esc | **分层**：菜单开着时只收菜单，再按一次才收抽屉。否则一次 Esc 会把整份列表连同浏览位置一起丢掉 |
 | 宿主回复 | `handleListHistory` 的三条路径（agent / 本地缓存 / 出错回退）合并成一个 `postHistory`——三处各自拼装正是"其中一处漏了 `dirKey`"的写法，而漏掉的表现是**那些行在过滤后凭空消失**。协议只做追加（请求侧 `cwd?`（[155] 地址栏目录）、回复侧 `dirKey?` / `directories?`），`directories` 里 `current: true` 的那条即默认目录，不需要另开字段 |
 
+| **文本搜索（2026-11-05）** | `#historySearch` 放在 `.outline-head` 与 `.outline-list` 之间（静态行，`render()` 只清 `.outline-head-info`，不会清它）。`visibleRows` 先目录过滤，再用 `NS.dom.textMatches(query,[title,sessionId,cwd,folderName(cwd)])` 做多词 AND；计数 `N of M`；空结果给 `Clear search`（`data-clear-search`）；Esc 分层：菜单 → 搜索词 → 抽屉；query 每次打开重置、不持久化。`#cwdMenu` 同形（`#cwdSearch` 过滤 workspace/recent 两组，`Browse…` 始终可达，搜索不触发 `refresh()`） |
+| **下拉高度上限（2026-11-05）** | `#history` / `#cwdMenu` 不再固定在 `50vh`：`NS.dom.fitDrawer(drawer)` 在 `show()` 时按 `viewport - drawer.top - 8px` 写 inline `max-height`，即“下拉顶部到 Chat 面板底部的剩余高度”；窗口 resize 时对打开中的抽屉重算。列表仍只滚动 `.outline-list`。 |
+
 **已知边界（本轮不做）**：
 
 - **本地缓存那条路只有本工作区的会话**（`workspaceState` 按工作区分桶，`list(agent, workspaceCwd())`），

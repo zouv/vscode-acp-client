@@ -15,11 +15,16 @@ import { clientScript } from './client';
  * stylesheet can give the editor-area panel the editor's background instead of
  * the sidebar's. Defaults to 'view' so the sidebar path reads unchanged.
  */
-export function renderChatHtml(webview: vscode.Webview, nonce: string, surface: SurfaceKey = 'view'): string {
+export function renderChatHtml(
+  webview: vscode.Webview,
+  nonce: string,
+  surface: SurfaceKey = 'view',
+  mermaidSrc = '',
+): string {
   return [
     shell(webview, nonce),
     styles(),
-    body(surface),
+    body(surface, mermaidSrc),
     clientScript(nonce),
   ].join('\n');
 }

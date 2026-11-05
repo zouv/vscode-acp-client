@@ -636,3 +636,29 @@ applyAction 摘行换标签且不重置过滤）；真 Chromium 的 `#historyrow
 | 时序坑 | `replayCompactions` 在 `openExistingSession` 之前预读，**`session-load-start` 不能清它**；只清 `compactionSummaries` / `compactReplayIds` / `compactReplayOpen` |
 | 文本坑 | `summary: null` / `[]` 是显式清空，不能被累计分片复活；分片追加或 `text` 变化必须清 `html`；终态 text 没变时不要把 `text` 放进 revise（否则客户端会作废已渲染 html） |
 | 兜底边界 | 预读标记是可靠信号；前缀只认第一片；没有 messageId 时用 `compactReplayOpen` 续接，收到真实用户消息 / `session-load-end` 立即清除 |
+
+### 5.56 代码块高亮与 Mermaid 图（2026-11-05）
+
+**代码高亮是宿主侧的事**：`markdown.ts` 的 `renderer.code()` 用 `highlight.js/lib/common` 同步高亮，
+只输出 `hljs-*` class（客户端白名单保留 `SPAN`/`class`，不需要放开 `style`）；未知语言、超长代码
+（>100KB）回退为转义原文。流式 token 渲染与完整渲染共用同一 renderer，`MarkdownStream.spec.ts`
+的逐字符一致性测试继续兜住两条路径。
+
+**Mermaid 是客户端的事**：宿主只把 fence 渲染成 `<pre data-lang="mermaid" data-mermaid="1">`；
+`client/mermaid.ts` 在记录定稿后把它包成 `.mermaid-block`（toolbar + chart + source + error）。
+库是 `@mermaid-js/tiny`，构建时复制到 `dist/media/mermaid.tiny.js`，通过 `body[data-mermaid-src]`
+**首次出现 Mermaid 块时**才插入带 nonce 的外部 `<script>`；CSP 仍是 `script-src 'nonce-…'`。
+
+| 关注点 | 规则 |
+|---|---|
+| 触发时机 | `transcriptView` 的 `hydrate` / `append` / `patch` 末尾调用 `decorateMermaid`；tool 条目按 `toolView.status` 判定 running。`applyStreamBody` 的稳定块/tail **不触发**（`MarkdownStream` 含 `[` 时整篇 tail 每 120ms 重建，渲染会抖动） |
+| 定稿兜底 | `patch()` 在写 `data-streaming` **之后**再调一次，覆盖 `preserveCompletedStream()` 保留 DOM、没有重新 sanitize 的路径 |
+| 工具输出 | `toolCallView.applyRendered` 在 `decorateScrollables` 后调用；running 中跳过，`updateTool` 结束时补触发 |
+| 安全 | 只有 `mermaid.render()` 的 SVG 直接写 `.mermaid-chart`（唯一绕过 `NS.dom.sanitize` 的位置）；源码取 `code.textContent`，`securityLevel:'strict'`、`flowchart.htmlLabels:false`、不调 `bindFunctions`；错误信息只用 `textContent` |
+| 切换 | 每个块两个真按钮（Diagram / Source），只切 `hidden` + `aria-pressed`；用户手动选的视图在主题重渲染后保持 |
+| 尺寸 | `.mermaid-chart` 设 `max-height: min(60vh, 560px)` + `overflow:auto`，长图在图表内滚动而不是撑高消息列；SVG 用 `width: calc(100% * var(--vac-mermaid-zoom, 1))`、`height:auto`、`max-width:none !important` 覆盖 mermaid 的内联 `max-width:Npx`，默认按 1:1 宽高比贴合面板宽度 |
+| 缩放 | 每个块独立 `mermaidZoom`（50–200，步进 10）；toolbar 左组 `− / N% / +`，百分比按钮 Reset 100%；缩放只改 `.mermaid-chart` 的 CSS 变量，主题重渲染后 `renderOne` 重新应用；`data-mermaid-zoom` 记录块状态，`data-mermaid-zoom-action` 只挂在按钮上（避免与 `data-mermaid-view` 的 aria 循环冲突） |
+| 内层滚动 | `.mermaid-chart` 加入 `scroll.ts` 的 `INNER_SCROLL_SELECTOR` 与 overscroll/thin-scrollbar 列表：点击图表后滚图不滚面板，未聚焦时仍滚面板 |
+| 主题 | `MutationObserver(body.class)` 变化后重新 `initialize` 并重渲染 `state=ready` 的块；颜色从 `--vscode-*` 读取 |
+| 失败 | 脚本加载失败 / 语法错误 → `data-mermaid-state="error"`，自动切 Source、显示固定错误文案、禁用 Diagram；失败不逐块重试 |
+| 安全边界 | 带 nonce 的外部脚本仍是 nonce-only CSP；**不要**为了 Mermaid 把 `cspSource` 加进 `script-src` |

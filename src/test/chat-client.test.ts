@@ -17,6 +17,7 @@ import * as assert from 'assert';
 
 import { domClient } from '../ui/chat/html/client/dom';
 import { iconsClient } from '../ui/chat/html/client/icons';
+import { mermaidClient } from '../ui/chat/html/client/mermaid';
 import { linksClient } from '../ui/chat/html/client/links';
 import { sessionMenuClient } from '../ui/chat/html/client/sessionMenu';
 // [CUSTOM- 权限卡（记录行）+ 权限抽屉（悬浮浮层）。
@@ -398,7 +399,7 @@ function loadClient(
   // [CUSTOM- `sessionMenu` joined the list for its own suite: unlike
   // boot, its IIFE runs nothing at load time (init() is called by boot, and here by
   // the test), so loading it costs the record-layer tests nothing.
-  for (const source of [domClient, iconsClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient]) {
+  for (const source of [domClient, iconsClient, mermaidClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient]) {
     new Function('window', 'document', source)(win, doc);
   }
   return { NS, metrics, doc, docListeners, jumps, timers, win };
@@ -959,8 +960,11 @@ suite('chat client logic: conversation outline (stub DOM)', () => {
     const head = new StubNode('div'); head.className = 'outline-head';
     const headInfo = new StubNode('span'); headInfo.className = 'outline-head-info';
     head.appendChild(headInfo);
+    const tabs = new StubNode('div');
+    tabs.className = 'outline-tabs';
+    tabs.setAttribute('data-outline-tabs', '');
     const list = new StubNode('div'); list.className = 'outline-list';
-    drawer.appendChild(head); drawer.appendChild(list);
+    drawer.appendChild(head); drawer.appendChild(tabs); drawer.appendChild(list);
     NS.outline.init(new StubNode('div'), drawer, new StubNode('button'));
     NS.outline.open();
     return drawer;
@@ -1041,6 +1045,73 @@ suite('chat client logic: conversation outline (stub DOM)', () => {
     const label = row.querySelector('.outline-text')!.textContent;
     assert.ok(label.length <= 81, `truncated label (got ${label.length} chars)`);
     assert.ok(label.endsWith('…'), 'ends with an ellipsis');
+  });
+
+  test('Cards tab lists every record with its type and tool name', () => {
+    const { NS } = loadClient();
+    const drawer = renderOutline(NS, [
+      { id: 'u1', kind: 'user', at: 1000, text: '用户消息' },
+      { id: 'a1', kind: 'assistant', at: 2000, text: '助手回复', streaming: false },
+      {
+        id: 't1', kind: 'tool', at: 3000, toolCallId: 'tc1',
+        toolView: { toolCallId: 'tc1', title: 'npm test', kind: 'execute', status: 'completed', toolName: 'Bash' },
+      },
+    ]);
+    const tabs = drawer.querySelectorAll('[data-outline-tab]');
+    assert.strictEqual(tabs.length, 2, 'both tabs are rendered');
+    const cardsTab = tabs.find(t => t.getAttribute('data-outline-tab') === 'cards')!;
+    cardsTab.dispatch('click', { preventDefault: () => {}, stopPropagation: () => {} });
+
+    const rows = drawer.querySelectorAll('.outline-item');
+    assert.strictEqual(rows.length, 3, 'Cards shows every record, messages included');
+    const tool = rows.find(r => r.getAttribute('data-card-kind') === 'tool')!;
+    assert.ok(tool, 'the tool record has a card row');
+    assert.strictEqual(tool.querySelector('.outline-type')!.textContent, 'Bash');
+    assert.strictEqual(tool.querySelector('.outline-text')!.textContent, 'npm test');
+    assert.ok(drawer.querySelector('.outline-head-info')!.textContent.includes('3 cards'));
+  });
+
+  test('a tool-only transcript still exposes the outline', () => {
+    const { NS } = loadClient({
+      outlinePin: new StubNode('button'),
+      outlineUnpin: new StubNode('button'),
+      outlineResize: new StubNode('div'),
+    });
+    const messages = new StubNode('div');
+    const drawer = new StubNode('div');
+    const head = new StubNode('div'); head.className = 'outline-head';
+    const info = new StubNode('span'); info.className = 'outline-head-info';
+    head.appendChild(info);
+    const list = new StubNode('div'); list.className = 'outline-list';
+    drawer.appendChild(head); drawer.appendChild(list);
+    const button = new StubNode('button');
+    NS.transcriptView.init(messages);
+    NS.outline.init(messages, drawer, button);
+    NS.transcriptView.append({
+      id: 't1', kind: 'tool', at: 1, toolCallId: 'tc1',
+      toolView: { toolCallId: 'tc1', title: 'Bash', kind: 'execute', status: 'completed', toolName: 'Bash' },
+    }, undefined);
+    NS.outline.invalidate();
+    assert.strictEqual(button.hidden, false, 'cards are navigable without any message');
+
+    NS.outline.open();
+    NS.outline.setTab('cards', false);
+    assert.strictEqual(drawer.querySelectorAll('.outline-item').length, 1);
+  });
+
+  test('switching the tab persists outlineTab and applyPrefs restores it', () => {
+    const { NS } = loadClient();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    const drawer = renderOutline(NS, [{ id: 'u1', kind: 'user', at: 1000, text: 'hi' }]);
+    NS.outline.setTab('cards', true);
+    assert.strictEqual(posted[posted.length - 1].outlineTab, 'cards');
+
+    NS.outline.setTab('messages', false);
+    NS.outline.applyPrefs({ outlineTab: 'cards' });
+    const active = drawer.querySelectorAll('.outline-tab')
+      .find(t => t.classList.contains('active'))!;
+    assert.strictEqual(active.getAttribute('data-outline-tab'), 'cards');
   });
 });
 
@@ -1739,30 +1810,39 @@ suite('chat client logic: Times 开关按会话记忆 (stub DOM, )', () => {
 // 都由 scroll.ts 喊（cancelFromScroll / cancelFromRestore），且**都不改默认值**。
 suite('chat client logic: Tail 开关（按会话记忆 + 滚动即取消）', () => {
   function tailWith(): {
-    NS: Record<string, any>; els: Record<string, StubNode>;
+    NS: Record<string, any>; els: Record<string, StubNode>; doc: Record<string, any>;
     posted: Array<Record<string, unknown>>;
     calls: Array<{ on: boolean; immediate: boolean }>;
   } {
     const els: Record<string, StubNode> = { tailBtn: new StubNode('button') };
-    const { NS } = loadClient(els);
+    const { NS, doc } = loadClient(els);
     const posted: Array<Record<string, unknown>> = [];
     const calls: Array<{ on: boolean; immediate: boolean }> = [];
     NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
     // scroller 的真实行为在 scroll.ts（另有专门用例）；这里只记录它被喂了什么。
     NS.scroll.setTail = (on: boolean, immediate: boolean) => { calls.push({ on, immediate }); };
-    return { NS, els, posted, calls };
+    return { NS, els, doc, posted, calls };
   }
 
   const posts = (posted: Array<Record<string, unknown>>) => posted.filter(m => m.type === 'setUiPref');
   const lastCall = (calls: Array<{ on: boolean; immediate: boolean }>) => calls[calls.length - 1];
 
   test('默认开着：按钮 on，并让 scroll 进入追尾（换会话时不立刻跳）', () => {
-    const { NS, els, calls } = tailWith();
+    const { NS, els, calls, doc } = tailWith();
     NS.tail.init();
     assert.strictEqual(els.tailBtn.className, 'nest-toggle on');
     assert.deepStrictEqual(lastCall(calls), { on: true, immediate: false },
       '换会话由 restore 决定落点，这里只切旗标');
     assert.ok(els.tailBtn.querySelector('.tail-icon'), '图标在 init 时挂上（地址栏不留空按钮）');
+    assert.strictEqual((doc.body as StubNode).getAttribute('data-tail'), 'on',
+      'the message column reads the Tail state from the body attribute');
+  });
+
+  test('关闭 Tail 会把 body 属性同步为 off', () => {
+    const { NS, els, doc } = tailWith();
+    NS.tail.init();
+    els.tailBtn.dispatch('click', {});
+    assert.strictEqual((doc.body as StubNode).getAttribute('data-tail'), 'off');
   });
 
   test('点一下：关掉并落盘（记到当前会话 + 成为默认值），且立刻生效', () => {
@@ -2528,13 +2608,16 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
   // them in order and it is obvious. pitfalls #25.)
 
   /** Mirrors the #history drawer in body.ts — if that markup changes, follow it here. */
-  function historyDrawer(): { elements: Record<string, StubNode>; drawer: StubNode; chip: StubNode; menu: StubNode; list: StubNode } {
+  function historyDrawer(): { elements: Record<string, StubNode>; drawer: StubNode; chip: StubNode; menu: StubNode; list: StubNode; search: StubNode; clear: StubNode } {
     const button = new StubNode('button');
     const drawer = new StubNode('div');
     const head = new StubNode('div');
     const info = new StubNode('span');
     const chip = new StubNode('button');
     const menu = new StubNode('div');
+    const searchRow = new StubNode('div');
+    const search = new StubNode('input');
+    const clear = new StubNode('button');
     const list = new StubNode('div');
     // The classes are the contract sessionMenu looks up, so they are copied verbatim
     // from the markup ('.outline-head-info' is the count container the chip sits next
@@ -2546,15 +2629,25 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     chip.className = 'picker-btn filter-chip';
     chip.hidden = true;
     menu.className = 'picker-menu down';
+    searchRow.className = 'outline-search-row';
+    search.className = 'outline-search';
+    clear.className = 'outline-search-clear';
+    clear.hidden = true;
     list.className = 'outline-list';
     head.appendChild(info);
     head.appendChild(chip);
     head.appendChild(menu);
+    searchRow.appendChild(search);
+    searchRow.appendChild(clear);
     drawer.appendChild(head);
+    drawer.appendChild(searchRow);
     drawer.appendChild(list);
     return {
-      elements: { historyBtn: button, history: drawer, historyFilter: chip, historyFilterMenu: menu },
-      drawer, chip, menu, list,
+      elements: {
+        historyBtn: button, history: drawer, historyFilter: chip, historyFilterMenu: menu,
+        historySearch: search, historySearchClear: clear,
+      },
+      drawer, chip, menu, list, search, clear,
     };
   }
 
@@ -2802,6 +2895,65 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     assert.strictEqual(rows.length, 1, 'the beta session is now listed');
     assert.strictEqual(rows[0].getAttribute('data-open-session'), 'b1', 'it is the beta session');
     assert.deepStrictEqual(patches, [], 'temporary: the filter preference is NOT written');
+  });
+
+  test('free-text search filters titles/ids, stays combined with the folder filter, and clears', () => {
+    const { docListeners, tree } = openedPicker();
+    const { drawer, list, search } = tree;
+
+    search.value = 'beta';
+    search.dispatch('input', {});
+    assert.strictEqual(sessionRows(tree).length, 1);
+    assert.strictEqual(sessionRows(tree)[0].getAttribute('data-open-session'), 'b1');
+    assert.ok(list.parentNode!.querySelector('.outline-head-info')!.textContent.includes('1 of 3'),
+      'the count says the search narrowed the list');
+    assert.strictEqual(tree.clear.hidden, false, 'the clear affordance appears');
+
+    // Folder + search are AND, not "replace each other".
+    dispatchClick(tree.chip, docListeners);
+    const betaFolder = filterRows(tree.menu).find(r => r.getAttribute('data-filter-key') === '/git/beta');
+    dispatchClick(betaFolder!, docListeners);
+    search.value = 'alpha';
+    search.dispatch('input', {});
+    assert.strictEqual(sessionRows(tree).length, 0, 'beta folder + alpha query matches nothing');
+    const clearRow = list.querySelector('[data-clear-search]');
+    assert.ok(clearRow, 'the empty state offers a clear action');
+    dispatchClick(clearRow!, docListeners);
+    assert.strictEqual(sessionRows(tree).length, 1, 'clearing the query restores the beta folder row');
+    assert.strictEqual(sessionRows(tree)[0].getAttribute('data-open-session'), 'b1');
+    assert.strictEqual(drawer.hidden, false, 'the drawer stays open throughout');
+  });
+
+  test('Escape clears the query before it closes the drawer', () => {
+    const { docListeners, tree } = openedPicker();
+    tree.search.value = 'beta';
+    tree.search.dispatch('input', {});
+    const key = { key: 'Escape', preventDefault: () => {}, stopPropagation: () => {} };
+    for (const fn of docListeners.keydown ?? []) { fn(key); }
+    assert.strictEqual(tree.drawer.hidden, false, 'the drawer is still open');
+    assert.strictEqual(tree.search.value, '', 'the first Escape clears the search');
+    assert.strictEqual(sessionRows(tree).length, 3);
+    for (const fn of docListeners.keydown ?? []) { fn(key); }
+    assert.strictEqual(tree.drawer.hidden, true, 'the second Escape closes the drawer');
+  });
+
+  test('the search box is reset when the drawer is reopened', () => {
+    const { docListeners, tree } = openedPicker();
+    tree.search.value = 'beta';
+    tree.search.dispatch('input', {});
+    dispatchClick(tree.elements.historyBtn, docListeners);   // close
+    dispatchClick(tree.elements.historyBtn, docListeners);   // reopen
+    assert.strictEqual(tree.search.value, '');
+    assert.strictEqual(tree.clear.hidden, true);
+  });
+
+  test('the history dropdown is capped to the remaining Chat panel height', () => {
+    const { docListeners, tree } = openedPicker();
+    tree.drawer.rectTop = 100;
+    dispatchClick(tree.elements.historyBtn, docListeners);   // close
+    dispatchClick(tree.elements.historyBtn, docListeners);   // reopen
+    assert.strictEqual(tree.drawer.style.maxHeight, '692px',
+      'viewport 800 - top 100 - 8px gap');
   });
 
   // [CUSTOM- 行右端的悬停动作（Archive / Rename，仅悬停显示）。
@@ -5513,12 +5665,25 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
   function drawer() {
     const head = new StubNode('div');
     head.className = 'outline-head';
+    const searchRow = new StubNode('div');
+    searchRow.className = 'outline-search-row';
+    const search = new StubNode('input');
+    search.className = 'outline-search';
+    const clear = new StubNode('button');
+    clear.className = 'outline-search-clear';
+    clear.hidden = true;
+    searchRow.appendChild(search);
+    searchRow.appendChild(clear);
     const list = new StubNode('div');
     list.className = 'outline-list';
     const menu = new StubNode('div');
     menu.appendChild(head);
+    menu.appendChild(searchRow);
     menu.appendChild(list);
-    const els: Record<string, StubNode> = { cwdBtn: new StubNode('button'), cwdMenu: menu };
+    const els: Record<string, StubNode> = {
+      cwdBtn: new StubNode('button'), cwdMenu: menu,
+      cwdSearch: search, cwdSearchClear: clear,
+    };
     const harness = loadClient(els, { syncFrames: true });
     const NS = harness.NS;
     const posted: Array<Record<string, unknown>> = [];
@@ -5534,7 +5699,7 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
     NS.directoryMenu.init();
     NS.directoryMenu.refresh({ draftId: 'd1' });   // boot 在 focusDraft 时就是这么喂的
     return {
-      NS, els, list, posted,
+      NS, els, list, posted, search, clear, docListeners: harness.docListeners,
       // 打开抽屉走**真路径**（点标题栏那一格）—— show/toggle 都是私有的。
       open: () => dispatchClick(els.cwdBtn, harness.docListeners),
       choices: (recent: string[]) => NS.directoryMenu.setChoices({
@@ -5615,6 +5780,53 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
     d.NS.directoryMenu.refresh({ draftId: 'd1' });   // 抽屉关着
     assert.deepStrictEqual(d.posted.map(m => m.type), [],
       '已有数据 + 抽屉关着 ⇒ 只渲染手上那份（宿主的回复可能带一次 session/list，不该每次切会话都付）');
+  });
+
+  test('free-text search filters both groups, keeps Browse, and never asks the host', () => {
+    const d = drawer();
+    d.open();
+    d.choices(['/old/project']);
+    d.posted.length = 0;
+
+    d.search.value = 'project';
+    d.search.dispatch('input', {});
+    assert.deepStrictEqual(rows(d.list), ['/old/project', null],
+      'workspace group is hidden; the recent match and Browse remain');
+    assert.ok(d.list.textContent.includes('No directories match') === false);
+
+    d.search.value = 'zzz';
+    d.search.dispatch('input', {});
+    assert.ok(d.list.querySelector('[data-cwd-browse]'), 'no matches: Browse is still reachable');
+    assert.ok(d.list.textContent.includes('No directories match "zzz"'));
+    assert.ok(d.list.querySelector('[data-clear-cwd-search]'), 'empty state offers Clear search');
+    assert.deepStrictEqual(d.posted, [], 'search is local (no listDirectoryChoices)');
+  });
+
+  test('Escape clears the directory search before closing, and removal keeps the query', () => {
+    const d = drawer();
+    d.open();
+    d.choices(['/old/project', '/new/project']);    d.search.value = 'old';
+    d.search.dispatch('input', {});
+    assert.deepStrictEqual(rows(d.list), ['/old/project', null]);
+
+    const before = d.list.querySelectorAll('.outline-remove')[0];
+    before.dispatch('click', { preventDefault: () => {}, stopPropagation: () => {} });
+    assert.strictEqual(d.search.value, 'old', 'removing a recent row keeps the query');
+
+    const key = { key: 'Escape', preventDefault: () => {}, stopPropagation: () => {} };
+    for (const fn of d.docListeners.keydown ?? []) { fn(key); }
+    assert.strictEqual(d.search.value, '', 'the first Escape clears the query');
+    assert.strictEqual(d.els.cwdMenu.hidden, false, 'the first Escape keeps the drawer open');
+    for (const fn of d.docListeners.keydown ?? []) { fn(key); }
+    assert.strictEqual(d.els.cwdMenu.hidden, true, 'the second Escape closes it');
+  });
+
+  test('the directory dropdown is capped to the remaining Chat panel height', () => {
+    const d = drawer();
+    d.els.cwdMenu.rectTop = 120;
+    d.open();
+    assert.strictEqual(d.els.cwdMenu.style.maxHeight, '672px',
+      'viewport 800 - top 120 - 8px gap');
   });
 });
 
@@ -5992,6 +6204,30 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
     assert.strictEqual(m.el.scrollTop, 1000, 'old frame callbacks do not restore the outgoing session');
   });
 
+  test('message-area overflow state drives the Tail corner visibility', () => {
+    const { NS, el, doc } = mountScroll();
+    const vars: Record<string, string> = {};
+    doc.body = {
+      attrs: {} as Record<string, string>,
+      setAttribute(name: string, value: string) { this.attrs[name] = value; },
+      getAttribute(name: string) { return this.attrs[name] ?? null; },
+      style: {
+        setProperty(name: string, value: string) { vars[name] = value; },
+        getPropertyValue(name: string) { return vars[name] ?? ''; },
+      },
+    };
+    el.offsetWidth = 400;
+    el.clientWidth = 388;
+    el.scrollHeight = 1000;
+    el.fire('scroll');
+    assert.strictEqual(doc.body.getAttribute('data-messages-scroll'), 'on');
+    assert.strictEqual(vars['--vac-scrollbar-w'], '12px', 'right corner clears the scrollbar');
+    el.scrollHeight = 400;                   // fits the viewport: no scrollbar
+    el.fire('scroll');
+    assert.strictEqual(doc.body.getAttribute('data-messages-scroll'), 'off');
+    assert.strictEqual(NS.scroll.isPinned(), true);
+  });
+
   test('padding 算进"内容末尾"：贴着留白区仍然算贴底，但翻出去就不算', () => {
     const { NS, el, jump } = mountScroll('300px');
     el.scrollTop = 600;                       // max = 1000 - 400
@@ -6190,6 +6426,68 @@ suite('scroll: 几何（内容 / 留白）变化后视口判定要重算 ()', ()
     el.scrollTop = 300;
     el.fire('scroll');
     assert.strictEqual(NS.scroll.isTail(), false, '中键滚动是用户滚动');
+  });
+
+  test('滚动条拖拽期间 follow 不抢视口；慢速拖动也按真实位移取消 Tail', () => {
+    const { NS, el, docListeners } = mountScroll();
+    NS.dom = { schedule: (fn: () => void) => { fn(); } };
+    el.clientWidth = 380;
+    el.scrollTop = 600;                       // max = 1000 - 400
+    el.fire('scroll');
+    NS.scroll.setTail(true, false);
+
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: el, offsetX: 390 });
+    el.scrollTop = 598;                       // 慢速拖动：2px
+    NS.scroll.follow();
+    assert.strictEqual(el.scrollTop, 598, '手势期间 follow 不得写回底部');
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isTail(), false, '有实际位移即取消 Tail');
+    fireDoc(docListeners, 'pointerup', { button: 0, target: el });
+  });
+
+  test('仅按下滚动条、没有滚动不取消 Tail', () => {
+    const { NS, el, docListeners } = mountScroll();
+    el.clientWidth = 380;
+    NS.scroll.setTail(true, false);
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: el, offsetX: 390 });
+    fireDoc(docListeners, 'pointerup', { button: 0, target: el });
+    assert.strictEqual(NS.scroll.isTail(), true);
+  });
+
+  test('中键 / 滚轮在底部没有实际位移时不取消 Tail', () => {
+    const { NS, el, docListeners } = mountScroll();
+    NS.dom = { schedule: (fn: () => void) => { fn(); } };
+    el.scrollTop = 600;
+    el.fire('scroll');
+    NS.scroll.setTail(true, false);
+
+    fireDoc(docListeners, 'pointerdown', { button: 1, target: el });
+    el.fire('scroll');                        // 底部被夹紧：scrollTop 没变
+    assert.strictEqual(NS.scroll.isTail(), true, '中键无位移不关 Tail');
+    fireDoc(docListeners, 'pointerup', { button: 1, target: el });
+    assert.strictEqual(NS.scroll.isTail(), true);
+
+    fireDoc(docListeners, 'wheel', {
+      target: el, deltaY: 100, deltaX: 0, deltaMode: 0, cancelable: true,
+      ctrlKey: false, metaKey: false, preventDefault: () => {},
+    });
+    assert.strictEqual(NS.scroll.isTail(), true, '底部向下滚轮被夹紧也不关 Tail');
+  });
+
+  test('手势结束后旧起点不污染后续程序写入', () => {
+    const { NS, el, docListeners } = mountScroll();
+    NS.dom = { schedule: (fn: () => void) => { fn(); } };
+    el.clientWidth = 380;
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: el, offsetX: 390 });
+    el.scrollTop = 300;
+    el.fire('scroll');
+    fireDoc(docListeners, 'pointerup', { button: 0, target: el });
+
+    NS.scroll.setTail(true, false);
+    el.scrollTop = 600;
+    NS.scroll.follow();
+    el.fire('scroll');
+    assert.strictEqual(NS.scroll.isTail(), true, '程序写入仍被识别为 fromProgram');
   });
 
   test('Tail 关闭 + 内容长高 ⇒ Jump 自动出现（不必等用户滚一下）', () => {
@@ -8417,5 +8715,157 @@ suite('chat client logic: compacted chat row (stub DOM)', () => {
     const before = NS.transcriptView.messageAnchorCount();
     NS.transcriptView.append({ id: 'c4', kind: 'compact', at: 1, compactionId: 'c4', text: 'summary' });
     assert.strictEqual(NS.transcriptView.messageAnchorCount(), before);
+  });
+});
+
+suite('chat client logic: mermaid blocks (stub DOM)', () => {
+  function blockHost(): { host: StubNode; pre: StubNode } {
+    const host = new StubNode('div');
+    const pre = new StubNode('pre');
+    pre.setAttribute('data-mermaid', '1');
+    pre.setAttribute('data-lang', 'mermaid');
+    const code = new StubNode('code');
+    code.textContent = 'graph TD; A-->B';
+    pre.appendChild(code);
+    host.appendChild(pre);
+    return { host, pre };
+  }
+
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 12; i++) { await Promise.resolve(); }
+  }
+
+  test('wraps a settled block and switches diagram/source', async () => {
+    const { NS, win } = loadClient();
+    win.mermaid = {
+      initialize: () => {},
+      render: (id: string) => Promise.resolve({ svg: '<svg data-id="' + id + '"></svg>' }),
+    };
+    const { host } = blockHost();
+    NS.mermaid.decorate(host, false);
+    await settle();
+
+    const block = host.querySelector('.mermaid-block') as StubNode;
+    assert.ok(block, 'the fence is wrapped');
+    assert.strictEqual(block.getAttribute('data-mermaid-state'), 'ready');
+    assert.strictEqual((block.querySelector('.mermaid-chart') as unknown as { innerHTML: string }).innerHTML,
+      '<svg data-id="vac-mermaid-1"></svg>');
+    assert.strictEqual((block.querySelector('.mermaid-source') as StubNode).hidden, true);
+
+    const sourceBtn = (block.querySelectorAll('[data-mermaid-view]') as StubNode[])
+      .find(b => b.getAttribute('data-mermaid-view') === 'source') as StubNode;
+    NS.mermaid.showView(sourceBtn);
+    assert.strictEqual((block.querySelector('.mermaid-source') as StubNode).hidden, false);
+    assert.strictEqual((block.querySelector('.mermaid-chart') as StubNode).hidden, true);
+    assert.strictEqual(block.getAttribute('data-view'), 'source');
+  });
+
+  test('does not touch a streaming block', () => {
+    const { NS } = loadClient();
+    const { host } = blockHost();
+    NS.mermaid.decorate(host, true);
+    assert.strictEqual(host.querySelector('.mermaid-block'), null);
+  });
+
+  test('falls back to source when rendering fails', async () => {
+    const { NS, win } = loadClient();
+    win.mermaid = {
+      initialize: () => {},
+      render: () => Promise.reject(new Error('bad syntax')),
+    };
+    const { host } = blockHost();
+    NS.mermaid.decorate(host, false);
+    await settle();
+
+    const block = host.querySelector('.mermaid-block') as StubNode;
+    assert.strictEqual(block.getAttribute('data-mermaid-state'), 'error');
+    assert.strictEqual((block.querySelector('.mermaid-source') as StubNode).hidden, false);
+    assert.strictEqual((block.querySelector('.mermaid-error') as StubNode).hidden, false);
+    const chartBtn = (block.querySelectorAll('[data-mermaid-view]') as StubNode[])
+      .find(b => b.getAttribute('data-mermaid-view') === 'chart') as StubNode;
+    assert.strictEqual(chartBtn.disabled, true);
+  });
+
+  test('decorating twice leaves one wrapper', async () => {
+    const { NS, win } = loadClient();
+    win.mermaid = {
+      initialize: () => {},
+      render: () => Promise.resolve({ svg: '<svg></svg>' }),
+    };
+    const { host } = blockHost();
+    NS.mermaid.decorate(host, false);
+    NS.mermaid.decorate(host, false);
+    await settle();
+    assert.strictEqual(host.querySelectorAll('.mermaid-block').length, 1);
+  });
+
+  test('transcript records defer Mermaid until they settle', () => {
+    const { NS } = loadClient();
+    const calls: boolean[] = [];
+    NS.mermaid.decorate = (_node: StubNode, streaming: boolean) => { calls.push(streaming); };
+    NS.dom.setSanitizedHtml = (node: StubNode, html: string) => { node.textContent = html; };
+    NS.transcriptView.init(new StubNode('div'));
+
+    NS.transcriptView.append({
+      id: 'a1', kind: 'assistant', at: 1, text: 'graph TD; A-->B', streaming: true,
+    }, undefined);
+    assert.deepStrictEqual(calls, [true], 'a streaming reply is not rendered');
+
+    NS.transcriptView.patch('a1', {
+      streaming: false,
+      html: '<pre data-mermaid="1"><code>graph TD; A--&gt;B</code></pre>',
+    });
+    assert.strictEqual(calls[calls.length - 1], false, 'settling triggers the render');
+
+    const tool = {
+      toolCallId: 'tc1', title: 'Run', kind: 'execute', status: 'in_progress',
+      command: 'ls', locations: [], items: [],
+    };
+    NS.transcriptView.append({
+      id: 't1', kind: 'tool', at: 2, toolCallId: 'tc1', toolView: tool,
+    }, tool);
+    assert.strictEqual(calls[calls.length - 1], true, 'a running tool still defers');
+    NS.transcriptView.updateTool('t1', { ...tool, status: 'completed' });
+    assert.strictEqual(calls[calls.length - 1], false, 'tool completion triggers the render');
+  });
+
+  test('zoom controls are per block, clamp to 50-200 and reset to 100', async () => {
+    const { NS, win } = loadClient();
+    win.mermaid = {
+      initialize: () => {},
+      render: () => Promise.resolve({ svg: '<svg></svg>' }),
+    };
+    const { host } = blockHost();
+    NS.mermaid.decorate(host, false);
+    await settle();
+    const block = host.querySelector('.mermaid-block') as StubNode;
+    const zoomButton = (action: string) => block.querySelectorAll('[data-mermaid-zoom-action]')
+      .find(button => button.getAttribute('data-mermaid-zoom-action') === action) as StubNode;
+
+    NS.mermaid.zoom(zoomButton('in'));
+    assert.strictEqual(block.getAttribute('data-mermaid-zoom'), '110');
+    assert.strictEqual(block.querySelector('[data-mermaid-zoom-label]')!.textContent, '110%');
+
+    (block as unknown as { mermaidZoom: number }).mermaidZoom = 200;
+    NS.mermaid.zoom(zoomButton('in'));
+    assert.strictEqual(block.getAttribute('data-mermaid-zoom'), '200', 'upper clamp');
+
+    (block as unknown as { mermaidZoom: number }).mermaidZoom = 50;
+    NS.mermaid.zoom(zoomButton('out'));
+    assert.strictEqual(block.getAttribute('data-mermaid-zoom'), '50', 'lower clamp');
+
+    NS.mermaid.zoom(zoomButton('reset'));
+    assert.strictEqual(block.getAttribute('data-mermaid-zoom'), '100');
+    assert.strictEqual(block.querySelector('[data-mermaid-zoom-label]')!.textContent, '100%');
+
+    const second = blockHost();
+    NS.mermaid.decorate(second.host, false);
+    await settle();
+    const other = second.host.querySelector('.mermaid-block') as StubNode;
+    assert.strictEqual(other.getAttribute('data-mermaid-zoom'), '100', 'each block owns its zoom');
+
+    const chart = block.querySelector('.mermaid-chart') as StubNode;
+    assert.ok(String(chart.getAttribute('style') || '').includes('--vac-mermaid-zoom'),
+      'the stub fallback still records the zoom variable');
   });
 });

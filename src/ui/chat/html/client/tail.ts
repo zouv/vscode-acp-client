@@ -42,6 +42,9 @@ export const tailClient = `
   function apply(immediate) {
     var on = enabledFor(currentSessionId);
     if (NS.scroll && NS.scroll.setTail) { NS.scroll.setTail(on, immediate === true); }
+    if (document.body && document.body.setAttribute) {
+      document.body.setAttribute('data-tail', on ? 'on' : 'off');
+    }
     if (toggleEl) {
       toggleEl.className = on ? 'nest-toggle on' : 'nest-toggle off';
       toggleEl.title = on

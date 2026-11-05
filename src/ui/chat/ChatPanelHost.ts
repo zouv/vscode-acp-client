@@ -142,6 +142,7 @@ const SCOPED_UI_PREF_KEYS = [
   'timesBySession', 'timesDefault',
   'tailBySession', 'tailDefault',
   'outlineOpenBySession', 'outlineOpenDefault',
+  'outlineTab',
   'autoExpandBySession', 'autoExpandDefault',
 ] as const;
 const MAIN_SCOPED_UI_PREF_KEYS = [...SCOPED_UI_PREF_KEYS, 'tabOrder'] as const;
@@ -186,6 +187,7 @@ function defaultPanelUiPrefs(): UiPrefs {
     tailDefault: true,
     outlineOpenBySession: {},
     outlineOpenDefault: false,
+    outlineTab: 'messages',
     autoExpandBySession: {},
     autoExpandDefault: false,
     autoExpandKinds: ['thought', 'tool'],
@@ -751,6 +753,18 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * per document — each webview needs its own CSP nonce and its own
    * `cspSource`, which is why the html string is never shared between surfaces.
    */
+  /** The webview loads Mermaid lazily; the test stub has no `asWebviewUri`. */
+  private mermaidAssetUri(webview: vscode.Webview): string {
+    if (typeof webview.asWebviewUri !== 'function') { return ''; }
+    try {
+      return String(webview.asWebviewUri(
+        vscode.Uri.joinPath(this.extensionUri, 'dist', 'media', 'mermaid.tiny.js'),
+      ));
+    } catch {
+      return '';
+    }
+  }
+
   attachSurface(surface: ChatSurface, ctx: PanelContext): void {
     this.surfaces.set(surface.key, surface);
     // [CUSTOM- 新面立刻拿到编辑器当前文件（签名是全局的，这里必须 force）。
@@ -764,7 +778,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     };
-    surface.setHtml(renderChatHtml(surface.webview, createNonce(), surface.key));
+    surface.setHtml(renderChatHtml(surface.webview, createNonce(), surface.key, this.mermaidAssetUri(surface.webview)));
     // Targeted: a broadcast boot would force the OTHER document to reset and
     // re-hydrate (losing its scroll position) every time a surface attaches.
     this.pushBoot(surface.key);
@@ -1176,6 +1190,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // [CUSTOM- 大纲侧栏的"按会话开/关"（第四个写者，同一形状）。
         const outlineOpenBySession = (msg as { outlineOpenBySession?: unknown }).outlineOpenBySession;
         const outlineOpenDefault = (msg as { outlineOpenDefault?: unknown }).outlineOpenDefault;
+        const outlineTab = (msg as { outlineTab?: unknown }).outlineTab;
         // [CUSTOM- 新输出自动展开（第五个写者，同一形状：按会话 + 默认值 + 全局卡片类型）。
         const autoExpandBySession = (msg as { autoExpandBySession?: unknown }).autoExpandBySession;
         const autoExpandDefault = (msg as { autoExpandDefault?: unknown }).autoExpandDefault;
@@ -1218,6 +1233,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         if (openMap !== undefined) { next.outlineOpenBySession = openMap; }
         const openDef = outlineOpenDefault === undefined ? previous.outlineOpenDefault : outlineOpenDefault === true;
         if (openDef !== undefined) { next.outlineOpenDefault = openDef; }
+        if (outlineTab !== undefined) { next.outlineTab = outlineTab === 'cards' ? 'cards' : 'messages'; }
         const expandMap = autoExpandBySession === undefined
           ? previous.autoExpandBySession
           : sanitizeSessionFlags(autoExpandBySession);

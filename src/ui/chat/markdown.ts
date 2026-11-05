@@ -13,6 +13,7 @@
 // 3. webview 侧还有一层 DOMParser 白名单兜底（见 html/client/dom.ts）——即便将来
 // marked 新增了没人覆盖的钩子也能兜住。
 import { Marked, type RendererObject, type Tokens, type TokensList, type Token } from 'marked';
+import hljs from 'highlight.js/lib/common';
 // [CUSTOM- The one place that decides "is this href a local file" (and which lines).
 import { fileLinkTarget } from './content/contentBlocks';
 // [CUSTOM- 也借用它的视图模型（mention 解析的产物与 ContentBlock 转出来的同形）。
@@ -112,6 +113,18 @@ function mentionName(label: string): string {
   return `${label.slice(0, range.index)}:${range[1]}${end && end !== range[1] ? `-${end}` : ''}`;
 }
 
+/** Highlight a fenced block when the language is registered; never guess. */
+function highlightCode(text: string, language: string): string {
+  if (!language || text.length > 100_000 || !hljs.getLanguage(language)) {
+    return escapeHtml(text);
+  }
+  try {
+    return hljs.highlight(text, { language, ignoreIllegals: true }).value;
+  } catch {
+    return escapeHtml(text);
+  }
+}
+
 const renderer: RendererObject = {
   // Raw HTML is rendered as literal text: lossless (the reader still sees what
   // the agent wrote) and, once escaped, inert.
@@ -120,10 +133,15 @@ const renderer: RendererObject = {
   },
 
   code({ text, lang }: Tokens.Code) {
-    const language = String(lang ?? '').replace(UNSAFE_LANG_CHARS, '').slice(0, 24);
+    // The info string can carry options after the language (```ts title=x).
+    const info = String(lang ?? '').trim().split(/\s+/)[0] ?? '';
+    const language = info.replace(UNSAFE_LANG_CHARS, '').toLowerCase().slice(0, 24);
+    if (language === 'mermaid' || language === 'mmd') {
+      return `<pre data-lang="mermaid" data-mermaid="1"><code class="language-mermaid">${escapeHtml(text)}</code></pre>\n`;
+    }
     const attr = language ? ` data-lang="${escapeHtml(language)}"` : '';
-    const cls = language ? ` class="language-${escapeHtml(language)}"` : '';
-    return `<pre${attr}><code${cls}>${escapeHtml(text)}</code></pre>\n`;
+    const cls = language ? `hljs language-${escapeHtml(language)}` : 'hljs';
+    return `<pre${attr}><code class="${cls}">${highlightCode(text, language)}</code></pre>\n`;
   },
 
   codespan({ text }: Tokens.Codespan) {

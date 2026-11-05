@@ -60,7 +60,7 @@
 | `html/index.ts` | `renderChatHtml(webview, nonce, surface = 'view')`：外壳 + 样式 + 标记 + 脚本。`surface` 变成 `<body class="surface-view\|surface-editor\|surface-side">`；Side 复用完整聊天骨架，来源横幅在 sessionHeader 与 messageArea 之间 | 装配顺序变更 |
 | `html/shell.ts` / `styles.ts` / `body.ts` | CSP 与文档外壳 / 全部 CSS / 静态标记 | UI 外观 |
 | `html/nonce.ts` | CSP nonce 生成 | — |
-| `html/client/*.ts` | webview 内联客户端 JS，**每个模块是一个字符串**，统一挂到 `window.__vac`。构件：`dom` / `icons` / `links`（链接与文件 chip）/ `boot`（装配入口）/ `tabs` / `transcriptView` / `toolCallView`（记录区，见 §5.16+）/ `rail`（左侧引导条，§5.11）/ `scroll` + `perf`（滚动记忆与长任务看门狗，§5.10/§5.46）；`scroll` 还负责**内层滚动卡片的焦点门控与自动追尾**（§5.53）/ `times`（记录时刻，§5.29）/ `stickyUser`（置顶最近的用户消息，§5.25）/ `outline` + `contextMenu` + `sessionMenu` + `directoryMenu`（大纲与三个右键菜单，§5.9/§5.50）/ `permissionView` + `permissionDrawer`（权限卡与抽屉，§5.8/§5.35）/ `elicitationView`（表单，§5.33）/ `lightbox`（图片放大）/ `stateCard`（**连接状态卡**，§5.28）/ `composer`（输入卡，§5.32）/ `autoExpand`（新输出自动展开，按会话 + 卡片类型，2026-10-21）/ `tail`（消息面板自动追尾，2026-10-28，§5.54）/ `settingsPanel`（设置面板，2026-10-21）/ `popover`（面板内非模态确认 / 输入浮层，2026-10-29；会话删除 / 关闭运行中 / 重命名 / 设置破坏性动作共用）。058 新增 `directoryMenu.ts`；097 新增 `lightbox.ts`；102 新增 `stickyUser.ts`；123 新增 `stateCard.ts`（它同时接管了原先散在 `sessionMenu.ts` 与 `boot.ts` 的空态文案和 Connect 按钮）；151 起 `composer.ts` 也接管**草稿页**的输入卡；152 起 `elicitationView.ts` 从"记录里的内联卡"改成**悬浮抽屉**（记录只留一行待答条） | 改前端交互 |
+| `html/client/*.ts` | webview 内联客户端 JS，**每个模块是一个字符串**，统一挂到 `window.__vac`。构件：`dom` / `icons` / `links`（链接与文件 chip）/ `boot`（装配入口）/ `tabs` / `transcriptView` / `toolCallView`（记录区，见 §5.16+）/ `rail`（左侧引导条，§5.11）/ `scroll` + `perf`（滚动记忆与长任务看门狗，§5.10/§5.46）；`scroll` 还负责**内层滚动卡片的焦点门控与自动追尾**（§5.53）/ `times`（记录时刻，§5.29）/ `stickyUser`（置顶最近的用户消息，§5.25）/ `outline` + `contextMenu` + `sessionMenu` + `directoryMenu`（大纲与三个右键菜单，§5.9/§5.50）/ `mermaid`（懒加载 tiny、图表/原文切换、主题重渲染，§5.56）/ `permissionView` + `permissionDrawer`（权限卡与抽屉，§5.8/§5.35）/ `elicitationView`（表单，§5.33）/ `lightbox`（图片放大）/ `stateCard`（**连接状态卡**，§5.28）/ `composer`（输入卡，§5.32）/ `autoExpand`（新输出自动展开，按会话 + 卡片类型，2026-10-21）/ `tail`（消息面板自动追尾，2026-10-28，§5.54）/ `settingsPanel`（设置面板，2026-10-21）/ `popover`（面板内非模态确认 / 输入浮层，2026-10-29；会话删除 / 关闭运行中 / 重命名 / 设置破坏性动作共用）。058 新增 `directoryMenu.ts`；097 新增 `lightbox.ts`；102 新增 `stickyUser.ts`；123 新增 `stateCard.ts`（它同时接管了原先散在 `sessionMenu.ts` 与 `boot.ts` 的空态文案和 Connect 按钮）；151 起 `composer.ts` 也接管**草稿页**的输入卡；152 起 `elicitationView.ts` 从"记录里的内联卡"改成**悬浮抽屉**（记录只留一行待答条） | 改前端交互 |
 
 **终端输出通路**（CUSTOM-20260923-012）：ACP 的 `Terminal` 工具内容只是引用（`{terminalId}`），终端归客户端所有。
 链路为：`ConnectionInfo.terminals`（`ConnectionManager` 暴露）→ `TerminalHandler.readOutput(terminalId)`
@@ -134,6 +134,7 @@
   框选行区间）。两者都不是 → `link-blocked` 静态 span。
   **`command:` 必须拒绝**——那等于把 IDE 变成远程命令执行。
 - markdown：扩展侧 `SafeMarkdown` 渲染 + 客户端 `DOMParser` 白名单双重兜底。
+- Mermaid：唯一绕过客户端白名单的输出（`mermaid.render` 产出的 SVG 直接写入 `.mermaid-chart`）。源码只从 `<code>` 的 `textContent` 读取，配置 `securityLevel:'strict'`、`flowchart.htmlLabels:false`，不调用 `bindFunctions`，错误信息只写 `textContent`。库文件是带 nonce 的外部脚本（仍满足 `script-src 'nonce-…'`，未放宽 `cspSource`）。
 
 ### 5.6 子 agent 分组：全部是推断（CUSTOM-20260923-013）
 
@@ -271,6 +272,7 @@ pending ──用户点按钮──► selected        （回答 optionId）
 | 上限 | 200 条锚点，多出的折叠成一行「… N earlier hidden」 |
 | **两类行的区分度（191）** | 锚点既有 `user` 也有 `assistant`，而在此之前两者**只有一小格图标**不同（076/077 只给图标带了 kind 类），文字颜色/字重/缩进完全一样 —— 整排读起来是同质列表（用户报"用户消息区分度不明显"）。现在 **kind 类挂在行上**（`outline.ts` 的 `row.className = 'outline-item kind-' + entry.kind`），按两级拉开：**用户行 = 骨架**（正常前景色 + `font-weight: 600` + 图标 `opacity: 1`）、**助手行 = 补充**（`descriptionForeground` + `font-size: .95em` + 图标 `.45`）。**刻意不用左竖条/背景色**做这个区分 —— 那两条通道已被"当前项"占用（`.outline-item.active` 的 border-left 与背景），一个颜色两种意思是 047 的教训。另一条分工：**kind 决定字重/字号/图标浓淡，只有"颜色"让位给选中态**（写成整条 `:not(.active)` 会让选中一个用户行时字重从 600 掉回 400 —— 选中一个东西不该改变它是什么）。**缩进那一档试过又撤了**：助手行 `padding-left` 读起来像子项，但侧栏默认只有 240px，缩进直接吃掉可读宽度、长标题更早被省略号截断（实测同一行少显示一个字）；三档（颜色/字重/字号）已经够分辨 —— 别再顺手加回来 |
 | **有没有东西可导航（081）** | **这条判据管所有形态**：没有锚点（无会话 / 新会话 / 全是工具记录）时，☰ 按钮、下拉浮层、**钉住的右侧栏****一律不显示**。045 当年只把它加在 ☰ 按钮上——那时下拉是唯一形态，"没有按钮就没有大纲"成立；076 让它可钉住之后，钉住的那一栏**没走这条判据**，于是空态旁边会摊着一列 "OUTLINE / No messages yet"，把空态挤出面板正中（用户截图）。判据只有一处（`outline.ts` 的 `anchorsPresent`，由 `syncButton()` 唯一写入、`renderVisibility()` 读取），**mode 只是偏好、不决定可不可见**：钉住状态留着，第一条消息一到那栏自己回来。副作用：空对话时没法点 ✕ 取消钉住（等第一条消息即可）——因为此时它本来也没有内容可导航 |
+| **Messages / Cards 两个 tab** | `outline.ts` 的 `setTab` / `cardAnchors` / `noteToolUpdate` + `transcriptView.cardInfo` / `cardCount` / `reveal` | Messages 仍只收 user/assistant；Cards 遍历 `ordered()` **全部记录**（含消息），行显示类型徽标 + 工具名/标题；点击前 `reveal` 展开被父工具卡折叠的子卡。`syncButton` 的判据改为 `messageAnchorCount()>0 || cardCount()>0`，所以只有工具卡的会话也有大纲。Cards tab 打开时 `toolUpdate` 用 `NS.dom.schedule` 合并刷新（`cardsPending` 去重）；tab 选择走 `UiPrefs.outlineTab`（Main/Side scoped，缺省 messages），`applyPrefs` 的 `prefsKey` 必须包含它 |
 
 **`invalidate()` 的调用点**在 `boot.ts` 的 `append` / `revise` / `focus` / `boot` / `sessionClosed` / `error`
 分支里——**不要**放进 `meta` / `attachments`，那会让抽屉在流式期间被反复重建。

@@ -30,6 +30,9 @@ export const directoryMenuClient = `
   var draftId = null;
   var open = false;
   var pending = false;
+  var searchEl = null;
+  var searchClearEl = null;
+  var query = '';
 
   function currentDraft() {
     if (!draftId || !NS.draft || !NS.draft.get) { return null; }
@@ -117,6 +120,26 @@ export const directoryMenuClient = `
     }
   }
 
+  function filteredPaths(paths) {
+    var out = [];
+    if (!paths) { return out; }
+    for (var i = 0; i < paths.length; i++) {
+      if (NS.dom.textMatches(query, [paths[i]])) { out.push(paths[i]); }
+    }
+    return out;
+  }
+
+  function syncSearchClear() {
+    if (searchClearEl) { searchClearEl.hidden = !query; }
+  }
+
+  function clearSearch() {
+    query = '';
+    if (searchEl) { searchEl.value = ''; }
+    syncSearchClear();
+    render();
+  }
+
   function render() {
     if (!drawer) { return; }
     NS.dom.clear(headEl);
@@ -124,9 +147,24 @@ export const directoryMenuClient = `
     headEl.appendChild(NS.dom.el('span', 'outline-count', pending ? 'Loading\\u2026' : 'Working directory'));
     if (pending) { return; }
 
-    var folders = (choices && choices.workspaceFolders) || [];
-    var recent = (choices && choices.recent) || [];
+    var folders = filteredPaths((choices && choices.workspaceFolders) || []);
+    var recent = filteredPaths((choices && choices.recent) || []);
     var draft = currentDraft();
+
+    if (query && folders.length === 0 && recent.length === 0) {
+      var shown = query.length > 80 ? query.slice(0, 80) + '\\u2026' : query;
+      listEl.appendChild(NS.dom.el('div', 'outline-group', 'No directories match "' + shown + '"'));
+      var clear = NS.dom.el('button', 'outline-item', 'Clear search');
+      clear.type = 'button';
+      clear.setAttribute('data-clear-cwd-search', '');
+      clear.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        clearSearch();
+        if (searchEl && searchEl.focus) { searchEl.focus(); }
+      });
+      listEl.appendChild(clear);
+    }
 
     if (draftId) {
       listEl.appendChild(NS.dom.el('div', 'outline-group',
@@ -165,7 +203,11 @@ export const directoryMenuClient = `
   function show() {
     open = true;
     drawer.hidden = false;
+    if (NS.dom.fitDrawer) { NS.dom.fitDrawer(drawer); }
     button.classList.add('on');
+    query = '';
+    if (searchEl) { searchEl.value = ''; }
+    syncSearchClear();
     closeOtherDrawers();
     refresh(currentDraft());
   }
@@ -216,13 +258,36 @@ export const directoryMenuClient = `
       headEl = drawer.querySelector('.outline-head');
       listEl = drawer.querySelector('.outline-list');
     }
+    searchEl = NS.dom.qs('cwdSearch');
+    searchClearEl = NS.dom.qs('cwdSearchClear');
+    if (searchEl) {
+      searchEl.addEventListener('input', function () {
+        query = String(searchEl.value || '');
+        syncSearchClear();
+        render();
+      });
+    }
+    if (searchClearEl) {
+      searchClearEl.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        clearSearch();
+        if (searchEl && searchEl.focus) { searchEl.focus(); }
+      });
+    }
     if (button) {
       button.addEventListener('click', function (event) { event.preventDefault(); toggle(); });
+    }
+    if (window.addEventListener) {
+      window.addEventListener('resize', function () {
+        if (open && NS.dom.fitDrawer) { NS.dom.fitDrawer(drawer); }
+      });
     }
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape' && open) {
         event.preventDefault();
         event.stopPropagation();
+        if (query) { clearSearch(); return; }
         close();
       }
     }, true);

@@ -396,6 +396,31 @@ export function styles(): string {
     position: sticky; top: 0;
     background: inherit;
   }
+  /* The outline owns two tabs; the list scrolls under fixed head/tab rows. */
+  #outline { display: flex; flex-direction: column; overflow: hidden; }
+  #outline .outline-head, #outline .outline-tabs { flex: none; }
+  #outline .outline-list { flex: 1; min-height: 0; overflow-y: auto; }
+  .outline-tabs { display: flex; gap: 2px; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
+  .outline-tab {
+    flex: 1; padding: 2px 6px; border: 1px solid transparent; border-radius: 3px;
+    background: transparent; color: var(--vscode-descriptionForeground);
+    cursor: pointer; font: inherit; font-size: 0.8em;
+  }
+  .outline-tab:hover { background: var(--vscode-list-hoverBackground); }
+  .outline-tab.active {
+    color: var(--vscode-foreground); border-color: var(--vscode-panel-border);
+    background: var(--vscode-list-activeSelectionBackground);
+  }
+  .outline-type {
+    flex: none; align-self: center; padding: 0 4px; border-radius: 3px;
+    border: 1px solid var(--vscode-panel-border);
+    font-size: 0.78em; color: var(--vscode-descriptionForeground);
+    max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .outline-item.active .outline-type { color: inherit; border-color: currentColor; opacity: 0.85; }
+  .outline-card.status-in_progress .outline-type,
+  .outline-card.status-pending .outline-type { color: var(--vscode-progressBar-background, var(--vscode-button-background)); }
+  .outline-card.status-failed .outline-type { color: var(--vscode-errorForeground, var(--vscode-descriptionForeground)); }
   .outline-more { margin-left: auto; }
   /* [CUSTOM- 历史浮层里的目录过滤菜单要能**溢出**浮层本身。
      因果链：菜单是绝对定位，它的包含块是 .outline-head（sticky ⇒ positioned），而 head 在
@@ -416,6 +441,27 @@ export function styles(): string {
      验收档 #historyfilter 用 elementFromPoint 量"那一点上最上面是谁"，不靠肉眼。 */
   #history .outline-head { flex: none; z-index: 2; }
   #history .outline-list { flex: 1; min-height: 0; overflow-y: auto; }
+  /* Free-text filter rows sit outside '.outline-head-info' so render() never clears them. */
+  .outline-search-row { display: flex; gap: 4px; padding: 0 8px 5px; flex: none; }
+  .outline-search {
+    flex: 1; min-width: 0; box-sizing: border-box; font: inherit; font-size: 0.85em;
+    color: var(--vscode-input-foreground);
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+    border-radius: 3px; padding: 2px 6px; outline: none;
+  }
+  .outline-search:focus { border-color: var(--vscode-focusBorder); }
+  .outline-search-clear {
+    flex: none; width: 20px; padding: 0; border: none; border-radius: 3px;
+    background: transparent; color: var(--vscode-descriptionForeground); cursor: pointer;
+  }
+  .outline-search-clear:hover {
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+    color: var(--vscode-foreground);
+  }
+  #cwdMenu { display: flex; flex-direction: column; overflow: hidden; }
+  #cwdMenu .outline-head, #cwdMenu .outline-search-row { flex: none; }
+  #cwdMenu .outline-list { flex: 1; min-height: 0; overflow-y: auto; }
   /* --- 时间显示（）------------------------------------
      每条记录的时刻。元素**始终在 DOM 里**，可见性由 #messages 上的一个类决定
      （与 flat-tools 同一套机制）⇒ 切换开关**不需要重渲染任何东西**，纯样式翻转。
@@ -628,6 +674,42 @@ export function styles(): string {
   .messages-column {
     position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
   }
+  /* Tail is on: two L-shaped corner marks above the composer (┗    ┘).
+     They are overlays, so they add no layout and take no pointer events; the
+     vertical arm fades upward via mask, the horizontal segment stays solid. */
+  .messages-column::before,
+  .messages-column::after {
+    --vac-tail-accent: var(--vscode-focusBorder, var(--vscode-textLink-foreground, #4daafc));
+    content: ''; position: absolute; width: 28px; height: 16px;
+    pointer-events: none; opacity: 0; transition: opacity 140ms ease-out;
+    bottom: calc(var(--vac-composer-h, 0px) + var(--vac-elic-h, 0px) + var(--vac-perm-h, 0px));
+    border-bottom: 2px solid var(--vac-tail-accent);
+    -webkit-mask-image: linear-gradient(to top, #000 55%, transparent);
+    mask-image: linear-gradient(to top, #000 55%, transparent);
+    z-index: 2;
+  }
+  .messages-column::before {
+    left: 0; right: auto;
+    border-left: 2px solid var(--vac-tail-accent);
+    border-bottom-left-radius: 6px;
+  }
+  .messages-column::after {
+    right: calc(var(--vac-scrollbar-w, 0px) + 2px); left: auto;
+    border-right: 2px solid var(--vac-tail-accent);
+    border-bottom-right-radius: 6px;
+  }
+  /* Full-width fade between the two corners; same accent as the L marks. */
+  .tail-fade {
+    position: absolute; left: 0; right: calc(var(--vac-scrollbar-w, 0px) + 2px);
+    height: 28px; pointer-events: none; opacity: 0; transition: opacity 140ms ease-out;
+    bottom: calc(var(--vac-composer-h, 0px) + var(--vac-elic-h, 0px) + var(--vac-perm-h, 0px));
+    background: linear-gradient(to top,
+      var(--vscode-focusBorder, var(--vscode-textLink-foreground, #4daafc)), transparent);
+    z-index: 1;
+  }
+  body[data-tail="on"][data-messages-scroll="on"]:not([data-composer="off"]):not([data-phase="disconnected"]):not([data-phase="connecting"]) .tail-fade { opacity: 0.14; }
+  body[data-tail="on"][data-messages-scroll="on"]:not([data-composer="off"]):not([data-phase="disconnected"]):not([data-phase="connecting"]) .messages-column::after,
+  body[data-tail="on"][data-messages-scroll="on"]:not([data-composer="off"]):not([data-phase="disconnected"]):not([data-phase="connecting"]) .messages-column::before { opacity: 0.95; }
   /* --- Conversation rail () ------------------------- */
   /* 左侧引导条：轮次大点 + 步骤小点，随内容滚动（track 由 JS 做 translateY(-scrollTop)）。
      注意本元素**不能**写 display——hidden 属性靠文件顶部的 [hidden]{display:none!important}
@@ -754,7 +836,8 @@ export function styles(): string {
      面板只能由"指针不在卡片上"那条路滚。不许换成 auto（那会显式允许接力）。 */
   .messages .thought-body,
   .messages .tool-body,
-  .messages .tool-seg-out { overscroll-behavior: contain; }
+  .messages .tool-seg-out,
+  .messages .mermaid-chart { overscroll-behavior: contain; }
 
   /* [CUSTOM- 卡片内的滚动条统一细一档（2026-10-28）。此前只有 .messages 写了
      scrollbar-width: thin，卡片自己的滚动视口（.tool-body / .tool-seg-out / .thought-body /
@@ -765,6 +848,7 @@ export function styles(): string {
   .messages .tool-seg-out,
   .messages .diff-body,
   .messages .elic-preview,
+  .messages .mermaid-chart,
   .messages .md pre,
   .messages .table-wrap { scrollbar-width: thin; }
 
@@ -881,6 +965,7 @@ export function styles(): string {
     background: var(--vscode-button-background); color: var(--vscode-button-foreground);
     border: none; font-family: inherit; font-size: 0.9em;
     box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0,0,0,0.3));
+    z-index: 7;
   }
   .jump-latest:hover { background: var(--vscode-button-hoverBackground); }
 
@@ -1471,6 +1556,28 @@ export function styles(): string {
     background: var(--vscode-textCodeBlock-background);
     border-radius: 3px; padding: 0 3px;
   }
+  /* highlight.js emits classes only, which the webview allowlist keeps. */
+  .hljs-comment, .hljs-quote { color: var(--vscode-descriptionForeground); font-style: italic; }
+  .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type {
+    color: var(--vscode-symbolIcon-keywordForeground, var(--vscode-editor-foreground));
+  }
+  .hljs-string, .hljs-regexp, .hljs-symbol, .hljs-bullet {
+    color: var(--vscode-symbolIcon-stringForeground, var(--vscode-editor-foreground));
+  }
+  .hljs-number, .hljs-meta {
+    color: var(--vscode-symbolIcon-numberForeground, var(--vscode-editor-foreground));
+  }
+  .hljs-title, .hljs-section, .hljs-function {
+    color: var(--vscode-symbolIcon-functionForeground, var(--vscode-editor-foreground));
+  }
+  .hljs-variable, .hljs-attr, .hljs-attribute, .hljs-template-variable {
+    color: var(--vscode-symbolIcon-variableForeground, var(--vscode-editor-foreground));
+  }
+  .hljs-built_in, .hljs-class {
+    color: var(--vscode-symbolIcon-classForeground, var(--vscode-editor-foreground));
+  }
+  .hljs-addition { color: var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-editor-foreground)); }
+  .hljs-deletion { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--vscode-editor-foreground)); }
   .bubble blockquote, .md blockquote {
     margin: 6px 0; padding-left: 10px;
     border-left: 3px solid var(--vscode-panel-border);
@@ -2086,6 +2193,52 @@ export function styles(): string {
     transition: opacity .12s ease-in-out;
   }
   .code-wrap:hover .code-copy { opacity: 1; }
+
+  /* Mermaid: the source view keeps the original <pre>; the chart is library output. */
+  .mermaid-block {
+    position: relative; margin: 6px 0; white-space: normal;
+    border: 1px solid var(--vscode-panel-border); border-radius: 4px;
+    background: var(--vscode-textCodeBlock-background);
+  }
+  .mermaid-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 2px; padding: 3px 4px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+  }
+  .mermaid-view, .mermaid-zoom { display: flex; align-items: center; gap: 2px; }
+  .mermaid-tab {
+    font: inherit; font-size: 0.78em; padding: 1px 7px; border-radius: 3px;
+    cursor: pointer; color: var(--vscode-descriptionForeground);
+    background: transparent; border: 1px solid transparent;
+  }
+  .mermaid-tab[aria-pressed="true"] {
+    color: var(--vscode-foreground); border-color: var(--vscode-panel-border);
+    background: var(--vscode-list-activeSelectionBackground);
+  }
+  .mermaid-tab:disabled { opacity: 0.45; cursor: default; }
+  .mermaid-zoom-pct { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+  .mermaid-block[data-view="source"] .mermaid-zoom,
+  .mermaid-block[data-mermaid-state="loading"] .mermaid-zoom,
+  .mermaid-block[data-mermaid-state="error"] .mermaid-zoom { display: none; }
+  .mermaid-chart {
+    padding: 8px; overflow: auto; white-space: normal;
+    max-height: min(60vh, 560px); overscroll-behavior: contain;
+  }
+  /* mermaid writes an inline max-width in px; author !important is the only
+     reliable way to let the zoom variable drive the rendered width. */
+  .mermaid-chart svg {
+    width: calc(100% * var(--vac-mermaid-zoom, 1));
+    max-width: none !important; height: auto; display: block; margin: 0 auto;
+  }
+  .mermaid-block[data-mermaid-state="loading"] .mermaid-chart::before {
+    content: 'Rendering diagram...';
+    color: var(--vscode-descriptionForeground); font-size: 0.85em;
+  }
+  .mermaid-source > pre { margin: 0; border-radius: 0; background: transparent; }
+  .mermaid-error {
+    padding: 6px 8px; font-size: 0.85em;
+    color: var(--vscode-errorForeground, var(--vscode-descriptionForeground));
+  }
 
   /* --- Thoughts --------------------------------------------------------
      三级视觉层次里最轻的一档（L1 气泡 / L2 卡片 / L3 轻卡）。

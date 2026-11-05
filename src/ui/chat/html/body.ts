@@ -14,8 +14,11 @@
 import type { SurfaceKey } from '../ChatSurface';
 import { buildStamp } from '../../../utils/BuildInfo';
 
-export function body(surface: SurfaceKey = 'view'): string {
-  return `<body class="surface-${surface}" data-vac-build="${buildStamp()}" data-composer="off">
+export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
+  const mermaidAttr = mermaidSrc
+    ? ` data-mermaid-src="${mermaidSrc.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}"`
+    : '';
+  return `<body class="surface-${surface}" data-vac-build="${buildStamp()}" data-composer="off"${mermaidAttr}>
   <div id="agentBar" class="agent-bar" hidden>
     <!-- [CUSTOM- Agent 选择器从原生 <select> 换成与输入卡同一套 picker（2026-10-27）：
          原生下拉放不下「名称 + 说明」两行，也没有图标。菜单在 tabs.ts 里渲染。 -->
@@ -67,6 +70,7 @@ export function body(surface: SurfaceKey = 'view'): string {
         <button id="outlinePin" class="outline-btn"
                 title="Pin to the right side" aria-label="Pin to the right side">⇥</button>
       </div>
+      <div class="outline-tabs" data-outline-tabs role="tablist" aria-label="Outline mode"></div>
       <div class="outline-list"></div>
     </div>
     <div id="history" class="outline" hidden>
@@ -87,10 +91,24 @@ export function body(surface: SurfaceKey = 'view'): string {
         <span class="outline-head-info"></span>
         <div id="historyFilterMenu" class="picker-menu down filter-menu"></div>
       </div>
+      <div class="outline-search-row">
+        <input id="historySearch" class="outline-search" type="text"
+               placeholder="Filter sessions..." aria-label="Filter sessions"
+               spellcheck="false" autocomplete="off">
+        <button id="historySearchClear" class="outline-search-clear" type="button"
+                title="Clear search" aria-label="Clear search" hidden>×</button>
+      </div>
       <div class="outline-list"></div>
     </div>
     <div id="cwdMenu" class="outline" hidden>
       <div class="outline-head"></div>
+      <div class="outline-search-row">
+        <input id="cwdSearch" class="outline-search" type="text"
+               placeholder="Filter directories..." aria-label="Filter directories"
+               spellcheck="false" autocomplete="off">
+        <button id="cwdSearchClear" class="outline-search-clear" type="button"
+                title="Clear search" aria-label="Clear search" hidden>×</button>
+      </div>
       <div class="outline-list"></div>
     </div>
   </div>
@@ -121,6 +139,8 @@ export function body(surface: SurfaceKey = 'view'): string {
            #messages 那条 19px 通道的起点，逐像素与改动前一致。纵向不受影响：列是 flex 项、
            交叉轴 stretch，高度 = .message-area 的高度。 -->
       <div id="rail" class="rail" hidden><div id="railTrack" class="rail-track"></div></div>
+      <!-- Tail 的中间渐隐：与左右 L 形角共用同一显示条件，纯装饰。 -->
+      <div class="tail-fade" aria-hidden="true"></div>
       <!-- [CUSTOM- 悬浮置顶条（104 改成悬浮卡片 + 收缩按钮）。
            它是 .messages-column 的绝对定位子元素，不参与滚动也不占布局。
            卡片是内层元素：背景/描边/圆角要画在「内容盒」上，px 才能与 .messages 的内容盒对齐。
@@ -152,6 +172,7 @@ export function body(surface: SurfaceKey = 'view'): string {
         <button id="outlineUnpin" class="outline-btn"
                 title="Close outline" aria-label="Close outline">✕</button>
       </div>
+      <div class="outline-tabs" data-outline-tabs role="tablist" aria-label="Outline mode"></div>
       <div class="outline-head"></div>
       <div class="outline-list"></div>
       <div id="outlineResize" class="outline-resize" aria-hidden="true"></div>

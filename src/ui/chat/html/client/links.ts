@@ -16,6 +16,9 @@ export const linksClient = `
     var pres = root.querySelectorAll('pre');
     for (var i = 0; i < pres.length; i++) {
       var pre = pres[i];
+      // Mermaid owns the whole block (source/diagram toggle); wrapping it here
+      // would leave a .code-wrap shell behind when the diagram module replaces it.
+      if (pre.getAttribute('data-mermaid') !== null) { continue; }
       // Starts-with rather than equality: the wrapper also carries 'has-lang'
       // when a language label was added below.
       if (pre.parentNode && String(pre.parentNode.className).indexOf('code-wrap') === 0) { continue; }
@@ -116,6 +119,20 @@ export const linksClient = `
 
       var copyBtn = closestWithAttr(target, 'data-code-copy');
       if (copyBtn) { event.preventDefault(); onCopyClicked(copyBtn); return; }
+
+      var mermaidView = closestWithAttr(target, 'data-mermaid-view');
+      if (mermaidView) {
+        event.preventDefault();
+        if (NS.mermaid) { NS.mermaid.showView(mermaidView); }
+        return;
+      }
+
+      var mermaidZoom = closestWithAttr(target, 'data-mermaid-zoom-action');
+      if (mermaidZoom) {
+        event.preventDefault();
+        if (NS.mermaid) { NS.mermaid.zoom(mermaidZoom); }
+        return;
+      }
 
       // 权限卡按钮。放在最前面：它们是
       // session 作用域的消息，且按钮上同时带 data-perm-id 与 data-perm-option。
