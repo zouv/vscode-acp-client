@@ -14,13 +14,13 @@
 ## 状态快照
 
 - **最近更新**：2026-11-05
-- **整体状态**：v1.10.0 已发布为 Latest（release commit `6bd0609`，tag `v1.10.0`）；VSIX 已上传并核对摘要。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
-- **当前分支（必填）**：`main`；v1.10.0 已按授权提交推送、打包并上传 GitHub Release，不另建分支。
-- **最后验证状态**（2026-11-05）：check-webview-client、lint/typecheck、`sh check-docs.sh` ✅；unit **183 / 28 文件** ✅；客户端 mocha **395 passing** ✅；完整宿主 **725 passing** ✅（用 `VSCODE_TEST_VERSION=1.144.1` 且 `env -u ELECTRON_RUN_AS_NODE`；1.85 宿主上剪贴板用例本机偶发失败，非本轮代码路径）。真机 `npm run dev:host` 的验收（清单 259–266）尚未执行。v1.10.0 已发布为 Latest（release commit `6bd0609`，tag `v1.10.0`）；VSIX 已上传并核对摘要。v1.9.0 草稿仍留在 GitHub，未发布、未改动。
+- **整体状态**：v1.11.0 已发布为 Latest（release commit `4a96c23`，tag `v1.11.0`）；VSIX `vscode-acp-client-1.11.0.vsix`（1077435 字节，SHA256 `532b6800…125cd6`）已上传并核对摘要。v1.10.0 保留为上一个正式版；v1.9.0 草稿仍在 GitHub。
+- **当前分支（必填）**：`main`；v1.11.0 已按授权提交推送、打包并上传 GitHub Release，不另建分支。
+- **最后验证状态**（2026-11-05）：check-webview-client、lint/typecheck、`sh check-docs.sh` ✅；unit **183 / 28 文件** ✅；客户端 mocha **395 passing** ✅；完整宿主 **725 passing** ✅（用 `VSCODE_TEST_VERSION=1.144.1` 且 `env -u ELECTRON_RUN_AS_NODE`；1.85 宿主上剪贴板用例本机偶发失败，非本轮代码路径）。真机 `npm run dev:host` 的验收（清单 259–266）尚未执行。已发布 v1.11.0（release commit `4a96c23`，tag `v1.11.0`，VSIX 1077435 字节 / SHA256 `532b6800…125cd6`）；v1.10.0 为上一正式版，v1.9.0 草稿仍在 GitHub。
 
 ## 当前任务（In Progress）
 
-- **2026-11-05 第二轮交互修复（代码与自动验证完成 / 待真机验收）**：① 滚动条拖拽手势闸门/位移分类 ② 中键/滚轮在底部无实际位移时不取消 Tail ③ Mermaid 限高与 50–200% 缩放 ④ Tail 左右 L 形两角 + 中间淡渐隐（无滚动条时隐藏、右角让出滚动条）⑤ `#history` / `#cwdMenu` 最大高度改为面板剩余高度。自动验证：check-webview-client、typecheck、lint、unit **183 / 28 文件**、客户端 mocha **395**、完整宿主 **725 passing** 通过。下一步 `npm run dev:host` 按 `docs/03-验收清单.md` 264–266 真机验收。计划见 `C:\Users\zouwei\.claude\plans\1-markdown-mermaid-fizzy-willow.md`。
+- **2026-11-05 第二轮交互修复（已随 v1.11.0 发布 / 待真机验收）**：① 滚动条拖拽手势闸门/位移分类 ② 中键/滚轮在底部无实际位移时不取消 Tail ③ Mermaid 限高与 50–200% 缩放 ④ Tail 左右 L 形两角 + 中间淡渐隐（无滚动条时隐藏、右角让出滚动条）⑤ `#history` / `#cwdMenu` 最大高度改为面板剩余高度。自动验证：check-webview-client、typecheck、lint、unit **183 / 28 文件**、客户端 mocha **395**、完整宿主 **725 passing** 通过。下一步 `npm run dev:host` 按 `docs/03-验收清单.md` 264–266 真机验收。计划见 `C:\Users\zouwei\.claude\plans\1-markdown-mermaid-fizzy-willow.md`。
 
 - **2026-11-05 面板五项增强（代码与自动验证完成 / 待真机验收）**：Mermaid 图表与原文切换、代码高亮、双列表搜索、大纲 Messages/Cards、Tail 初始视觉；自动验证 unit 183、宿主 717 通过，真机 259–263 待做。
 
