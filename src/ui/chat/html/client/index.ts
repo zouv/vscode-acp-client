@@ -27,6 +27,8 @@ import { directoryMenuClient } from './directoryMenu';
 import { railClient } from './rail';
 import { tabsClient } from './tabs';
 import { composerClient } from './composer';
+// [CUSTOM- 模型菜单排序：设置面板的自定义模型顺序 → 输入卡选择器（只重排，不造项）。
+import { modelOrderClient } from './modelOrder';
 import { contextMenuClient } from './contextMenu';
 // [CUSTOM- 通用浮层（确认 / 输入）：非模态，替代面板内触发的宿主 modal 与 InputBox。
 import { popoverClient } from './popover';
@@ -42,6 +44,7 @@ import { tailClient } from './tail';
 import { autoExpandClient } from './autoExpand';
 // [CUSTOM- 设置面板（Tab 栏右侧齿轮）。宿主是唯一写者，模块只渲染与回传。
 import { settingsPanelClient } from './settingsPanel';
+import { shortcutsClient } from './shortcuts';
 // [CUSTOM- 长任务看门狗（记录区 markdown 回填分帧的验收手段，也是"点了没反应"
 // 这类症状的常驻证据）。
 import { perfClient } from './perf';
@@ -74,6 +77,8 @@ const MODULES: ReadonlyArray<string> = [
   railClient,
   tabsClient,
   composerClient,
+  // [CUSTOM- 纯排序函数，运行时由 composer 的 renderMenu 调用。
+  modelOrderClient,
   // [CUSTOM- Takes the context menu over from Chromium's native one.
   contextMenuClient,
   // [CUSTOM- 通用浮层：必须在任何会调用 NS.popover 的模块之前注册（运行时引用，顺序只为清楚）。
@@ -88,6 +93,7 @@ const MODULES: ReadonlyArray<string> = [
   tailClient,
   // [CUSTOM- 自动展开开关与设置面板：加载期不碰 DOM（init 由 boot 调），可在桩里单独驱动。
   autoExpandClient,
+  shortcutsClient,
   settingsPanelClient,
   // [CUSTOM- 看门狗：boot 的 init 里装（加载期不碰 DOM，可在桩里单独驱动）。
   perfClient,

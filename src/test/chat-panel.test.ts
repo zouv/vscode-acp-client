@@ -46,6 +46,7 @@ import { choiceChanges, choiceSnapshotFromState, choiceSnapshotPatched } from '.
 import { directoryKey, directoryOptions, recentDirectoryList } from '../ui/chat/historyDirs';
 import { readDiskSessions, readTranscriptTimes } from '../ui/chat/diskSessions';
 import { ToolInvocationStore } from '../ui/chat/transcript/ToolInvocationStore';
+import { DEFAULT_SHORTCUTS, defaultShortcutMap } from '../ui/chat/shortcuts';
 // [CUSTOM- 子 agent 身份要一路走到视图模型（卡片头那个 chip 的来源）。
 import { toToolCallView } from '../ui/chat/content/toolCalls';
 import type { ChatSurface, SurfaceKey } from '../ui/chat/ChatSurface';
@@ -60,6 +61,8 @@ import {
 } from '../ui/chat/ChatPanelHost';
 // [CUSTOM- 归一化迁到 config 层。
 import { normalizeCustomModels } from '../config/CustomModels';
+// [CUSTOM- 模型列表 CAS 基线（宿主写入测试用它构造"打开编辑器时"的基线）。
+import { modelListBaseline } from '../config/ModelListSync';
 // [CUSTOM- 设置面板的配置读写缝（测试桩走这里，不碰开发者的 settings.json / ~/.vac）。
 import type { SettingIO } from '../config/SettingScope';
 import type { SettingLayer, SettingSource, SettingWriteTarget } from '../config/GlobalSettings';
@@ -245,6 +248,7 @@ class StubSettingIO implements SettingIO {
   readonly writes: Array<{ key: string; value: unknown; target: SettingWriteTarget }> = [];
   readonly cleared: Array<{ key: string; layer: 'workspace' | 'user' | 'global' }> = [];
   readonly opened: string[] = [];
+  failWrites = false;
   private globalValue: unknown;
 
   constructor(initial?: unknown) { this.globalValue = initial; }
@@ -264,6 +268,7 @@ class StubSettingIO implements SettingIO {
   }
 
   async write(key: string, value: unknown, target: SettingWriteTarget): Promise<void> {
+    if (this.failWrites) { throw new Error('settings write failed'); }
     this.writes.push({ key, value, target });
     if (target === 'global') { this.globalValue = value; }
   }
@@ -686,6 +691,37 @@ suite('chat panel: history picker carries the session directory', () => {
     await waitForOpen(manager);
     assert.strictEqual(manager.opened.length, 1);
     assert.strictEqual(manager.opened[0].title, 'The session name');
+  });
+
+  test('tracked restore reports completion only to the requesting surface', async () => {
+    const { harness } = harnessWithRecorder();
+    const editor = new RecordingSurface('editor');
+    harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 'dummy-session' });
+    harness.surface.sent.length = 0;
+    editor.sent.length = 0;
+    harness.host.onMessage({
+      type: 'openHistorySession', agentName: 'Claude Code', sessionId: 'replayed',
+      keepOthers: true, trackRestore: true,
+    }, 'editor');
+    for (let i = 0; i < 100 && !editor.sent.some(m => m.type === 'restoreFinished'); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.deepStrictEqual(editor.sent.filter(m => m.type === 'restoreFinished'), [
+      { type: 'restoreFinished', sessionId: 'replayed', ok: true },
+    ]);
+    assert.strictEqual(harness.surface.sent.some(m => m.type === 'restoreFinished'), false);
+  });
+
+  test('an invalid tracked restore still returns completion', async () => {
+    const { harness } = harnessWithRecorder();
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({
+      type: 'openHistorySession', agentName: 'Claude Code', sessionId: '', trackRestore: true,
+    }, 'view');
+    await Promise.resolve();
+    assert.deepStrictEqual(harness.surface.sent.filter(m => m.type === 'restoreFinished'), [
+      { type: 'restoreFinished', sessionId: '', ok: false },
+    ]);
   });
 
   test('picking a history session replaces the focused tab instead of adding one', async function () {
@@ -3329,6 +3365,186 @@ suite('chat panel: renderMarkdown item validation ()', () => {
   });
 });
 
+// [CUSTOM- Read may infer a language only from host-owned kind/location/content.
+suite('chat panel: Read syntax highlighting ()', () => {
+  const BODY = '1\tconst value: number = 1;\n2\tconsole.log(value);';
+  const READ_TEXT = '```\n' + BODY + '\n```';
+
+  function sendTool(
+    harness: Harness,
+    toolCallId: string,
+    kind: string,
+    locations: Array<{ path: string; line?: number }>,
+    text: string,
+  ): void {
+    harness.handler.handleUpdate({
+      sessionId: harness.sessionId,
+      update: {
+        sessionUpdate: 'tool_call', toolCallId, title: 'Read file', kind, status: 'pending',
+        content: [], locations: [], rawInput: { file_path: locations[0]?.path },
+      },
+    } as never);
+    harness.handler.handleUpdate({
+      sessionId: harness.sessionId,
+      update: {
+        sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', locations,
+        content: [{ type: 'content', content: { type: 'text', text } }],
+      },
+    } as never);
+  }
+
+  function toolEntry(harness: Harness, toolCallId: string): Record<string, any> {
+    for (const message of harness.surface.sent) {
+      if (message.type !== 'append') { continue; }
+      for (const entry of message.entries as Array<Record<string, any>>) {
+        if (entry.kind === 'tool' && entry.toolCallId === toolCallId) { return entry; }
+      }
+    }
+    throw new Error(`no tool entry for ${toolCallId}`);
+  }
+
+  function latestToolView(harness: Harness, entryId: string): Record<string, any> {
+    let view: Record<string, any> | undefined;
+    for (const message of harness.surface.sent) {
+      if (message.type === 'toolUpdate' && (message as { entryId?: string }).entryId === entryId) {
+        view = (message as { tool?: Record<string, any> }).tool;
+      }
+    }
+    return view ?? {};
+  }
+
+  function askMarkdown(
+    harness: Harness,
+    entry: Record<string, any>,
+    text: string,
+    extra: Record<string, unknown> = {},
+  ): { html: string; key?: string } {
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({
+      type: 'renderMarkdown',
+      items: [{ entryId: entry.id, sessionId: harness.sessionId, key: 'slot#1', text, ...extra }],
+    } as never);
+    settle(harness, harness.agentName, harness.sessionId);
+    const reply = harness.surface.sent.filter(m => m.type === 'markdownRendered') as Array<{
+      items: Array<{ entryId: string; html: string; key?: string }>;
+    }>;
+    const item = reply.flatMap(r => r.items).find(i => i.entryId === entry.id && i.key === 'slot#1');
+    if (!item) { throw new Error('the host did not answer the Read markdown request'); }
+    return item;
+  }
+
+  function textContentOf(html: string): string {
+    const code = /<code[^>]*>([\s\S]*?)<\/code>/.exec(html)?.[1] ?? html;
+    return code.replace(/<[^>]+>/g, '')
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&');
+  }
+
+  test('a Read card is highlighted from its one trusted file location', () => {
+    const harness = makeHarness('read-highlight', 'Claude Code');
+    sendTool(harness, 'read-1', 'read', [{ path: '/repo/src/app.ts', line: 1 }], READ_TEXT);
+    settle(harness, harness.agentName, harness.sessionId);
+    const entry = toolEntry(harness, 'read-1');
+    const viewText = latestToolView(harness, entry.id).items[0].block.text;
+
+    const item = askMarkdown(harness, entry, viewText);
+    assert.ok(item.html.includes('language-typescript'), 'inferred from the host-owned path');
+    assert.ok(item.html.includes('hljs-keyword'));
+    assert.strictEqual(textContentOf(item.html), BODY,
+      'highlighting must not change the line-number + tab textContent');
+    harness.host.dispose();
+  });
+
+  test('explicit fence languages are left untouched', () => {
+    const harness = makeHarness('read-explicit', 'Claude Code');
+    const text = '```python\nprint("x")\n```';
+    sendTool(harness, 'read-1', 'read', [{ path: '/repo/src/app.ts', line: 1 }], text);
+    settle(harness, harness.agentName, harness.sessionId);
+    const entry = toolEntry(harness, 'read-1');
+
+    const item = askMarkdown(harness, entry, text);
+    assert.ok(item.html.includes('language-python'));
+    assert.ok(!item.html.includes('language-typescript'));
+    harness.host.dispose();
+  });
+
+  test('only Read with exactly one known location qualifies', () => {
+    const cases: Array<{ id: string; kind: string; locations: Array<{ path: string; line?: number }> }> = [
+      { id: 'execute', kind: 'execute', locations: [{ path: '/repo/src/app.ts' }] },
+      { id: 'no-location', kind: 'read', locations: [] },
+      { id: 'two-locations', kind: 'read', locations: [{ path: '/repo/a.ts' }, { path: '/repo/b.ts' }] },
+      { id: 'unknown-extension', kind: 'read', locations: [{ path: '/repo/a.txt' }] },
+    ];
+    for (const testCase of cases) {
+      const harness = makeHarness('read-' + testCase.id, 'Claude Code');
+      sendTool(harness, testCase.id, testCase.kind, testCase.locations, READ_TEXT);
+      settle(harness, harness.agentName, harness.sessionId);
+      const entry = toolEntry(harness, testCase.id);
+
+      const item = askMarkdown(harness, entry, READ_TEXT);
+      assert.ok(!item.html.includes('language-typescript'),
+        `${testCase.id} must not borrow a language`);
+      assert.strictEqual(textContentOf(item.html), BODY, 'the text still renders unchanged');
+      harness.host.dispose();
+    }
+  });
+
+  test('a client-supplied path or language cannot change the inference', () => {
+    const harness = makeHarness('read-spoof', 'Claude Code');
+    sendTool(harness, 'read-1', 'read', [{ path: '/repo/a.txt', line: 1 }], READ_TEXT);
+    settle(harness, harness.agentName, harness.sessionId);
+    const entry = toolEntry(harness, 'read-1');
+
+    const item = askMarkdown(harness, entry, READ_TEXT, {
+      path: '/repo/src/app.ts', language: 'typescript',
+    });
+    assert.ok(!item.html.includes('language-typescript'), 'the host never reads these fields');
+    harness.host.dispose();
+  });
+
+  test('a replayed Read is not swept into the prose prefill and highlights on request', () => {
+    const harness = makeHarness('read-replay', 'Claude Code');
+    harness.sessionManager.emit('session-load-start', harness.sessionId, harness.agentName);
+    sendTool(harness, 'read-1', 'read', [{ path: '/repo/src/app.ts', line: 1 }], READ_TEXT);
+    harness.sessionManager.emit('session-load-end', harness.sessionId, harness.agentName, true);
+    settle(harness, harness.agentName, harness.sessionId);
+    const entry = toolEntry(harness, 'read-1');
+    const revised = harness.surface.sent.some(message => message.type === 'revise'
+      && (message as { entryId?: string }).entryId === entry.id);
+    assert.ok(!revised, 'the host prefill covers prose records only');
+
+    const viewText = latestToolView(harness, entry.id).items[0].block.text;
+    const item = askMarkdown(harness, entry, viewText);
+    assert.ok(item.html.includes('language-typescript'));
+    assert.strictEqual(textContentOf(item.html), BODY);
+    harness.host.dispose();
+  });
+
+  test('the captured Read (a.txt) never guesses a language and keeps its text', () => {
+    if (!fixture?.sessionId) { return; }
+    const harness = makeHarness(fixture.sessionId, 'Claude Code');
+    feed(harness, phaseOf(fixture, 'live'));
+    settle(harness, harness.agentName, harness.sessionId);
+    let entry: Record<string, any> | undefined;
+    for (const message of harness.surface.sent) {
+      if (message.type !== 'append') { continue; }
+      for (const candidate of message.entries as Array<Record<string, any>>) {
+        if (candidate.kind !== 'tool') { continue; }
+        const view = latestToolView(harness, candidate.id);
+        if (view.kind === 'read' && view.items && view.items.length > 0) { entry = candidate; break; }
+      }
+      if (entry) { break; }
+    }
+    assert.ok(entry, 'the capture contains a Read card');
+    const text = latestToolView(harness, entry!.id).items[0].block.text;
+    const item = askMarkdown(harness, entry!, text);
+    assert.ok(!item.html.includes('language-'), 'a .txt path is not mapped to a language');
+    assert.ok(textContentOf(item.html).includes('alpha'));
+    harness.host.dispose();
+  });
+});
+
 suite('chat panel: Bash tool payloads (real capture, )', () => {
   const bash = loadBashFixture();
 
@@ -3673,6 +3889,29 @@ suite('chat panel: ui prefs merge ()', () => {
     assert.fail('timed out waiting for the uiPrefs reply');
   }
 
+  async function waitFor(check: () => boolean, label: string): Promise<void> {
+    for (let i = 0; i < 100 && !check(); i++) { await new Promise(resolve => setTimeout(resolve, 5)); }
+    assert.ok(check(), label);
+  }
+
+  function lastPrefsOn(surface: RecordingSurface): Record<string, unknown> {
+    const sent = surface.sent.filter(m => m.type === 'uiPrefs') as Array<Record<string, unknown>>;
+    assert.ok(sent.length > 0, 'every attached surface receives the preference projection');
+    return sent[sent.length - 1];
+  }
+
+  async function settingsItems(harness: Harness): Promise<Array<Record<string, unknown>>> {
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'getSettings' });
+    await waitFor(
+      () => harness.surface.sent.some(m => m.type === 'settings'),
+      'timed out waiting for the settings table',
+    );
+    const message = harness.surface.sent.find(m => m.type === 'settings') as
+      { items: Array<Record<string, unknown>> } | undefined;
+    return message?.items ?? [];
+  }
+
   test('a tab-order write keeps the outline prefs, and vice versa', async () => {
     const harness = makeHarness('s-1');
     harness.surface.sent.length = 0;
@@ -3682,6 +3921,7 @@ suite('chat panel: ui prefs merge ()', () => {
     await waitForPrefs(harness);
     assert.deepStrictEqual(prefsOf(harness), {
       type: 'uiPrefs', outlineMode: 'sidebar', outlineWidth: 320, tabOrder: ['b', 'a'],
+      shortcuts: defaultShortcutMap(),
     }, 'the second write must not wipe what the first one set');
 
     harness.surface.sent.length = 0;
@@ -3736,6 +3976,163 @@ suite('chat panel: ui prefs merge ()', () => {
     assert.ok(surface.html.includes("script-src 'nonce-"), 'still nonce-only');
     assert.ok(!/script-src[^;]*vscode-webview/.test(surface.html),
       'the extension resource host is NOT added to script-src');
+  });
+
+  test('boot always pushes a complete shortcut map even without stored preferences', async () => {
+    const harness = makeHarness('s-1');
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'ready' });
+    await waitFor(
+      () => harness.surface.sent.some(m => m.type === 'uiPrefs'),
+      'timed out waiting for the boot preference projection',
+    );
+    assert.deepStrictEqual(lastPrefsOn(harness.surface).shortcuts, defaultShortcutMap());
+  });
+
+  test('a valid shortcut binding persists and fans out to view, editor and side', async () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    const editor = new RecordingSurface('editor');
+    const side = new RecordingSurface('side');
+    harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 's-1' });
+    harness.host.attachSurface(side, { agentName: harness.agentName, sessionId: 's-1' });
+    for (const surface of [harness.surface, editor, side]) { surface.sent.length = 0; }
+
+    harness.host.onMessage(
+      { type: 'setSetting', key: 'panel.shortcut.scrollTop', value: 'Shift+Ctrl+KeyB' },
+      'view',
+    );
+    await waitFor(
+      () => [harness.surface, editor, side].every(
+        surface => surface.sent.some(m => m.type === 'uiPrefs'),
+      ),
+      'the global shortcut change must reach all three surfaces',
+    );
+    for (const surface of [harness.surface, editor, side]) {
+      const shortcuts = lastPrefsOn(surface).shortcuts as Record<string, string | null>;
+      assert.strictEqual(shortcuts.scrollTop, 'Ctrl+Shift+KeyB');
+    }
+    const stored = memento.get<Record<string, unknown>>('vac.outlinePrefs.v1');
+    assert.strictEqual(
+      (stored?.shortcuts as Record<string, string | null> | undefined)?.scrollTop,
+      'Ctrl+Shift+KeyB',
+    );
+
+    const items = await settingsItems(harness);
+    const item = items.find(entry => entry.key === 'panel.shortcut.scrollTop');
+    assert.ok(item);
+    assert.strictEqual(item.type, 'shortcut');
+    assert.strictEqual(item.group, 'shortcuts');
+    assert.strictEqual(item.value, 'Ctrl+Shift+KeyB');
+  });
+
+  test('invalid and duplicate shortcut values are rejected with a visible warning', async () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+
+    async function write(value: unknown): Promise<Record<string, unknown>> {
+      harness.host.onMessage({ type: 'setSetting', key: 'panel.shortcut.scrollTop', value });
+      const items = await settingsItems(harness);
+      const item = items.find(entry => entry.key === 'panel.shortcut.scrollTop');
+      assert.ok(item);
+      return item;
+    }
+
+    const invalid = await write('KeyA');
+    assert.strictEqual(invalid.value, DEFAULT_SHORTCUTS.scrollTop, 'the old binding is kept');
+    assert.match(String(invalid.warning), /modifier/);
+    assert.strictEqual(memento.get('vac.outlinePrefs.v1'), undefined, 'nothing invalid was persisted');
+
+    const duplicate = await write('Alt+KeyE');
+    assert.strictEqual(duplicate.value, DEFAULT_SHORTCUTS.scrollTop, 'the old binding is kept');
+    assert.match(String(duplicate.warning), /already used by "Scroll to bottom"/);
+    assert.strictEqual(memento.get('vac.outlinePrefs.v1'), undefined, 'nothing duplicate was persisted');
+
+    const accepted = await write('Ctrl+KeyB');
+    assert.strictEqual(accepted.value, 'Ctrl+KeyB');
+    assert.strictEqual(accepted.warning, undefined, 'a later valid write clears the warning');
+  });
+
+  test('null disables a shortcut and "default" restores it', async () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+
+    harness.host.onMessage({ type: 'setSetting', key: 'panel.shortcut.scrollBottom', value: null });
+    let items = await settingsItems(harness);
+    let item = items.find(entry => entry.key === 'panel.shortcut.scrollBottom');
+    assert.strictEqual(item?.value, null);
+    assert.strictEqual(
+      (memento.get<Record<string, unknown>>('vac.outlinePrefs.v1')
+        ?.shortcuts as Record<string, string | null> | undefined)?.scrollBottom,
+      null,
+    );
+
+    harness.host.onMessage({
+      type: 'setSetting', key: 'panel.shortcut.scrollBottom', value: 'default',
+    });
+    items = await settingsItems(harness);
+    item = items.find(entry => entry.key === 'panel.shortcut.scrollBottom');
+    assert.strictEqual(item?.value, DEFAULT_SHORTCUTS.scrollBottom);
+  });
+
+  test('reload normalizes legacy shortcut data while keeping the other preferences', async () => {
+    const memento = new FakeMemento();
+    await memento.update('vac.outlinePrefs.v1', {
+      outlineMode: 'sidebar', outlineWidth: 320, markdownStyle: 'github',
+      shortcuts: {
+        scrollTop: 'shift+alt+KeyA',
+        scrollBottom: 'Alt+Shift+KeyA',
+        focusInput: 'not a shortcut',
+        previousSession: null,
+        nextSession: 'Alt+KeyN',
+        obsolete: 'Alt+KeyQ',
+      },
+    });
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    const editor = new RecordingSurface('editor');
+    const side = new RecordingSurface('side');
+    harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 's-1' });
+    harness.host.attachSurface(side, { agentName: harness.agentName, sessionId: 's-1' });
+
+    const normalized = {
+      scrollTop: 'Alt+Shift+KeyA',
+      scrollBottom: DEFAULT_SHORTCUTS.scrollBottom,
+      focusInput: DEFAULT_SHORTCUTS.focusInput,
+      previousSession: null,
+      nextSession: DEFAULT_SHORTCUTS.nextSession,
+    };
+    for (const surface of [harness.surface, editor, side]) {
+      surface.sent.length = 0;
+      harness.host.onMessage({ type: 'ready' }, surface.key);
+      await waitFor(
+        () => surface.sent.some(m => m.type === 'uiPrefs'),
+        'timed out waiting for the normalized preference projection',
+      );
+      const prefs = lastPrefsOn(surface);
+      assert.deepStrictEqual(prefs.shortcuts, normalized);
+      assert.strictEqual(
+        prefs.outlineWidth,
+        surface.key === 'side' ? 240 : 320,
+        'scoped preferences keep their own value while globals are shared',
+      );
+      assert.strictEqual(prefs.markdownStyle, 'github');
+    }
+    assert.strictEqual(
+      (memento.get<Record<string, unknown>>('vac.outlinePrefs.v1'))?.markdownStyle,
+      'github',
+      'normalization in the projection does not drop the stored record',
+    );
+  });
+
+  test('setUiPref cannot overwrite shortcuts; only the settings writer can', async () => {
+    const harness = makeHarness('s-1');
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({
+      type: 'setUiPref', outlineMode: 'sidebar', outlineWidth: 321,
+      shortcuts: { scrollTop: null, scrollBottom: 'Alt+KeyZ' },
+    });
+    await waitForPrefs(harness);
+    assert.deepStrictEqual(prefsOf(harness).shortcuts, defaultShortcutMap());
   });
 
   test('stored ui prefs arrive before boot restores the scroll position', async () => {
@@ -3807,6 +4204,62 @@ suite('chat panel: ui prefs merge ()', () => {
     harness.host.onMessage({ type: 'setUiPref', recentDirectoryLimit: 99 });
     await waitForPrefs(harness);
     assert.strictEqual(prefsOf(harness).recentDirectoryLimit, 30);
+  });
+
+  // [CUSTOM- 2026-11-05：历史显示上限 0 = 不限（默认）；0–10000 整数，空/非法为 0。
+  test('the history display limit defaults to unlimited and is clamped to 0–10000', async () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+
+    const items = await settingsItems(harness);
+    const item = items.find(entry => entry.key === 'panel.historyDisplayLimit');
+    assert.ok(item, 'the setting is exposed');
+    assert.strictEqual(item?.type, 'number');
+    assert.strictEqual(item?.value, 0, 'unset means unlimited');
+    assert.strictEqual(item?.min, 0);
+    assert.strictEqual(item?.max, 10_000);
+    assert.strictEqual(item?.step, 1, 'the wide range still steps by one');
+
+    function write(value: unknown): unknown {
+      harness.host.onMessage({ type: 'setSetting', key: 'panel.historyDisplayLimit', value });
+      return memento.get<Record<string, unknown>>('vac.outlinePrefs.v1')?.historyDisplayLimit;
+    }
+
+    assert.strictEqual(await write(0), 0, '0 is a real value (unlimited)');
+    assert.strictEqual(await write('0'), 0, 'the number input posts strings');
+    assert.strictEqual(await write(250), 250);
+    assert.strictEqual(await write('250'), 250);
+    assert.strictEqual(await write(12.7), 13, 'integer rounding');
+    assert.strictEqual(await write(10_001), 10_000, 'above the range clamps');
+    assert.strictEqual(await write(-1), 0, 'below the range clamps');
+    assert.strictEqual(await write(''), 0, 'clearing the box means unlimited');
+    assert.strictEqual(await write('   '), 0, 'whitespace counts as cleared');
+    assert.strictEqual(await write('abc'), 0, 'non-numeric falls back to unlimited');
+    assert.strictEqual(await write(null), 0);
+    assert.strictEqual(await write(true), 0, 'a non-number is not a limit');
+  });
+
+  test('the history display limit is shared by every surface and survives unrelated writes', async () => {
+    const harness = makeHarness('s-1');
+    const side = new RecordingSurface('side');
+    harness.host.attachSurface(side, { agentName: harness.agentName, sessionId: 'side-1' });
+    const sentPrefs = (surface: RecordingSurface) =>
+      surface.sent.filter(m => m.type === 'uiPrefs') as Array<Record<string, unknown>>;
+
+    harness.host.onMessage({ type: 'setSetting', key: 'panel.historyDisplayLimit', value: 40 }, 'view');
+    await waitFor(() => sentPrefs(harness.surface).some(m => m.historyDisplayLimit === 40),
+      'the main surface receives the limit');
+    await waitFor(() => sentPrefs(side).some(m => m.historyDisplayLimit === 40),
+      'the side surface receives the same global limit');
+
+    harness.surface.sent.length = 0;
+    side.sent.length = 0;
+    harness.host.onMessage({ type: 'setSetting', key: 'panel.markdownStyle', value: 'github' }, 'view');
+    await waitFor(() => sentPrefs(harness.surface).length > 0, 'a global write still answers');
+    await waitFor(() => sentPrefs(side).length > 0, 'a global write reaches the side too');
+    assert.strictEqual(sentPrefs(harness.surface).at(-1)?.historyDisplayLimit, 40,
+      'the global merge keeps the limit');
+    assert.strictEqual(sentPrefs(side).at(-1)?.historyDisplayLimit, 40);
   });
 });
 
@@ -3920,6 +4373,7 @@ suite('chat panel: Times prefs ()', () => {
     assert.deepStrictEqual(prefsOf(harness), {
       type: 'uiPrefs', outlineMode: 'sidebar', outlineWidth: 320, tabOrder: ['b', 'a'],
       timesBySession: { s1: true, s2: false }, timesDefault: true,
+      shortcuts: defaultShortcutMap(),
     });
 
     // 反过来：只写默认值的那一笔不该把那张表抹掉（缺字段 = 这一轮没改它）。
@@ -4398,6 +4852,266 @@ suite('chat panel: custom model aliases ()', () => {
     }>;
     assert.strictEqual(pushed.length, 1, 'the composer gets the new aliases/descriptions immediately');
     assert.deepStrictEqual(pushed[0].customModels, value);
+  });
+});
+
+// [CUSTOM- 自定义模型列表的 compare-and-set 写入：保存 / 冲突 / 层变化 / 失败 /
+// 二次确认并发 / 与 Inspect 层操作串行。用真实 ChatPanelHost + StubSettingIO 跑。
+suite('chat panel: custom model list CAS ()', () => {
+  class NonPersistingSettingIO extends StubSettingIO {
+    async write(key: string, value: unknown, target: SettingWriteTarget): Promise<void> {
+      this.writes.push({ key, value, target });
+    }
+  }
+
+  class GatedSettingIO extends StubSettingIO {
+    private releaseGate!: () => void;
+    private readonly gate: Promise<void>;
+    constructor() {
+      super();
+      this.gate = new Promise<void>(resolve => { this.releaseGate = resolve; });
+    }
+    release(): void { this.releaseGate(); }
+    async write(key: string, value: unknown, target: SettingWriteTarget): Promise<void> {
+      await this.gate;
+      return super.write(key, value, target);
+    }
+  }
+
+  // [CUSTOM- 模拟真实 SettingScope 在"workspace 目标 + 无文件夹"时的拒绝：
+  // 测试通过注入 seam 复现，不依赖真实测试宿主有没有打开文件夹。
+  class WorkspaceNoFolderSettingIO extends StubSettingIO {
+    constructor(private readonly workspaceValue: unknown) { super(undefined); }
+    resolve(_key: string, _defaultScope: 'global' | 'ide'): SettingSource {
+      return {
+        effective: 'workspace',
+        writeTarget: 'workspace',
+        layers: [
+          { layer: 'workspace', value: this.workspaceValue },
+          { layer: 'user' },
+          { layer: 'global' },
+          { layer: 'default', value: [] },
+        ],
+      };
+    }
+    async write(key: string, value: unknown, target: SettingWriteTarget): Promise<void> {
+      this.writes.push({ key, value, target });
+      throw new Error('Workspace settings need an open folder.');
+    }
+  }
+
+  function delay(ms = 0): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async function settingsTable(harness: Harness): Promise<Array<Record<string, any>>> {
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'getSettings' });
+    for (let i = 0; i < 100; i++) {
+      const message = harness.surface.sent.find(m => m.type === 'settings') as
+        { items: Array<Record<string, any>> } | undefined;
+      if (message) { return message.items; }
+      await delay(5);
+    }
+    throw new Error('timed out waiting for settings');
+  }
+
+  async function modelItemFor(harness: Harness, requestId: string): Promise<Record<string, any>> {
+    for (let i = 0; i < 100; i++) {
+      const items = await settingsTable(harness);
+      const item = items.find(entry => entry.key === 'vac.customModels');
+      if (item?.modelSync?.requestId === requestId) { return item; }
+      await delay(5);
+    }
+    throw new Error(`timed out waiting for model sync ${requestId}`);
+  }
+
+  function harnessWith(io: StubSettingIO): Harness {
+    return makeHarness(
+      's-model-cas', 'Claude Code', undefined, new StubPrefs(), {}, undefined, undefined, io,
+    );
+  }
+
+  test('a valid baseline writes the resolved layer and reports saved', async () => {
+    const io = new StubSettingIO();
+    const harness = harnessWith(io);
+    const value = [{ modelId: 'z', name: 'Z' }, { modelId: 'a', name: 'A' }];
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'save-1',
+      baseline: modelListBaseline('default', 'global', undefined),
+      value,
+    });
+    for (let i = 0; i < 100 && !harness.surface.sent.some(m => m.type === 'customModels'); i++) {
+      await delay(5);
+    }
+    assert.ok(
+      harness.surface.sent.some(m => m.type === 'customModels'),
+      'the composer gets the new order immediately',
+    );
+    const item = await modelItemFor(harness, 'save-1');
+
+    assert.deepStrictEqual(io.writes, [
+      { key: 'vac.customModels', value: normalizeCustomModels(value), target: 'global' },
+    ]);
+    assert.strictEqual(item.modelSync.status, 'saved');
+    assert.deepStrictEqual(item.modelSync.models, normalizeCustomModels(value));
+    assert.strictEqual(
+      item.modelSync.baseline,
+      modelListBaseline('global', 'global', normalizeCustomModels(value)),
+    );
+  });
+
+  test('a value change and a same-value layer change both reject the stale baseline', async () => {
+    const value = [{ modelId: 'a', name: 'A' }];
+    const io = new StubSettingIO(value);
+    const harness = harnessWith(io);
+
+    // 同值但打开编辑器时还在 default 层（现在已被 workspace/global 覆盖）。
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'stale-layer',
+      baseline: modelListBaseline('default', 'global', value),
+      value,
+    });
+    const layerConflict = await modelItemFor(harness, 'stale-layer');
+    assert.strictEqual(layerConflict.modelSync.status, 'conflict');
+    assert.deepStrictEqual(layerConflict.modelSync.models, normalizeCustomModels(value));
+    assert.strictEqual(layerConflict.modelSync.baseline, modelListBaseline('global', 'global', value));
+    assert.deepStrictEqual(io.writes, [], 'a stale layer never writes');
+
+    // 打开编辑器后，另一个面改了值：值没变旧基线，但生效层已经变了。
+    const external = [{ modelId: 'external', name: 'External' }];
+    await io.write('vac.customModels', external, 'global');
+    const writesBefore = io.writes.length;
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'stale-value',
+      baseline: modelListBaseline('global', 'global', value),
+      value: [{ modelId: 'changed', name: 'Changed' }],
+    });
+    const valueConflict = await modelItemFor(harness, 'stale-value');
+    assert.strictEqual(valueConflict.modelSync.status, 'conflict');
+    assert.deepStrictEqual(valueConflict.modelSync.models, normalizeCustomModels(external));
+    assert.strictEqual(io.writes.length, writesBefore, 'a stale value never writes');
+  });
+
+  test('a write failure is reported and keeps the current value', async () => {
+    const io = new StubSettingIO();
+    io.failWrites = true;
+    const harness = harnessWith(io);
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'fail-1',
+      baseline: modelListBaseline('default', 'global', undefined),
+      value: [{ modelId: 'a', name: 'A' }],
+    });
+    const item = await modelItemFor(harness, 'fail-1');
+    assert.strictEqual(item.modelSync.status, 'error');
+    assert.match(String(item.modelSync.message), /settings write failed/);
+    assert.deepStrictEqual(item.value, [], 'the failed write is not reported as saved');
+  });
+
+  test('a workspace-target write without a folder is rejected, not reported as saved', async () => {
+    const value = [{ modelId: 'a', name: 'A' }];
+    const io = new WorkspaceNoFolderSettingIO(value);
+    const harness = harnessWith(io);
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'workspace-1',
+      baseline: modelListBaseline('workspace', 'workspace', value),
+      value,
+    });
+    const item = await modelItemFor(harness, 'workspace-1');
+    assert.strictEqual(item.modelSync.status, 'error');
+    assert.match(String(item.modelSync.message), /open folder/);
+    assert.deepStrictEqual(io.writes, [{
+      key: 'vac.customModels', value: normalizeCustomModels(value), target: 'workspace',
+    }]);
+    assert.deepStrictEqual(item.value, normalizeCustomModels(value), 'the effective value is still the old one');
+  });
+
+  test('a write that did not take effect becomes a conflict with the real value', async () => {
+    const io = new NonPersistingSettingIO();
+    const harness = harnessWith(io);
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'drop-1',
+      baseline: modelListBaseline('default', 'global', undefined),
+      value: [{ modelId: 'a', name: 'A' }],
+    });
+    const item = await modelItemFor(harness, 'drop-1');
+    assert.strictEqual(item.modelSync.status, 'conflict');
+    assert.deepStrictEqual(item.modelSync.models, []);
+    assert.strictEqual(item.modelSync.baseline, modelListBaseline('default', 'global', undefined));
+    assert.strictEqual(io.writes.length, 1, 'it did attempt the write, but never claimed success');
+  });
+
+  test('Overwrite re-checks the conflict baseline; a newer write causes conflict again', async () => {
+    const initial = [{ modelId: 'a', name: 'A' }];
+    const io = new StubSettingIO(initial);
+    const harness = harnessWith(io);
+
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'confirm-1',
+      baseline: modelListBaseline('default', 'global', initial),
+      value: [{ modelId: 'local', name: 'Local' }],
+    });
+    const first = await modelItemFor(harness, 'confirm-1');
+    assert.strictEqual(first.modelSync.status, 'conflict');
+
+    // 用户确认 Overwrite 之后、请求执行之前，另一个面写入。
+    const external = [{ modelId: 'external', name: 'External' }];
+    await io.write('vac.customModels', external, 'global');
+    const writesBefore = io.writes.length;
+
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'confirm-2',
+      baseline: first.modelSync.baseline,
+      value: [{ modelId: 'local', name: 'Local' }],
+      force: true,
+    });
+    const second = await modelItemFor(harness, 'confirm-2');
+    assert.strictEqual(second.modelSync.status, 'conflict');
+    assert.deepStrictEqual(second.modelSync.models, normalizeCustomModels(external));
+    assert.strictEqual(io.writes.length, writesBefore, 'force did not bypass the newer CAS');
+
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'confirm-3',
+      baseline: second.modelSync.baseline,
+      value: [{ modelId: 'local', name: 'Local' }],
+      force: true,
+    });
+    const third = await modelItemFor(harness, 'confirm-3');
+    assert.strictEqual(third.modelSync.status, 'saved');
+  });
+
+  test('removeSettingLayer waits behind an in-flight model write', async () => {
+    const io = new GatedSettingIO();
+    const harness = harnessWith(io);
+    harness.host.onMessage({
+      type: 'setModelList',
+      requestId: 'queued-1',
+      baseline: modelListBaseline('default', 'global', undefined),
+      value: [{ modelId: 'a', name: 'A' }],
+    });
+    await delay(0);
+
+    harness.host.onMessage({
+      type: 'settingAction', action: 'removeSettingLayer', key: 'vac.customModels', layer: 'global',
+    });
+    await delay(0);
+    assert.deepStrictEqual(io.cleared, [], 'the layer operation must not interleave with the CAS write');
+
+    io.release();
+    await modelItemFor(harness, 'queued-1');
+    for (let i = 0; i < 100 && io.cleared.length === 0; i++) { await delay(5); }
+    assert.deepStrictEqual(io.cleared, [{ key: 'vac.customModels', layer: 'global' }]);
+    assert.strictEqual(io.writes.length, 1);
+    assert.strictEqual(io.writes[0].target, 'global');
   });
 });
 
@@ -5873,6 +6587,9 @@ suite('chat panel: Side Chat surface isolation', () => {
     harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 'main-1' });
     const side = attachSide(harness, 'side-1');
     attachSide(harness, 'side-2');
+    harness.surface.sent.length = 0;
+    editor.sent.length = 0;
+    side.sent.length = 0;
 
     harness.host.onMessage({
       type: 'setUiPref',
@@ -5912,6 +6629,7 @@ suite('chat panel: Side Chat surface isolation', () => {
       outlineOpenBySession: { 'main-1': true, 'main-2': false }, outlineOpenDefault: true,
       autoExpandBySession: { 'main-1': false, 'main-2': true }, autoExpandDefault: false,
       autoExpandKinds: ['thought', 'tool'],
+      shortcuts: defaultShortcutMap(),
     });
     assert.deepStrictEqual(memento.get('vac.sideUiPrefs.v1'), {
       outlineMode: 'popup', outlineWidth: 280,
@@ -6075,6 +6793,7 @@ suite('chat panel: Side Chat surface isolation', () => {
       timesBySession: { 'side-1': true }, timesDefault: true,
       autoExpandBySession: { 'side-1': true }, autoExpandDefault: true,
     }, 'side');
+    harness.host.onMessage({ type: 'setSetting', key: 'panel.historyDisplayLimit', value: 55 }, 'view');
 
     harness.host.onMessage({ type: 'settingAction', action: 'resetPanelPrefs' }, 'view');
     const defaults = {
@@ -6085,7 +6804,9 @@ suite('chat panel: Side Chat surface isolation', () => {
       autoExpandBySession: {}, autoExpandDefault: false,
       autoExpandKinds: ['thought', 'tool'], autoExpandToolHeight: 360, autoExpandThoughtHeight: 240,
       flatTools: false, composerMaxWidth: 720, inputMaxHeight: 320, sendKey: 'enter',
-      defaultModelByAgent: {}, defaultEffortByAgent: {}, recentDirectoryLimit: 8, markdownStyle: 'editor',
+      defaultModelByAgent: {}, defaultEffortByAgent: {}, recentDirectoryLimit: 8, historyDisplayLimit: 0,
+      markdownStyle: 'editor',
+      shortcuts: defaultShortcutMap(),
     };
     const expected = { type: 'uiPrefs', ...defaults };
     assert.deepStrictEqual(latestPrefs(harness.surface), expected);

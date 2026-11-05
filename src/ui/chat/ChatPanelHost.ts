@@ -33,6 +33,7 @@ import type {
   ExtToChat,
   ExtToChatMessage,
   MarkdownRendered,
+  ModelListSync,
   RecoverableSession,
   RestoreChoice,
   SessionMeta,
@@ -43,7 +44,9 @@ import type {
   UiPrefs,
 } from './protocol';
 // [CUSTOM- 自定义模型读取迁到 config 层（SessionManager 也要读同一份）。
-import { normalizeCustomModels, type CustomModel } from '../../config/CustomModels';
+import { customModelSignature, normalizeCustomModels, type CustomModel } from '../../config/CustomModels';
+// [CUSTOM- 模型列表写入的串行队列（拖拽排序会连续提交；并发写会让基线互相冲突）。
+import { modelListBaseline, modelListBaselineMatches, SerialTaskQueue } from '../../config/ModelListSync';
 // [CUSTOM- 设置项的作用域：工作区 > 用户 > 跨 IDE 全局文件 > 内置默认。
 import { GLOBAL_SETTING_KEYS } from '../../config/GlobalSettings';
 import {
@@ -60,6 +63,11 @@ import { viewSurface, type ChatSurface, type SurfaceKey } from './ChatSurface';
 // 到 SessionNotifier 里去，那边必须保持不依赖 vscode）。
 import { SessionNotifier } from './SessionNotifier';
 import type { NoticeChannel } from './SessionNotifier';
+import {
+  SHORTCUT_ACTIONS, SHORTCUT_ACTION_LABELS,
+  applyShortcutSetting, defaultShortcutMap, isShortcutAction, normalizeShortcutMap,
+  type ShortcutAction,
+} from './shortcuts';
 import type { PermissionPresenter, PermissionState } from '../../handlers/PermissionBridge';
 // [CUSTOM- 表单（elicitation）presenter —— 与权限卡同构。
 import type {
@@ -82,6 +90,7 @@ import {
   isTerminalCompaction,
 } from './transcript/compaction';
 import { toToolCallView } from './content/toolCalls';
+import { readLanguageForToolText } from './content/readHighlight';
 import { toContentView, hasVisibleContent } from './content/contentBlocks';
 import type { ContentBlockView } from './content/contentBlocks';
 import type { SubagentEntry } from './transcript/types';
@@ -133,7 +142,9 @@ const SIDE_UI_PREFS_KEY = 'vac.sideUiPrefs.v1';
 
 type UiPrefsScope = 'main' | 'side';
 
-const DEFAULT_UI_PREFS: UiPrefs = { outlineMode: 'popup', outlineWidth: 240 };
+const DEFAULT_UI_PREFS: UiPrefs = {
+  outlineMode: 'popup', outlineWidth: 240, shortcuts: defaultShortcutMap(),
+};
 const SESSION_FLAG_PREF_KEYS = [
   'timesBySession', 'tailBySession', 'outlineOpenBySession', 'autoExpandBySession',
 ] as const;
@@ -149,7 +160,9 @@ const MAIN_SCOPED_UI_PREF_KEYS = [...SCOPED_UI_PREF_KEYS, 'tabOrder'] as const;
 const GLOBAL_UI_PREF_KEYS = [
   'autoExpandKinds', 'autoExpandToolHeight', 'autoExpandThoughtHeight',
   'flatTools', 'composerMaxWidth', 'inputMaxHeight', 'sendKey',
-  'defaultModelByAgent', 'defaultEffortByAgent', 'recentDirectoryLimit', 'markdownStyle',
+  'defaultModelByAgent', 'defaultEffortByAgent', 'recentDirectoryLimit', 'historyDisplayLimit',
+  'markdownStyle',
+  'shortcuts',
 ] as const;
 
 function copyDefinedUiPrefs(
@@ -200,7 +213,9 @@ function defaultPanelUiPrefs(): UiPrefs {
     defaultModelByAgent: {},
     defaultEffortByAgent: {},
     recentDirectoryLimit: 8,
+    historyDisplayLimit: 0,
     markdownStyle: 'editor',
+    shortcuts: defaultShortcutMap(),
   };
 }
 
@@ -225,6 +240,11 @@ function uiPrefsChanged(
   keys: readonly (keyof UiPrefs)[],
 ): boolean {
   return keys.some(key => !uiPrefValuesEqual(before[key], after[key]));
+}
+
+// [CUSTOM- 旧记录可能缺字段、拼写不规范或同键重复；下发给客户端/落盘前统一收敛。
+function withNormalizedShortcuts(prefs: UiPrefs): UiPrefs {
+  return { ...prefs, shortcuts: normalizeShortcutMap(prefs.shortcuts) };
 }
 
 // 草稿页的配置项/命令快照，按 agent 存。
@@ -416,6 +436,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   /** [CUSTOM- Main-scoped and shared prefs, cached from globalState. */
   private uiPrefs: UiPrefs | null = null;
   private sideUiPrefs: UiPrefs | null = null;
+  /** [CUSTOM- 最近一次快捷键写入被拒的原因；设置面板重发整表时随对应行返回。 */
+  private readonly shortcutWarnings: Map<ShortcutAction, string> = new Map();
   // [CUSTOM- agent → 它最后一次会话的配置项/命令快照（草稿页拿它渲染输入卡）。
   // 只由 rememberAgentOptions 写；**不是**可写状态——用户真正生效的那份永远在 SessionManager。
   private readonly draftOptions: Map<string, AgentOptionSnapshot> = new Map();
@@ -461,6 +483,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // Held so dispose() can UNREGISTER the listener; the session update handler
   // sweeps up whatever is left when it is disposed.
   private readonly sessionUpdateHandler: SessionUpdateHandler;
+  // [CUSTOM- 自定义模型列表写入串行化；回执随下一次 settings 广播回到发起面。
+  private readonly modelListWrites = new SerialTaskQueue();
+  private modelListSync: ModelListSync | null = null;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -1081,9 +1106,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         void this.handleSetRestorePref((msg as { value?: unknown }).value);
         return;
       case 'openHistorySession': {
-        void this.handleOpenHistorySession(
+        const sessionId = (msg as { sessionId?: string }).sessionId ?? '';
+        const tracked = (msg as { trackRestore?: boolean }).trackRestore === true;
+        const request = this.handleOpenHistorySession(
           (msg as { agentName?: string }).agentName ?? '',
-          (msg as { sessionId?: string }).sessionId ?? '',
+          sessionId,
           // [CUSTOM- The row carries the session's own directory;
           // see handleOpenHistorySession for why it matters.
           (msg as { cwd?: string }).cwd || undefined,
@@ -1095,6 +1122,17 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           // [CUSTOM- 恢复多个会话时：**别**关掉当前聚焦的那个（099 的替换语义不适用）。
           !!(msg as { keepOthers?: boolean }).keepOthers,
         );
+        if (tracked) {
+          void request.then(
+            ok => this.post({ type: 'restoreFinished', sessionId, ok }, from),
+            error => {
+              this.reportError(null, error);
+              this.post({ type: 'restoreFinished', sessionId, ok: false }, from);
+            },
+          );
+        } else {
+          void request.catch(error => this.reportError(null, error));
+        }
         return;
       }
 
@@ -1289,6 +1327,21 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       case 'setSetting': {
         const key = String((msg as { key?: unknown }).key ?? '');
         void this.handleSetSetting(key, (msg as { value?: unknown }).value).catch(e => this.reportError(null, e));
+        return;
+      }
+      // [CUSTOM- 自定义模型列表的 compare-and-set 写入（非会话作用域）。宿主按请求顺序
+      // 串行处理：基线不匹配就不写，回执里带上当前生效层，由客户端决定 Reload / Overwrite。
+      case 'setModelList': {
+        const rawId = (msg as { requestId?: unknown }).requestId;
+        const requestId = typeof rawId === 'string' ? rawId : '';
+        const baseline = (msg as { baseline?: unknown }).baseline;
+        if (!requestId || typeof baseline !== 'string') { return; }
+        this.handleSetModelList(
+          requestId,
+          baseline,
+          (msg as { value?: unknown }).value,
+          (msg as { force?: unknown }).force === true,
+        );
         return;
       }
       case 'settingAction': {
@@ -2455,7 +2508,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           continue;
         }
         this.markdownStreams.delete(streamKey);
-        const html = this.markdown.render(item.text);
+        const readLanguage = item.key
+          ? this.readLanguageForMarkdown(sessionId, item.entryId, item.text)
+          : undefined;
+        const html = this.markdown.render(item.text, { readLanguage });
         // [CUSTOM- A render only applies to the text it was made from.
         //
         // `item.text` is a snapshot of the record as it looked when the client asked;
@@ -2491,6 +2547,15 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     if (skipped > 0) {
       log(`${LOG_PREFIX}: skipped ${skipped} malformed markdown item(s) (rendered ${rendered.length})`);
     }
+  }
+
+  /** Trusted Read context comes from the host's own entry/tool stores, never the request. */
+  private readLanguageForMarkdown(sessionId: string, entryId: string, text: string): string | undefined {
+    const entry = this.transcripts.getEntry(sessionId, entryId);
+    if (!entry || entry.kind !== 'tool') { return undefined; }
+    const inv = this.tools.get(sessionId, entry.toolCallId);
+    if (!inv) { return undefined; }
+    return readLanguageForToolText(inv.kind, inv.locations, inv.content, text);
   }
 
   /**
@@ -3458,9 +3523,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // [CUSTOM- 恢复上次的会话：**保留**其它已打开的会话（099 的"替换语义"是给历史
     // 选择器用的 —— 那是导航，不该越点越多；恢复则相反，它就是要多开）。
     keepOthers = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const agent = this.panelAgent(agentName);
-    if (!agent || !sessionId) { return; }
+    if (!agent || !sessionId) { return false; }
     log(`${LOG_PREFIX}: opening history session ${sessionId} of ${agent}${cwd ? ` (cwd ${cwd})` : ''}`);
     try {
       // [CUSTOM- Picking from the history list SWITCHES the panel, it does
@@ -3502,8 +3567,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           'Resumed without replaying history (this agent does not support session/load).');
         if (entry) { this.post({ type: 'append', sessionId, entries: [entry] }); }
       }
+      return true;
     } catch (e) {
       this.reportError(null, e);
+      return false;
     }
   }
 
@@ -3527,6 +3594,17 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     }
     return clampNumber(value, ChatPanelHost.RECENT_DIRECTORIES_MIN,
       ChatPanelHost.RECENT_DIRECTORIES_MAX, ChatPanelHost.DEFAULT_RECENT_DIRECTORIES);
+  }
+
+  /** 历史抽屉最多显示的条数；0 = 不限（默认），空/非法也落回 0。 */
+  private static readonly HISTORY_DISPLAY_LIMIT_MAX = 10_000;
+
+  private static clampHistoryDisplayLimit(value: unknown): number {
+    if (typeof value !== 'number' && typeof value !== 'string') { return 0; }
+    if (typeof value === 'string' && value.trim() === '') { return 0; }
+    const n = Number(value);
+    if (!Number.isFinite(n)) { return 0; }
+    return Math.max(0, Math.min(ChatPanelHost.HISTORY_DISPLAY_LIMIT_MAX, Math.round(n)));
   }
 
   /** 回放预渲染 markdown 的每片条数（一次几百条会变成宿主线程上的长任务）。 */
@@ -4193,11 +4271,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    */
   private settingsItems(): SettingItem[] {
     const config = vscode.workspace.getConfiguration('vac');
-    const prefs = this.uiPrefs ?? { outlineMode: 'popup' as const, outlineWidth: 240 };
+    const prefs = this.uiPrefs ?? DEFAULT_UI_PREFS;
+    const shortcuts = normalizeShortcutMap(prefs.shortcuts);
     const customSource = this.settingsIO.resolve('vac.customModels', 'global');
-    const customModels = normalizeCustomModels(
-      customSource.layers.find(entry => entry.layer === customSource.effective)?.value,
-    );
+    const customValue = customSource.layers.find(entry => entry.layer === customSource.effective)?.value;
+    const customModels = normalizeCustomModels(customValue);
     // [CUSTOM- 从未写过时与客户端同一份默认（推理块 + 工具卡）；写过空数组就是"全不展开"。
     const kinds = prefs.autoExpandKinds === undefined
       ? ['thought', 'tool']
@@ -4272,7 +4350,28 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         min: ChatPanelHost.RECENT_DIRECTORIES_MIN,
         max: ChatPanelHost.RECENT_DIRECTORIES_MAX,
       },
+      {
+        key: 'panel.historyDisplayLimit', group: 'chat', type: 'number', scope: 'panel',
+        label: 'Sessions in history list',
+        description: `How many sessions the history drawer shows after filtering (0–${ChatPanelHost.HISTORY_DISPLAY_LIMIT_MAX}; 0 shows all).`,
+        value: ChatPanelHost.clampHistoryDisplayLimit(prefs.historyDisplayLimit),
+        min: 0,
+        max: ChatPanelHost.HISTORY_DISPLAY_LIMIT_MAX,
+        step: 1,
+      },
       ...this.defaultAgentItems(prefs),
+      ...SHORTCUT_ACTIONS.map((action): SettingItem => ({
+        key: 'panel.shortcut.' + action,
+        group: 'shortcuts',
+        type: 'shortcut',
+        scope: 'panel',
+        label: SHORTCUT_ACTION_LABELS[action],
+        description: 'Use Disable to remove the binding.',
+        value: shortcuts[action],
+        ...(this.shortcutWarnings.has(action)
+          ? { warning: this.shortcutWarnings.get(action) }
+          : {}),
+      })),
       {
         key: 'vac.autoApprovePermissions', group: 'chat', type: 'select',
         label: 'Permission requests',
@@ -4358,6 +4457,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         label: 'Custom models',
         description: 'Injected into the agent as extra model choices (per agent support). Stored in the cross-IDE global config unless overridden here.',
         value: customModels,
+        modelBaseline: modelListBaseline(customSource.effective, customSource.writeTarget, customValue),
+        ...(this.modelListSync ? { modelSync: this.modelListSync } : {}),
         ...this.configScope('vac.customModels', 'global', customSource),
       },
       {
@@ -4513,6 +4614,101 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     await this.settingsIO.write(key, value, source.writeTarget);
   }
 
+  /**
+   * [CUSTOM- 自定义模型列表的 compare-and-set 写入。
+   *
+   * · 基线 = 设置面板打开编辑器时拿到的 `modelBaseline`（生效层 + 写目标 + 值签名）。
+   * · 写入前重新解析生效层；其他面 / 外部 settings.json 已改过则拒绝，并把当前值回给
+   *   发起面（客户端保留本地草稿，明确让用户选 Reload / Overwrite）。
+   * · `force` 只表示用户已确认 Overwrite，**不跳过** CAS：确认后若其他面又写入，
+   *   仍按最新生效层重新报冲突，避免一次确认静默覆盖更新的数据。
+   * · 所有写入经 `modelListWrites` 串行，连续拖拽提交不会互相把基线判冲突；单条失败
+   *   只回自己的 error，不阻塞后续。
+   */
+  private handleSetModelList(requestId: string, baseline: string, value: unknown, force: boolean): void {
+    void this.modelListWrites.enqueue(async () => {
+      const source = this.settingsIO.resolve('vac.customModels', 'global');
+      const currentValue = source.layers.find(entry => entry.layer === source.effective)?.value;
+      const currentBaseline = modelListBaseline(source.effective, source.writeTarget, currentValue);
+      if (!modelListBaselineMatches(baseline, source.effective, source.writeTarget, currentValue)) {
+        this.modelListSync = {
+          requestId,
+          status: 'conflict',
+          models: normalizeCustomModels(currentValue),
+          baseline: currentBaseline,
+          message: force
+            ? 'Custom models changed again after your overwrite confirmation.'
+            : 'Custom models changed elsewhere.',
+        };
+        this.postCustomModels();
+        this.postSettings();
+        return;
+      }
+      const next = normalizeCustomModels(value);
+      const expectedSignature = customModelSignature(next);
+      try {
+        await this.settingsIO.write('vac.customModels', next, source.writeTarget);
+      } catch (e) {
+        // 包含 SettingScope 对"workspace 目标但没有打开文件夹"的拒绝：不假装保存成功。
+        this.modelListSync = { requestId, status: 'error', message: errorDetail(e) };
+        this.postSettings();
+        return;
+      }
+      const savedSource = this.settingsIO.resolve('vac.customModels', 'global');
+      const savedValue = savedSource.layers.find(entry => entry.layer === savedSource.effective)?.value;
+      const writtenValue = savedSource.layers.find(entry => entry.layer === source.writeTarget)?.value;
+      const saved = normalizeCustomModels(savedValue);
+      // 写后核对：只有"写进的层"和"当前生效值"都等于本次期望，才算保存成功。
+      // 不一致（被降级到别的层 / 被外部改回 / 写后又被覆盖）返回 conflict 并附最新值，
+      // 客户端可以 Reload，而不是反复自动重试形成无限循环。
+      if (customModelSignature(writtenValue) !== expectedSignature
+        || customModelSignature(savedValue) !== expectedSignature) {
+        this.modelListSync = {
+          requestId,
+          status: 'conflict',
+          models: saved,
+          baseline: modelListBaseline(savedSource.effective, savedSource.writeTarget, savedValue),
+          message: 'Custom models were changed by another writer before the save could take effect.',
+        };
+        this.postCustomModels();
+        this.postSettings();
+        return;
+      }
+      this.modelListSync = {
+        requestId,
+        status: 'saved',
+        models: saved,
+        baseline: modelListBaseline(savedSource.effective, savedSource.writeTarget, savedValue),
+      };
+      // 先让输入卡选择器立刻换顺序/别名，再回设置面板（回执随 settings 下发）。
+      this.postCustomModels();
+      this.postSettings();
+    }).catch(e => {
+      // 队列本身不该把 error 吞掉：留日志，下一轮提交仍继续；同时必须回执，
+      // 否则客户端会永远停在 in-flight（连关闭编辑器都会被拒绝）。
+      this.modelListSync = { requestId, status: 'error', message: errorDetail(e) };
+      log(`${LOG_PREFIX}: model list write failed: ${errorDetail(e)}`);
+      this.postSettings();
+    });
+  }
+
+  /** [CUSTOM- 设置面板的快捷键写入：非法值/重复键不落盘，只挂一条 UI 可见的警告。 */
+  private handleShortcutSetting(action: string, value: unknown): void {
+    if (!isShortcutAction(action)) {
+      log(`${LOG_PREFIX}: unknown shortcut action ${action}`);
+      return;
+    }
+    const result = applyShortcutSetting(this.projectUiPrefs('main').shortcuts, action, value);
+    this.shortcutWarnings.clear();
+    if (!result.ok) {
+      this.shortcutWarnings.set(action, result.reason === 'duplicate'
+        ? `"${result.binding}" is already used by "${SHORTCUT_ACTION_LABELS[result.conflictAction]}". Choose another shortcut.`
+        : 'Use at least one modifier: Ctrl, Alt or Meta (Shift may be combined), plus a letter, digit, arrow, Home, End, PageUp or PageDown key.');
+      return;
+    }
+    this.patchUiPrefs({ shortcuts: result.shortcuts });
+  }
+
   private async handleSetSetting(key: string, value: unknown): Promise<void> {
     switch (key) {
       case 'vac.autoConnectOnOpen':
@@ -4570,13 +4766,23 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           recentDirectoryLimit: ChatPanelHost.clampRecentDirectories(value),
         });
         break;
+      case 'panel.historyDisplayLimit':
+        this.patchUiPrefs({
+          historyDisplayLimit: ChatPanelHost.clampHistoryDisplayLimit(value),
+        });
+        break;
       case 'panel.markdownStyle':
         this.patchUiPrefs({ markdownStyle: resolveMarkdownStyle(value) });
         break;
-      case 'vac.customModels':
-        await this.writeConfigSetting('vac.customModels', normalizeCustomModels(value), 'global');
-        this.postCustomModels();
+      case 'vac.customModels': {
+        // [CUSTOM- 旧调用口（测试 / 兼容）：同样进串行队列，避免与 setModelList 交错。
+        const next = normalizeCustomModels(value);
+        await this.modelListWrites.enqueue(async () => {
+          await this.writeConfigSetting('vac.customModels', next, 'global');
+          this.postCustomModels();
+        });
         break;
+      }
       case 'vac.agents':
         await this.writeConfigSetting('vac.agents', sanitizeAgentsConfig(value), 'ide');
         break;
@@ -4592,6 +4798,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         break;
       }
       default:
+        // [CUSTOM- 快捷键：与模型默认值同属 `panel.*` 族，但动作是固定白名单。
+        if (key.startsWith('panel.shortcut.')) {
+          this.handleShortcutSetting(key.slice('panel.shortcut.'.length), value);
+          break;
+        }
         // [CUSTOM- 每个 agent 的默认模型/默认推理强度走同一族 key
         // （`panel.defaultModel.<agent>` / `panel.defaultEffort.<agent>`）。
         if (key.startsWith('panel.defaultModel.')) {
@@ -4618,10 +4829,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   private projectUiPrefs(scope: UiPrefsScope): UiPrefs {
-    if (scope === 'main') { return { ...(this.uiPrefs ?? DEFAULT_UI_PREFS) }; }
+    if (scope === 'main') { return withNormalizedShortcuts({ ...(this.uiPrefs ?? DEFAULT_UI_PREFS) }); }
     const projected = scopedUiPrefsOf(this.sideUiPrefs ?? DEFAULT_UI_PREFS);
     copyDefinedUiPrefs(projected, this.uiPrefs, GLOBAL_UI_PREF_KEYS);
-    return projected;
+    return withNormalizedShortcuts(projected);
   }
 
   private commitUiPrefs(scope: UiPrefsScope, next: UiPrefs): void {
@@ -4690,19 +4901,29 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     if (action === 'removeSettingLayer' || action === 'makeSettingGlobal') {
       const allowed = !!key && (GLOBAL_SETTING_KEYS.has(key) || CONFIG_SETTING_KEYS.has(key));
       if (!key || !allowed) { return; }
-      if (action === 'removeSettingLayer') {
-        if (!layer) { return; }
-        await this.settingsIO.clear(key, layer);
+      if (action === 'removeSettingLayer' && !layer) { return; }
+      if (action === 'makeSettingGlobal' && !GLOBAL_SETTING_KEYS.has(key)) { return; }
+      const apply = async (): Promise<void> => {
+        if (action === 'removeSettingLayer') {
+          await this.settingsIO.clear(key, layer!);
+        } else {
+          const source = this.settingsIO.resolve(key, 'global');
+          const value = source.layers.find(entry => entry.layer === source.effective)?.value;
+          await this.settingsIO.write(key, value, 'global');
+          if (source.effective === 'workspace') { await this.settingsIO.clear(key, 'workspace'); }
+          if (source.effective === 'user') { await this.settingsIO.clear(key, 'user'); }
+        }
+        if (key === 'vac.customModels') { this.postCustomModels(); }
+        this.postSettings();
+      };
+      // [CUSTOM- vac.customModels 的层操作与 CAS 写入共用一条队列：否则 Inspect 的
+      // Remove / Make global 可能插到保存中间，把刚写好的层又改掉。队列任务不回调
+      // handleSettingAction，因此不会死锁。
+      if (key === 'vac.customModels') {
+        await this.modelListWrites.enqueue(apply);
       } else {
-        if (!GLOBAL_SETTING_KEYS.has(key)) { return; }
-        const source = this.settingsIO.resolve(key, 'global');
-        const value = source.layers.find(entry => entry.layer === source.effective)?.value;
-        await this.settingsIO.write(key, value, 'global');
-        if (source.effective === 'workspace') { await this.settingsIO.clear(key, 'workspace'); }
-        if (source.effective === 'user') { await this.settingsIO.clear(key, 'user'); }
+        await apply();
       }
-      if (key === 'vac.customModels') { this.postCustomModels(); }
-      this.postSettings();
       return;
     }
     if (action === 'openAgentCache') {
@@ -4736,6 +4957,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     }
     if (action === 'resetPanelPrefs') {
       // [CUSTOM- 一键恢复 Main、Side 与共享 UI 默认值；客户端需要显式字段覆盖旧状态。
+      this.shortcutWarnings.clear();
       const defaults = defaultPanelUiPrefs();
       this.uiPrefs = defaults;
       this.sideUiPrefs = scopedUiPrefsOf(defaults);
@@ -4795,10 +5017,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     const recoverable = side ? [] : this.recoverableSessions();
     const sessions = side ? this.buildSideSummaries() : this.buildSummaries();
     // Restore preferences before boot because scroll restoration can cancel Tail and persist immediately.
-    const hasUiPrefs = side ? !!(this.uiPrefs || this.sideUiPrefs) : !!this.uiPrefs;
-    if (hasUiPrefs) {
-      this.post({ type: 'uiPrefs', ...this.projectUiPrefs(side ? 'side' : 'main') }, to);
-    }
+    // [CUSTOM- 快捷键是全局字段：即使没有旧记录也先下发一份完整、规范化后的映射。
+    this.post({ type: 'uiPrefs', ...this.projectUiPrefs(side ? 'side' : 'main') }, to);
     this.post({
       type: 'boot',
       focused,

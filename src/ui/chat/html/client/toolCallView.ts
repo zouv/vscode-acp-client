@@ -62,8 +62,10 @@ export const toolCallViewClient = `
    * itself, or the inside of its fence when the whole text is a single fence whose
    * content is a markdown table. See the block comment above.
    */
-  function toolMarkdownSource(text) {
+  function toolMarkdownSource(text, tool) {
     var value = String(text === null || text === undefined ? '' : text);
+    // Read text must remain byte-identical to the host-owned content for language inference.
+    if (tool && tool.kind === 'read') { return value; }
     var lines = value.trim().split('\\n');
     if (lines.length < 3) { return value; }
     // First line opens a fence, last line is exactly the closing fence.
@@ -256,6 +258,8 @@ export const toolCallViewClient = `
   // 工具输出重复渲染；大会话回放里几百条 item 每帧重发一次是那条"最后一条不渲染"
   // 链路上的放大器。key 里带文本指纹 ⇒ 文本一变就是另一个 key，天然允许重问。
   var mdInFlight = {};
+  // [CUSTOM- slot -> current key; an older reply must never repaint a newer node.
+  var mdActive = {};
 
   /**
    * [CUSTOM- The round-trip key must identify the TEXT, not just the slot.
@@ -281,9 +285,28 @@ export const toolCallViewClient = `
     return fp === null ? null : slot + '#' + fp;
   }
 
+  /** Salt the cache key with all host-published Read paths so late locations invalidate it. */
+  function readContextKey(tool) {
+    if (!tool || tool.kind !== 'read') { return ''; }
+    var locations = tool.locations || [];
+    if (locations.length === 0) { return ''; }
+    var parts = [];
+    for (var i = 0; i < locations.length; i++) {
+      var fp = fingerprintText(locations[i].path || '');
+      if (fp === null) { return ''; }
+      parts.push(fp);
+    }
+    return '@read:' + parts.join(',');
+  }
+
   /** Re-render this host from the cache, or queue it for the next round-trip. */
-  function markdownText(host, key, entryId, text) {
-    var cacheKey = markdownKey(key, text);
+  function markdownText(host, slot, entryId, text, contextKey) {
+    var cacheKey = markdownKey(slot + (contextKey || ''), text);
+    var previous = mdActive[slot];
+    if (previous && previous !== cacheKey && mdPending[previous]) {
+      mdPending[previous].host = null;
+    }
+    mdActive[slot] = cacheKey;
     if (cacheKey === null) {
       host.textContent = text;
       return;
@@ -395,6 +418,7 @@ export const toolCallViewClient = `
     mdCache = {};
     mdPending = {};
     mdInFlight = {};
+    mdActive = {};
   }
 
   function renderContentItem(item, key, entryId, tool) {
@@ -427,7 +451,7 @@ export const toolCallViewClient = `
       // [CUSTOM- …and a console fence that holds a markdown table is unwrapped
       // first, so the table renders as a table instead of as literal pipes in a code block.
       markdownText(textHost, (entryId || '') + '#' + (key || ''), entryId || '',
-        toolMarkdownSource(block.text));
+        toolMarkdownSource(block.text, tool), readContextKey(tool));
       return textHost;
     }
     if (block.type === 'image') {
@@ -614,7 +638,7 @@ export const toolCallViewClient = `
     if (!hasVisibleItem(items) && tool.output) {
       if (hasTableRow(tool.output)) {
         var rawHost = el('div', 'tool-text md');
-        markdownText(rawHost, (entryId || '') + '#raw', entryId || '', tool.output);
+        markdownText(rawHost, (entryId || '') + '#raw', entryId || '', tool.output, readContextKey(tool));
         outputs.push(rawHost);
       } else {
         outputs.push(el('pre', 'tool-raw', tool.output));
@@ -730,6 +754,8 @@ export const toolCallViewClient = `
     // [CUSTOM- The leading 'cmd:' is now a HASH, not a length —
     // see fingerprintText for why a length is not a safe change signal.
     var parts = ['cmd:' + command];
+    // [CUSTOM- The body's Read markdown key now depends on kind; INV-H applies.
+    parts.push('kind:' + (tool.kind || ''));
     // [CUSTOM- INV-H: every field the body RENDERS must be in here, or a
     // change to it leaves the card permanently stale. The raw-output fallback is one of
     // them; whether it is used depends on the items, which are covered below.
@@ -741,7 +767,9 @@ export const toolCallViewClient = `
     parts.push('sub:' + ((tool.subagent && tool.subagent.type) || ''));
     var locations = tool.locations || [];
     for (var i = 0; i < locations.length; i++) {
-      parts.push('loc:' + locations[i].path + ':' + (locations[i].line || 0));
+      var locFp = fingerprintText(locations[i].path);
+      if (locFp === null) { return null; }
+      parts.push('loc:' + locFp + ':' + (locations[i].line || 0));
     }
     var items = tool.items || [];
     for (var j = 0; j < items.length; j++) {

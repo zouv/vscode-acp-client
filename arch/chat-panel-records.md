@@ -644,6 +644,8 @@ applyAction 摘行换标签且不重置过滤）；真 Chromium 的 `#historyrow
 （>100KB）回退为转义原文。流式 token 渲染与完整渲染共用同一 renderer，`MarkdownStream.spec.ts`
 的逐字符一致性测试继续兜住两条路径。
 
+**Read 文件补全**：`ChatPanelHost.readLanguageForMarkdown` 从会话的权威 ToolInvocation 验证 read / 单一 location / 原文后，用 `content/readHighlight.ts` 按后缀推断；`SafeMarkdown.renderReadCode` 仅处理整个无语言围栏，行号/Tab 拆分后整块高亮再还原，复制文本不变；`toolCallView.readContextKey` 随路径变化重请求，`mdActive` 防旧回包盖新节点。`styles.ts` 显式清 `pre code` 的 webview 默认背景，解决逐行黑块；`.tool-text.md` 回到正常空白排版。
+
 **Mermaid 是客户端的事**：宿主只把 fence 渲染成 `<pre data-lang="mermaid" data-mermaid="1">`；
 `client/mermaid.ts` 在记录定稿后把它包成 `.mermaid-block`（toolbar + chart + source + error）。
 库是 `@mermaid-js/tiny`，构建时复制到 `dist/media/mermaid.tiny.js`，通过 `body[data-mermaid-src]`

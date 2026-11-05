@@ -36,6 +36,16 @@ export const tabsClient = `
   // [CUSTOM- Set when a tab was moved to by ARROW KEY, so the next
   // render can put DOM focus back on it (see setFocus).
   var tabFocusExpected = false;
+  // [CUSTOM- 快捷键懒恢复的**全局单飞**闸门：任何一个恢复在途时，activateRelative
+  // 一律 no-op。否则连续按键会让多个 load 晚到、依次把会话焦点抢回去。点击 tab 不走这里。
+  // 宿主无论成败都会回 'restoreFinished'；pending 不设超时，避免慢加载时重复请求。
+  var restorePending = {};
+  // [CUSTOM- 快捷键从 tab 栏发起懒恢复时，真正的切换要等 load 回来；
+  // 记住"恢复完成后把焦点还给新的活动 tab"，但用户若已把焦点移进输入框就不抢。
+  // 意图从请求起一直保留到完成/取消；只有成功回执后才启动独立短超时清理。
+  var RESTORE_FOCUS_INTENT_MS = 5000;
+  var restoreFocusAfterId = {};
+  var restoreFocusTimers = {};
 
   /**
    * [CUSTOM- Ordered tab models: real sessions first, then drafts.
@@ -83,7 +93,7 @@ export const tabsClient = `
       : model.id === state.focusedDraftId;
   }
 
-  function activateModel(model) {
+  function activateModel(model, trackRestore) {
     if (model.kind === 'draft') {
       if (NS.draft) { NS.draft.focus(model.id); }
       return;
@@ -92,14 +102,17 @@ export const tabsClient = `
     // 'keepOthers: true' —— 恢复是"多开"，不该像历史选择器那样关掉当前聚焦的那个（099）。
     if (model.kind === 'restore') {
       var r = model.restore || {};
-      NS.bridge.post({
+      var open = {
         type: 'openHistorySession',
         agentName: r.agentName,
         sessionId: model.id,
         cwd: r.cwd,
         title: r.title,
         keepOthers: true
-      });
+      };
+      // 只有快捷键路径要求宿主回 'restoreFinished'；手动点击维持原协议。
+      if (trackRestore) { open.trackRestore = true; }
+      NS.bridge.post(open);
       return;
     }
     if (model.id !== state.focusedId) {
@@ -113,6 +126,129 @@ export const tabsClient = `
         sessionId: model.id
       });
     }
+  }
+
+  function clearRestoreFocusIntent(id) {
+    if (!id) { return; }
+    delete restoreFocusAfterId[id];
+    if (Object.prototype.hasOwnProperty.call(restoreFocusTimers, id)) {
+      if (window.clearTimeout) { window.clearTimeout(restoreFocusTimers[id]); }
+      delete restoreFocusTimers[id];
+    }
+  }
+
+  /**
+   * 'keepFocusIntent'：恢复成功的路径里 setSessions 先到、focus 后到，
+   * 此时不能把"完成后再还焦点"的意图一起丢掉（setFocus 会消费它）。
+   */
+  function releaseRestore(id, keepFocusIntent) {
+    if (!id) { return; }
+    delete restorePending[id];
+    if (!keepFocusIntent) { clearRestoreFocusIntent(id); }
+  }
+
+  /** 焦点在 tab 栏内？（快捷键发起时用它决定切换后要不要把焦点还给新活动 tab。） */
+  function focusInTabs() {
+    if (!tabsEl) { return false; }
+    var active = document.activeElement;
+    if (!active) { return false; }
+    return active === tabsEl || (tabsEl.contains ? tabsEl.contains(active) : false);
+  }
+
+  /** 恢复完成时：焦点仍在 tab 栏、或已掉到 body（DOM 重建）才还焦点；在输入框里不抢。 */
+  function focusAllowedAfterRestore() {
+    var active = document.activeElement;
+    if (!active) { return true; }
+    if (active === document.body) { return true; }
+    return focusInTabs();
+  }
+
+  function markRestoreFocusIntent(id) {
+    if (!id) { return; }
+    clearRestoreFocusIntent(id);
+    // [CUSTOM- 意图从请求发出起一直保留到恢复完成/取消：真正 load 可能远超任何固定
+    // 短窗口，过早过期会让慢恢复完成时焦点掉到 body。清理计时器只在成功回执后启动。
+    restoreFocusAfterId[id] = true;
+  }
+
+  function armRestoreFocusIntentTimeout(id) {
+    if (!id || !window.setTimeout) { return; }
+    if (Object.prototype.hasOwnProperty.call(restoreFocusTimers, id)) {
+      if (window.clearTimeout) { window.clearTimeout(restoreFocusTimers[id]); }
+      delete restoreFocusTimers[id];
+    }
+    restoreFocusTimers[id] = window.setTimeout(function () { clearRestoreFocusIntent(id); }, RESTORE_FOCUS_INTENT_MS);
+  }
+
+  function consumeRestoreFocusIntent(id) {
+    if (!id || !Object.prototype.hasOwnProperty.call(restoreFocusAfterId, id)) { return false; }
+    clearRestoreFocusIntent(id);
+    return true;
+  }
+
+  function hasPendingRestore() {
+    for (var id in restorePending) {
+      if (Object.prototype.hasOwnProperty.call(restorePending, id)) { return true; }
+    }
+    return false;
+  }
+
+  /** 标记一次恢复请求；已有在途请求时返回 false（调用方跳过重复发送）。 */
+  function holdRestore(id) {
+    if (Object.prototype.hasOwnProperty.call(restorePending, id)) { return false; }
+    restorePending[id] = true;
+    return true;
+  }
+
+  /**
+   * [CUSTOM- 快捷键恢复的完结通知（宿主只对带 trackRestore 的请求回这条，且保证必回）。
+   * 失败立刻解锁并清焦点意图，下一次快捷键可立即重试；成功只解 pending，把"还焦点"
+   * 意图留给紧随其后的 focus 消息消费。pending 不靠超时解锁，避免真实 load 超时后重复请求。
+   */
+  function finishRestore(sessionId, ok) {
+    if (!sessionId) { return false; }
+    if (ok === false) {
+      releaseRestore(sessionId);
+      return false;
+    }
+    releaseRestore(sessionId, true);
+    // 成功回执早于 focus 时才开始清理窗口；focus 已到则意图早被消费、不会启动。
+    if (Object.prototype.hasOwnProperty.call(restoreFocusAfterId, sessionId)) {
+      armRestoreFocusIntentTimeout(sessionId);
+    }
+    return true;
+  }
+
+  /**
+   * [CUSTOM- 相对当前活动 tab 前进 / 后退，首尾循环。快捷键与未来入口共用。
+   *
+   * 顺序就是 tabModels() 的顺序（live → 待恢复 → draft；Side 面板内是 Side 顺序）。
+   * 懒恢复是异步的：**只要还有一个在途，整个快捷键路径就 no-op** —— 不允许越过它
+   * 去加载别的恢复，也不允许切到别的会话，避免晚到的 load 依次抢回焦点。
+   * 成功/失败由 focus 或 restoreFinished 解锁；输入框和 tab 栏各自保留原焦点。
+   */
+  function activateRelative(direction) {
+    var step = direction === -1 ? -1 : (direction === 1 ? 1 : 0);
+    if (!step || hasPendingRestore()) { return false; }
+    var models = tabModels();
+    if (models.length < 2) { return false; }
+    var base = -1;
+    for (var i = 0; i < models.length; i++) {
+      if (isActiveModel(models[i])) { base = i; break; }
+    }
+    if (base < 0) { base = step > 0 ? -1 : 0; }
+    var next = models[(base + step + models.length) % models.length];
+    if (isActiveModel(next)) { return false; }
+    var fromTabs = focusInTabs();
+    if (next.kind === 'restore') {
+      if (!holdRestore(next.id)) { return false; }
+      if (fromTabs) { markRestoreFocusIntent(next.id); }
+      activateModel(next, true);
+      return true;
+    }
+    if (fromTabs) { tabFocusExpected = true; }
+    activateModel(next);
+    return true;
   }
 
   function closeModel(model, anchor, event) {
@@ -259,6 +395,9 @@ export const tabsClient = `
       if (index < 0) { return; }
       var models = tabModels();
       if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+        // 带修饰键的箭头留给 document 级快捷键（例如 Alt+Arrow 导航），
+        // 这里既不消费也不切换，让它继续冒泡。
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) { return; }
         event.preventDefault();
         if (models.length < 2) { return; }
         var next = (index + (event.key === 'ArrowRight' ? 1 : -1) + models.length) % models.length;
@@ -367,7 +506,8 @@ export const tabsClient = `
   function modelIndexOf(node) {
     while (node && node !== tabsEl) {
       if (node.getAttribute) {
-        var id = node.getAttribute('data-session-id') || node.getAttribute('data-draft-id');
+        var id = node.getAttribute('data-session-id') || node.getAttribute('data-draft-id')
+          || node.getAttribute('data-restore-id');
         if (id) {
           var models = tabModels();
           for (var i = 0; i < models.length; i++) {
@@ -852,26 +992,45 @@ export const tabsClient = `
   }
 
   function setSessions(sessions) {
+    // [CUSTOM- 重建 tab 条会移除当前聚焦的节点；焦点若在 tab 栏内，重绘后要还回去。
+    var keepTabFocus = focusInTabs();
     state.sessions = sessions || [];
     // [CUSTOM- 某个待恢复的会话已经活了（用户点了它、或它被别处 load 回来）⇒
     // 真 tab 顶替本地那条，别两处并存。
     var live = {};
     var i;
-    for (i = 0; i < state.sessions.length; i++) { live[state.sessions[i].sessionId] = true; }
+    for (i = 0; i < state.sessions.length; i++) {
+      live[state.sessions[i].sessionId] = true;
+      // [CUSTOM- 只收割"会话已活"这一事实，**不解 pending**：Sessions 注册可能早于
+      // 真正的 focus / load 完成，此时解除单飞会让下一次按键发出重复请求。
+      // pending 只由真正的 focus 或 restoreFinished 释放；focus 意图在 setFocus 消费。
+    }
     var kept = [];
     for (i = 0; i < restoring.length; i++) { if (!live[restoring[i].sessionId]) { kept.push(restoring[i]); } }
     restoring = kept;
+    if (keepTabFocus) { tabFocusExpected = true; }
     renderTabs();
     renderAgentBar();
+    if (keepTabFocus) { restoreFocusIfExpected(); }
   }
 
   /** [CUSTOM- 建一批"待恢复"的本地 tab（点 Restore 时由 boot 调）。 */
   function setRestoring(list) {
     restoring = (list || []).slice();
+    // 已经不在列表里的（被关掉 / 宿主放弃）不再锁着，下一次还能重新请求。
+    var known = {};
+    var i;
+    for (i = 0; i < restoring.length; i++) { known[restoring[i].sessionId] = true; }
+    var held = [];
+    for (var id in restorePending) {
+      if (Object.prototype.hasOwnProperty.call(restorePending, id) && !known[id]) { held.push(id); }
+    }
+    for (i = 0; i < held.length; i++) { releaseRestore(held[i]); }
     renderTabs();
   }
 
   function dropRestoring(sessionId) {
+    releaseRestore(sessionId);
     var kept = [];
     for (var i = 0; i < restoring.length; i++) {
       if (restoring[i].sessionId !== sessionId) { kept.push(restoring[i]); }
@@ -881,6 +1040,13 @@ export const tabsClient = `
   }
 
   function setFocus(summary) {
+    // [CUSTOM- 宿主对同一会话的 focus 回包会再次触发本函数并重绘 tab 条；
+    // 若此刻焦点在 tab 栏内（例如快捷键刚把焦点放上去），重绘后必须还回去，
+    // 否则焦点掉到 body，下一次快捷键/键盘导航就断了。
+    var keepTabFocus = focusInTabs();
+    var refocusAfterRestore = summary ? consumeRestoreFocusIntent(summary.sessionId) : false;
+    if (summary) { releaseRestore(summary.sessionId); }
+    if (keepTabFocus || (refocusAfterRestore && focusAllowedAfterRestore())) { tabFocusExpected = true; }
     state.focusedId = summary ? summary.sessionId : null;
     state.focusedAgent = summary ? summary.agentName : null;
     if (summary) { state.focusedDraftId = null; }
@@ -970,7 +1136,11 @@ export const tabsClient = `
     // [CUSTOM- 会话 tab 右键菜单的 Close 入口（见 contextMenu.itemsFor）。
     closeTabNode: closeTabNode,
     // [CUSTOM- 会话 tab 右键菜单的 Rename 入口（面板内输入浮层）。
-    startRename: startRename
+    startRename: startRename,
+    // [CUSTOM- 前/后一个 tab（-1 / +1，首尾循环），快捷键入口。
+    activateRelative: activateRelative,
+    // [CUSTOM- 快捷键懒恢复的完结结果（宿主 'restoreFinished' 消息消费）。
+    finishRestore: finishRestore
   };
 })(window.__vac = window.__vac || {});
 `;

@@ -5,40 +5,15 @@
 // name/description 供客户端显示名映射用（composer.optionLabel），不在 _meta.extraModels 里。
 import { resolveSetting } from './SettingScope';
 import type { SettingSource } from './GlobalSettings';
+import { normalizeCustomModels } from './CustomModelList';
+import type { CustomModel } from './CustomModelList';
 
-/** A user-defined model alias from `vac.customModels` (settings.json). */
-export interface CustomModel {
-  /** The model id injected into the agent via `_meta.extraModels` and sent on selection. */
-  modelId: string;
-  /** Display name; falls back to `modelId` when absent. */
-  name?: string;
-  /** Optional hover text (currently unused). */
-  description?: string;
-}
+export { customModelSignature, normalizeCustomModels } from './CustomModelList';
+export type { CustomModel } from './CustomModelList';
 
 export interface CustomModelsResolution {
   models: CustomModel[];
   source: SettingSource;
-}
-
-/**
- * Normalise the raw `vac.customModels` value: drop entries without a `modelId`,
- * fall `name` back to `modelId`, drop non-string `description`.
- */
-export function normalizeCustomModels(raw: unknown): CustomModel[] {
-  const out: CustomModel[] = [];
-  for (const item of Array.isArray(raw) ? raw : []) {
-    if (!item || typeof item !== 'object') { continue; }
-    const entry = item as { modelId?: unknown; name?: unknown; description?: unknown };
-    const modelId = typeof entry.modelId === 'string' ? entry.modelId.trim() : '';
-    if (!modelId) { continue; }
-    out.push({
-      modelId,
-      name: typeof entry.name === 'string' && entry.name.trim() ? entry.name : modelId,
-      description: typeof entry.description === 'string' ? entry.description : undefined,
-    });
-  }
-  return out;
 }
 
 /** Read the effective custom models (workspace > user > global > built-in default). */

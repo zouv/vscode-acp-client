@@ -565,6 +565,17 @@ export const bootClient = `
       NS.transcriptView.setSessionId(message.sessionId);
     }
 
+    // [CUSTOM- 快捷键懒恢复的完结结果（宿主只对带 trackRestore 的请求回这条）。
+    // 放在 switch 之前：失败的会话可能从未注册，不能依赖任何会话作用域守卫。
+    // 失败立刻解锁；成功只解 pending，还焦点留给紧随其后的 'focus'。
+    if (message.type === 'restoreFinished') {
+      var restored = message;
+      if (restored.sessionId && NS.tabs && NS.tabs.finishRestore) {
+        NS.tabs.finishRestore(restored.sessionId, restored.ok !== false);
+      }
+      return;
+    }
+
     switch (message.type) {
       case 'boot':
         // [CUSTOM- 上次开着的会话 + 恢复策略（都在 boot 上，定向发）。
@@ -611,6 +622,9 @@ export const bootClient = `
         // [CUSTOM- 子代理分组、发送快捷键、输入卡尺寸（2026-10-21 第二批设置）。
         if (typeof message.flatTools === 'boolean') { applyGrouping(message.flatTools); }
         if (NS.composer && NS.composer.applyUiPrefs) { NS.composer.applyUiPrefs(message); }
+        if (NS.shortcuts) { NS.shortcuts.applyPrefs(message); }
+        // [CUSTOM- 历史抽屉的显示上限：设置面板改动后同步刷新已打开的列表。
+        if (NS.sessionMenu && NS.sessionMenu.applyPrefs) { NS.sessionMenu.applyPrefs(message); }
         applyMarkdownStyle(message.markdownStyle);
         break;
 
@@ -1157,6 +1171,7 @@ export const bootClient = `
     if (NS.autoExpand) { NS.autoExpand.init(); }
     // [CUSTOM- 设置面板：Tab 栏右侧齿轮 + 遮罩/导航/行渲染。
     if (NS.settingsPanel) { NS.settingsPanel.init(); }
+    if (NS.shortcuts) { NS.shortcuts.init(); }
     // [CUSTOM- 2026-10-29：document 级 Escape 放在 init 末尾。浮层（popover/outline/
     // contextMenu/sessionMenu/settingsPanel/elicitation/lightbox）都在 capture 阶段或
     // 用 preventDefault 先消费；composer 只处理"没人消费的 Escape"。

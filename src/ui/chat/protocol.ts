@@ -12,6 +12,7 @@ import type { SettingScope, SettingSource } from '../../config/GlobalSettings';
 import type { EntryPatch, TranscriptEntry, TranscriptSnapshot } from './transcript/types';
 import type { ToolCallView } from './content/toolCalls';
 import type { HistoryDirOption } from './historyDirs';
+import type { ShortcutMap } from './shortcuts';
 
 /** Why a session left the live set (mirrors SessionManager.SessionCloseReason). */
 export type CloseReason = 'user' | 'agent-disconnected';
@@ -93,8 +94,8 @@ export interface SessionMeta {
    */
   additionalDirectories?: string[];
   /**
-   * [CUSTOM- 全局共享的自定义模型别名（`vac.customModels`）。随 meta/focus/boot 下发，
-   * 客户端只在 model 下拉里追加一个「自定义」分组展示，不与 agent 的 configOptions 合并。
+   * [CUSTOM- 自定义模型别名（`vac.customModels`）随 meta/focus/boot 下发；客户端仅对 agent
+   * 已提供的 model 选项覆盖名称与描述，并按配置排序，不创建额外候选。
    */
   customModels?: CustomModel[];
 }
@@ -181,6 +182,9 @@ export interface UiPrefs {
   defaultEffortByAgent?: Record<string, string>;
   // [CUSTOM- 目录选择抽屉里「Recently used」最多列几条（0–30，默认 8；0 = 不显示该分组）。
   recentDirectoryLimit?: number;
+  // [CUSTOM- 历史会话抽屉最多显示几条（0–10000，默认 0 = 不限）。只截断**显示**，
+  // 目录/搜索筛选后的全部已载数据仍留在 `lastMessage.sessions`，改上限即时重绘。
+  historyDisplayLimit?: number;
   // [CUSTOM- 「Tail」（消息面板自动追尾，2026-10-28）：与 Times 同一形态 ——
   // tailBySession 记用户在那个会话里最后的开关状态，tailDefault 是没有记录的会话的默认值
   // （默认 **true**：不开按钮时也照旧自动跟到最后一条）。滚轮/滚动条一旦改变用户阅读进度，
@@ -189,14 +193,31 @@ export interface UiPrefs {
   tailDefault?: boolean;
   // [CUSTOM- Markdown 渲染预设。`editor` = 跟随编辑器（现有逻辑，默认）。
   markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things';
+  // [CUSTOM- 面板快捷键：动作 → 规范 accelerator（`null` = 禁用）。
+  // 这是**全局字段**：Main 双面与 Side 共用同一份；宿主在 boot 前先下发规范化后的完整映射。
+  shortcuts?: ShortcutMap;
 }
 
 /** [CUSTOM- 设置面板的分组。左侧导航按这个顺序排；没有条目的分组不显示。 */
-export type SettingsGroup = 'general' | 'chat' | 'appearance' | 'advanced';
+export type SettingsGroup = 'general' | 'chat' | 'appearance' | 'shortcuts' | 'advanced';
 
 export interface SettingOption {
   value: string;
   label: string;
+}
+
+/**
+ * [CUSTOM- 自定义模型列表写入的回执（挂在 `vac.customModels` 的 SettingItem 上，
+ * 随 `settings` 广播回面板）。`requestId` 由客户端生成并保证跨面唯一；`saved`
+ * 的 `baseline` 是写入后新的不透明基线（生效层 + 写目标 + 值签名），`conflict` 的
+ * `baseline/models` 是当前生效层。
+ */
+export interface ModelListSync {
+  requestId: string;
+  status: 'saved' | 'conflict' | 'error';
+  models?: CustomModel[];
+  baseline?: string;
+  message?: string;
 }
 
 /**
@@ -208,11 +229,16 @@ export interface SettingItem {
   group: SettingsGroup;
   label: string;
   description?: string;
-  type: 'boolean' | 'select' | 'number' | 'text' | 'action' | 'info' | 'json' | 'models';
-  /** [CUSTOM- boolean / string / number；`json` 是对象、`models` 是数组。客户端按 type 解释。 */
+  type: 'boolean' | 'select' | 'number' | 'text' | 'action' | 'info' | 'json' | 'models' | 'shortcut';
+  /** [CUSTOM- boolean / string / number；`json` 是对象、`models` 是数组、`shortcut` 是 canonical string 或 null。客户端按 type 解释。 */
   value?: unknown;
   options?: SettingOption[];
   warning?: string;
+  /** [CUSTOM- `models` 行的不透明基线：生效层 + 写目标 + 规范化值签名。
+   * 同值但 workspace override 新增/删除也是作用域变化，必须判冲突，避免静默写到错误层。 */
+  modelBaseline?: string;
+  /** [CUSTOM- `models` 行最近一次写入的回执；客户端按 requestId 只处理自己那一条。 */
+  modelSync?: ModelListSync;
   /** `action` 行的按钮文案（缺省 = "Run"）。 */
   actionLabel?: string;
   /**
@@ -226,6 +252,8 @@ export interface SettingItem {
   /** [CUSTOM- number 行的输入范围（缺省沿用各调用点原来的 0/2000 与 160/480 规则）。 */
   min?: number;
   max?: number;
+  /** [CUSTOM- number 行的步进；有值时优先于客户端的默认步进规则。 */
+  step?: number;
   /** [CUSTOM- 这一项默认属于哪一层；`source` 给出当前实际生效层与各层取值。 */
   scope?: SettingScope;
   source?: SettingSource;
@@ -291,7 +319,7 @@ export type ExtToChat =
   // [CUSTOM- 大纲钉住/宽度偏好，随 boot 一起带回（跨窗口重载存活）。
   // [CUSTOM- 外加 tab 栏的手工顺序（同一条记录）。
   // [CUSTOM- 外加 Times 的按会话记录 + 默认值（同一条记录）。
-  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; outlineTab?: 'messages' | 'cards'; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things' }
+  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; outlineTab?: 'messages' | 'cards'; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; historyDisplayLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things'; shortcuts?: ShortcutMap }
   // [CUSTOM- 设置面板的数据（回复 getSettings，也在每次 setSetting 之后重发）。宿主是唯一写者。
   | { type: 'settings'; items: SettingItem[] }
   // [CUSTOM- 自定义模型变了（设置面板保存 / VS Code 设置里改）：输入卡的模型菜单要立刻换
@@ -362,6 +390,7 @@ export type ExtToChat =
   | { type: 'restorePref'; value: RestoreChoice }
   // [CUSTOM- 恢复快照已被丢弃（某个面点了 New session）：所有面的恢复卡片都要退场。
   | { type: 'sessionsDismissed' }
+  | { type: 'restoreFinished'; sessionId: string; ok: boolean }
   | { type: 'error'; sessionId?: string; message: string };
 
 /** Snapshot variant carrying wire entries. */
@@ -379,10 +408,18 @@ export type ChatToExt =
   // 由宿主**合并**（重建会把对方那一半抹掉）。缺的字段 = 这一轮没改它。
   // [CUSTOM- Times 同样走这条（第三个写者）：timesBySession 整份发上来
   // （与 tabOrder 同一形态 —— 顺序与开关都是"一整张表"，逐条 delta 反而要宿主维护版本）。
+  // [CUSTOM- 快捷键**不走这里**：只能经设置面板的 `panel.shortcut.<action>` 写入，
+  // 由宿主做非法值与重复键校验；setUiPref 不得覆盖 shortcuts。
   | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; outlineTab?: 'messages' | 'cards'; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things' }
   // [CUSTOM- 设置面板：宿主是唯一写者（配置项写 VS Code 设置，面板项写 UiPrefs）。
   | { type: 'getSettings' }
   | { type: 'setSetting'; key: string; value: unknown }
+  // [CUSTOM- 自定义模型列表的 compare-and-set 写入：`baseline` = 打开编辑器时宿主下发的
+  // `modelBaseline`（生效层 + 写目标 + 值签名）；生效层已变则拒写并回 `modelSync=conflict`，
+  // 客户端保留草稿让用户明确选择 Reload（放弃本地）或 Overwrite。`force` 只表示用户已确认
+  // Overwrite，**不跳过** CAS：确认后若其他面又写入，仍会再次报冲突。
+  // 连续提交由宿主串行处理。
+  | { type: 'setModelList'; requestId: string; baseline: string; value: CustomModel[]; force?: boolean }
   | { type: 'settingAction'; action: string; key?: string; layer?: 'workspace' | 'user' | 'global' }
   // [CUSTOM- 状态卡上的自动连接开关。**非会话作用域**（正是没有会话时
   // 才需要它），所以必须放在 verifySession 守卫**之前**处理，与 setUiPref 同一位置。
@@ -418,7 +455,7 @@ export type ChatToExt =
   // immediately; `fromDraft` says the CLIENT was on a draft page (the host's
   // `focused` then names some other session, and it is the draft that must step
   // aside — a draft is client-local, 058).
-  | { type: 'openHistorySession'; agentName: string; sessionId: string; cwd?: string; title?: string; fromDraft?: boolean; keepOthers?: boolean }
+  | { type: 'openHistorySession'; agentName: string; sessionId: string; cwd?: string; title?: string; fromDraft?: boolean; keepOthers?: boolean; trackRestore?: boolean }
   // 草稿页与目录选择。
   // 三条都**不是**会话作用域：草稿按定义还没有 sessionId（那正是它存在的意义），
   // 所以它们必须和其他非会话作用域消息一样，在 `verifySession` 守卫**之前**处理（§5.4 规则二）。

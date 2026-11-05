@@ -18,6 +18,9 @@ import hljs from 'highlight.js/lib/common';
 import { fileLinkTarget } from './content/contentBlocks';
 // [CUSTOM- 也借用它的视图模型（mention 解析的产物与 ContentBlock 转出来的同形）。
 import type { ContentBlockView } from './content/contentBlocks';
+import {
+  MAX_READ_HIGHLIGHT_LENGTH, stripReadLineNumbers, unlabelledFenceBody,
+} from './content/readHighlight';
 
 const HTML_ESCAPES: Record<string, string> = {
   '&': '&amp;',
@@ -125,6 +128,27 @@ function highlightCode(text: string, language: string): string {
   }
 }
 
+/** Strip strict N<TAB> prefixes, highlight the whole code, then restore each prefix. */
+function renderReadCode(text: string, language: string): string | undefined {
+  if (text.length > MAX_READ_HIGHLIGHT_LENGTH || !hljs.getLanguage(language)) { return undefined; }
+  const body = unlabelledFenceBody(text);
+  if (body === undefined) { return undefined; }
+  const numbered = stripReadLineNumbers(body);
+  const code = numbered ? numbered.code : body;
+  let highlighted: string;
+  try {
+    highlighted = hljs.highlight(code, { language, ignoreIllegals: true }).value;
+  } catch {
+    return undefined;
+  }
+  if (numbered) {
+    const lines = highlighted.split('\n');
+    if (lines.length !== numbered.prefixes.length) { return undefined; }
+    highlighted = lines.map((line, i) => escapeHtml(numbered.prefixes[i]) + line).join('\n');
+  }
+  return `<pre data-lang="${escapeHtml(language)}"><code class="hljs language-${escapeHtml(language)}">${highlighted}</code></pre>\n`;
+}
+
 const renderer: RendererObject = {
   // Raw HTML is rendered as literal text: lossless (the reader still sees what
   // the agent wrote) and, once escaped, inert.
@@ -216,8 +240,12 @@ export class SafeMarkdown {
   renderTokens(tokens: Token[]): string { return this.md.parser(tokens, this.md.defaults); }
 
   /** Render markdown to HTML. Falls back to escaped plain text on failure. */
-  render(text: string): string {
+  render(text: string, options: { readLanguage?: string } = {}): string {
     try {
+      if (options.readLanguage) {
+        const readHtml = renderReadCode(text, options.readLanguage);
+        if (readHtml !== undefined) { return readHtml; }
+      }
       return this.md.parse(text, { async: false }) as string;
     } catch {
       return `<pre>${escapeHtml(text)}</pre>`;

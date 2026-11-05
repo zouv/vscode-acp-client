@@ -153,6 +153,39 @@ export const sessionMenuClient = `
     return matched;
   }
 
+  // [CUSTOM- How many rows the history drawer renders after filtering (0 = all).
+  // The cap is a VIEW cap only: lastMessage.sessions keeps every loaded row.
+  var historyDisplayLimit = 0;
+
+  function normalizeHistoryDisplayLimit(value) {
+    var n = Number(value);
+    if (!isFinite(n)) { return 0; }
+    return Math.max(0, Math.min(10000, Math.round(n)));
+  }
+
+  function limitRows(items) {
+    if (!historyDisplayLimit || items.length <= historyDisplayLimit) { return items; }
+    return items.slice(0, historyDisplayLimit);
+  }
+
+  /** Only a settled, open list has something to re-render. While the host is still
+   *  loading ("pending"), a uiPrefs update must not replace "Loading…" with an empty list. */
+  function canRefreshList(isOpen, isLoading, message) {
+    return !!isOpen && !isLoading && !!message;
+  }
+
+  /** Settings can change while the drawer is open: re-render from the retained list.
+   *  Only a valid value updates the cap — a missing or malformed field (an older host,
+   *  a partial message) must not silently reset a limit the user already set. */
+  function applyPrefs(message) {
+    var value = message && message.historyDisplayLimit;
+    if (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) {
+      var n = Number(value);
+      if (isFinite(n)) { historyDisplayLimit = normalizeHistoryDisplayLimit(n); }
+    }
+    if (canRefreshList(open, pending, lastMessage)) { renderList(lastMessage); }
+  }
+
   function syncSearchClear() {
     if (searchClearEl) { searchClearEl.hidden = !query; }
   }
@@ -324,6 +357,8 @@ export const sessionMenuClient = `
     NS.dom.clear(listEl);
     var all = (message && message.sessions) || [];
     var items = visibleRows(all);
+    var rendered = limitRows(items);
+    var limited = rendered.length < items.length;
     // [CUSTOM- Three sources now: the agent's list, the local cache, or the
     // union of both (the default once connected). The label has to say which, because
     // "the agent did not list this session" is exactly the difference a reader cares about.
@@ -335,11 +370,16 @@ export const sessionMenuClient = `
     // simply unplaced). They stay reachable through the Unknown folder candidate.
     var hidden = filterKey && filterKey !== UNKNOWN_KEY ? unknownRows(all).length : 0;
     // Filtered: "12 of 232 sessions" — the total is what makes the filter legible
-    // (a bare "12 sessions" would read like the agent lost the rest).
-    var count = filterKey || query ? items.length + ' of ' + all.length : String(all.length);
+    // (a bare "12 sessions" would read like the agent lost the rest). When the display
+    // cap bites, say how many matched out of what was loaded (not "the agent's history").
+    var countText = limited
+      ? 'Showing first ' + rendered.length + ' of ' + items.length
+        + (filterKey || query ? ' matching sessions (' + all.length + ' loaded)' : ' loaded sessions')
+      : (filterKey || query ? items.length + ' of ' + all.length : String(all.length))
+        + (all.length === 1 ? ' session' : ' sessions');
     headEl.appendChild(NS.dom.el('span', 'outline-count',
       all.length === 0 ? 'No previous sessions'
-        : count + (all.length === 1 ? ' session' : ' sessions') + ' \\u00b7 ' + origin
+        : countText + ' \\u00b7 ' + origin
           + (hidden > 0 ? ' \\u00b7 ' + hidden + ' without a folder' : '')));
     if (message && message.error) {
       headEl.appendChild(NS.dom.el('span', 'outline-more', message.error));
@@ -363,8 +403,8 @@ export const sessionMenuClient = `
       }
       return;
     }
-    for (var i = 0; i < items.length; i++) {
-      var item = items[i];
+    for (var i = 0; i < rendered.length; i++) {
+      var item = rendered[i];
       // [CUSTOM- 行外面套一层 .session-row：悬停时的 Archive / Rename 图标
       // **不能放进行按钮里**（button 嵌套 button 是无效 HTML，浏览器解析时会把里层弹出去；
       // 而且行的点击语义会被搅乱）。图标层是行的**兄弟**，绝对定位浮在行的右端，
@@ -793,7 +833,13 @@ export const sessionMenuClient = `
     // [CUSTOM- 宿主做完归档/改名后的对账（boot 转发 sessionAction）。
     applyAction: applyAction,
     // [CUSTOM- 行右键菜单 / 悬停 Rename 的面板内输入入口。
-    startRename: startRename
+    startRename: startRename,
+    // [CUSTOM- 历史显示上限：设置面板改动后立即按新值重绘（只截断视图）。
+    applyPrefs: applyPrefs,
+    // [CUSTOM- 纯函数测试缝：同一份截断逻辑也供 renderList 使用。
+    limitRows: limitRows,
+    // [CUSTOM- 纯函数测试缝：uiPrefs 只允许刷新已落定的打开列表。
+    canRefreshList: canRefreshList
   };
 })(window.__vac = window.__vac || {});
 `;

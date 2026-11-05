@@ -15,6 +15,8 @@ export const scrollClient = `
   // 合帧：follow() 只置脏位，真正的布局读取与 scrollTop 写入发生在 rAF 回调里。
   // 逐条 chunk 直接读写 scrollHeight 会在一次回复里触发上百次强制重排。
   var followPending = false;
+  // 显式跳到首尾时使之前排队的追尾帧失效。
+  var bottomFrameEpoch = 0;
   // [CUSTOM- 2026-10-29] Tail 关闭时也要让 pinned / Jump 跟内容高度走（每帧最多一次）。
   var recomputePending = false;
   // 滚动记忆的「再对齐」状态：切回一个会话时先按记录恢复位置，随后 markdown 回填
@@ -585,16 +587,7 @@ export const scrollClient = `
       pendingUnfocus = null;
       restoreMiddleGuard();
     }); }
-    jumpBtn.addEventListener('click', function () {
-      pinned = true;
-      hideJump();
-      restoreTarget = null;
-      if (NS.tail && NS.tail.resumeFromJump) { NS.tail.resumeFromJump(); }
-      // [CUSTOM- 这里原来是直写 scrollTop（绕过 writeTop）⇒ 它引发的 scroll 事件
-      // 会被**误标**成 user-scroll（"用户自己滚的"）。读日志时那会把"我们把人送到人工位置"看成
-      // 他的操作，这一格必须走同一个出口。
-      writeTop(container.scrollHeight);
-    });
+    jumpBtn.addEventListener('click', function () { jumpToLatest(); });
     // [CUSTOM- 位置记忆跨面板开关存活（每个文档各存各的：
     // 侧边栏与编辑区的视口本来就不一样，共用一份反而会互相干扰）。
     if (NS.boot && NS.boot.recallUi) {
@@ -969,11 +962,14 @@ export const scrollClient = `
       return;
     }
     followPending = true;
+    var epoch = bottomFrameEpoch;
     NS.dom.schedule(function () {
       followPending = false;
       if (!container) { return; }
       if (gestureHeld()) { scheduleRecompute(); return; }
       if (!tail) { logScrollState('unpinned-before-frame'); recompute(); return; }
+      // 排队期间用户已经明确跳到最前（或别的视口意图）：这一帧不能再回底。
+      if (epoch !== bottomFrameEpoch) { recompute(); return; }
       var height = container.scrollHeight;
       lastScrollHeight = height;
       var max = height - container.clientHeight;
@@ -992,6 +988,40 @@ export const scrollClient = `
     restoreTarget = null;
     writeTop(container.scrollHeight);
     logScrollState('toBottom', true);
+  }
+
+  /**
+   * [CUSTOM- 「Jump to latest」按钮与快捷键共用的一条路径（原按钮行为原样搬入）：
+   * 置底、恢复当前会话的 Tail（不改默认值）。写入必须走 writeTop —— 直接写 scrollTop
+   * 引发的 scroll 事件会被误标成 user-scroll。
+   */
+  function jumpToLatest() {
+    if (!container) { return; }
+    bottomFrameEpoch++;
+    pinned = true;
+    hideJump();
+    restoreTarget = null;
+    if (NS.tail && NS.tail.resumeFromJump) { NS.tail.resumeFromJump(); }
+    writeTop(container.scrollHeight);
+  }
+
+  /**
+   * [CUSTOM- 跳到最前（快捷键）。它是"用户主动离开底部"，与 outline.jumpTo 同一语义：
+   * 关掉当前会话的 Tail（只改这个会话，不动默认值），清掉待恢复的锚点，再落到顶部。
+   * 递增 bottomFrameEpoch 让已经排队的回底帧作废 —— 否则那一帧会在下一毫秒把视口抢回去。
+   */
+  function jumpToTop() {
+    if (!container) { return; }
+    bottomFrameEpoch++;
+    cancelTail('scroll');
+    restoreTarget = null;
+    restoreAnchor = null;
+    restoreEpoch++;
+    anchorPending = false;
+    writeTop(0);
+    expectedTop = container.scrollTop;
+    recompute();
+    logScrollState('jumpToTop', true);
   }
 
   /**
@@ -1177,6 +1207,9 @@ export const scrollClient = `
     init: init,
     follow: follow,
     toBottom: toBottom,
+    // [CUSTOM- 置底 / 置顶（按钮与快捷键共用；置顶会取消当前会话 Tail）。
+    jumpToLatest: jumpToLatest,
+    jumpToTop: jumpToTop,
     jumpTo: jumpTo,
     isPinned: isPinned,
     // [CUSTOM- 几何写入方（输入卡 / 表单抽屉 / 权限抽屉）改完高度后喊一声。

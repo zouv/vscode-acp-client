@@ -173,6 +173,8 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 （`4 of 264 sessions · from the agent + local sources`）紧跟在它右边；过滤是**纯客户端的 key 比较**，
 key 由宿主算好。
 
+`UiPrefs.historyDisplayLimit` 限制**已加载**、经目录与文本筛选后的渲染行数，0 不限；`sessionMenu.applyPrefs` 在抽屉非加载时即时重绘。它不改变 ACP 分页、缓存、目录候选或搜索范围，不删除历史。
+
 | 关注点 | 规则 |
 |---|---|
 | 控件形态 | **一个 chip 兼管两件事**（`📁 All folders ▾` / `📁 <目录名> ▾`）：点开菜单，首项 `All folders` 就是关闭过滤。"开启"与"选一个目录"本来就是同一个动作，拆成"勾选框 + 下拉框"是两步操作 |

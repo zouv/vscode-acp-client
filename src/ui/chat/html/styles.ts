@@ -1552,30 +1552,48 @@ export function styles(): string {
     font-family: var(--vscode-editor-font-family);
     font-size: var(--vscode-editor-font-size, 0.95em);
   }
+  /* [CUSTOM- VS Code 的 webview 默认样式表给所有 <code> 上了
+     --vscode-textPreformat-background，而默认的 pre code 规则只重置 padding、
+     不重置背景。<pre> 里的 <code> 仍在行内排版 ⇒ 背景按**每个 line box** 上色：
+     Read 卡片（行号 + Tab 的多行代码）于是每行、连空行都出现一个内容宽的黑色小块
+     （用户 2026-11-05 报「缩进黑块」）。代码块背景只应由 <pre> 提供。 */
+  .bubble pre code, .md pre code {
+    background: transparent; color: inherit;
+    padding: 0; border-radius: 0;
+  }
   .bubble :not(pre) > code, .md :not(pre) > code {
     background: var(--vscode-textCodeBlock-background);
     border-radius: 3px; padding: 0 3px;
   }
   /* highlight.js emits classes only, which the webview allowlist keeps. */
   .hljs-comment, .hljs-quote { color: var(--vscode-descriptionForeground); font-style: italic; }
-  .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type {
+  .hljs-doctag { color: var(--vscode-descriptionForeground); font-weight: 600; }
+  .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type, .hljs-meta {
     color: var(--vscode-symbolIcon-keywordForeground, var(--vscode-editor-foreground));
   }
-  .hljs-string, .hljs-regexp, .hljs-symbol, .hljs-bullet {
+  .hljs-string, .hljs-regexp, .hljs-symbol, .hljs-bullet, .hljs-char, .hljs-escape {
     color: var(--vscode-symbolIcon-stringForeground, var(--vscode-editor-foreground));
   }
-  .hljs-number, .hljs-meta {
+  .hljs-number {
     color: var(--vscode-symbolIcon-numberForeground, var(--vscode-editor-foreground));
   }
   .hljs-title, .hljs-section, .hljs-function {
     color: var(--vscode-symbolIcon-functionForeground, var(--vscode-editor-foreground));
   }
-  .hljs-variable, .hljs-attr, .hljs-attribute, .hljs-template-variable {
+  .hljs-variable, .hljs-attr, .hljs-attribute, .hljs-template-variable, .hljs-params {
     color: var(--vscode-symbolIcon-variableForeground, var(--vscode-editor-foreground));
   }
-  .hljs-built_in, .hljs-class {
+  .hljs-property { color: var(--vscode-symbolIcon-propertyForeground, var(--vscode-editor-foreground)); }
+  .hljs-operator { color: var(--vscode-symbolIcon-operatorForeground, var(--vscode-editor-foreground)); }
+  .hljs-built_in, .hljs-class, .hljs-tag, .hljs-name {
     color: var(--vscode-symbolIcon-classForeground, var(--vscode-editor-foreground));
   }
+  .hljs-selector-class, .hljs-selector-id {
+    color: var(--vscode-symbolIcon-methodForeground, var(--vscode-editor-foreground));
+  }
+  .hljs-link { color: var(--vscode-textLink-foreground, var(--vscode-editor-foreground)); text-decoration: underline; }
+  .hljs-strong { font-weight: 600; }
+  .hljs-emphasis { font-style: italic; }
   .hljs-addition { color: var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-editor-foreground)); }
   .hljs-deletion { color: var(--vscode-gitDecoration-deletedResourceForeground, var(--vscode-editor-foreground)); }
   .bubble blockquote, .md blockquote {
@@ -2521,6 +2539,10 @@ export function styles(): string {
   .chip-static { cursor: default; }
   .chip-static:hover { background: var(--vscode-textCodeBlock-background); }
   .tool-text { white-space: pre-wrap; word-break: break-word; margin: 3px 0; }
+  /* [CUSTOM- 宿主 markdown 态必须复位 pre-wrap：marked 输出里块与块之间的换行
+     会被 pre-wrap **再渲染一遍**（Read 卡片代码块下面多一行空白、表格单元格按原文
+     折行）。与 .thought-body.md / .entry-assistant .bubble-body.md 同一条约定。 */
+  .tool-text.md { white-space: normal; }
 
   /* Diff */
   .diff {
@@ -3061,6 +3083,31 @@ export function styles(): string {
     margin-top: 4px; font-size: 0.82em;
     color: var(--vscode-editorWarning-foreground, var(--vscode-errorForeground));
   }
+  .settings-group-note {
+    margin: 0 0 8px; font-size: 0.85em; line-height: 1.4;
+    color: var(--vscode-descriptionForeground);
+  }
+  /* [CUSTOM- 快捷键行：录制按钮 + Reset / Disable 文本动作。按钮宽度固定，
+     避免录制中/禁用/不同键位把整行挤得左右跳。 */
+  .settings-shortcut-control { flex-wrap: wrap; justify-content: flex-end; max-width: 340px; }
+  .settings-shortcut-record {
+    min-width: 104px; padding: 3px 10px; border-radius: 4px; cursor: pointer;
+    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  }
+  .settings-shortcut-record:hover { background: var(--vscode-list-hoverBackground); }
+  .settings-shortcut-record.recording {
+    border-color: var(--vscode-focusBorder);
+    outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px;
+    background: var(--vscode-inputOption-activeBackground, var(--vscode-list-hoverBackground));
+    color: var(--vscode-inputOption-activeForeground, inherit);
+  }
+  .settings-shortcut-record.is-disabled {
+    font-style: italic; opacity: 0.8;
+    color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+  }
+  .settings-shortcut-control .settings-link { font-size: 0.85em; white-space: nowrap; }
   .settings-control { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding-top: 2px; }
   .settings-check { width: 14px; height: 14px; accent-color: var(--vscode-button-background); }
   .settings-select, .settings-number, .settings-text-input {
@@ -3101,7 +3148,7 @@ export function styles(): string {
   }
   .settings-json-error { margin-top: 4px; font-size: 0.8em; color: var(--vscode-errorForeground); }
   .settings-model-head, .settings-model-row {
-    display: grid; grid-template-columns: 1.5fr 1fr 1.2fr 24px; gap: 6px; align-items: center;
+    display: grid; grid-template-columns: 22px 1.5fr 1fr 1.2fr auto 24px; gap: 6px; align-items: center;
   }
   .settings-model-head { padding: 0 2px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
   .settings-models {
@@ -3109,6 +3156,47 @@ export function styles(): string {
     flex: 0 1 auto; min-height: 60px; overflow-y: auto;
   }
   .settings-model-row .settings-text-input { width: 100%; }
+  /* [CUSTOM- 拖拽排序：手柄只负责发起拖拽；上移/下移是键盘与无障碍路径。 */
+  .settings-model-row.dragging { opacity: 0.55; }
+  /* 拖动落点：before 画在目标行上沿，after 画在末行下沿。 */
+  .settings-model-row.settings-model-drop-before {
+    box-shadow: inset 0 2px 0 var(--vscode-focusBorder, #3b82f6);
+  }
+  .settings-model-row.settings-model-drop-after {
+    box-shadow: inset 0 -2px 0 var(--vscode-focusBorder, #3b82f6);
+  }
+  .settings-model-drag {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 24px; border-radius: 3px; cursor: grab;
+    color: var(--vscode-descriptionForeground); user-select: none;
+  }
+  .settings-model-drag:hover { background: var(--vscode-list-hoverBackground); }
+  .settings-model-drag:active { cursor: grabbing; }
+  .settings-model-move { display: flex; gap: 2px; }
+  .settings-model-move button {
+    padding: 1px 5px; border: 1px solid transparent; border-radius: 3px; cursor: pointer;
+    font-family: inherit; font-size: 0.85em; line-height: 1.2;
+    background: transparent; color: inherit;
+  }
+  .settings-model-move button:hover:not(:disabled) { background: var(--vscode-list-hoverBackground); }
+  .settings-model-move button:disabled { opacity: 0.35; cursor: default; }
+  .settings-model-status {
+    margin: 2px 0; padding: 6px 8px; border-radius: 4px;
+    font-size: 0.85em; line-height: 1.4;
+    border: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-descriptionForeground);
+  }
+  .settings-model-status.conflict {
+    border-color: var(--vscode-editorWarning-foreground, var(--vscode-errorForeground));
+    color: var(--vscode-editorWarning-foreground, var(--vscode-errorForeground));
+  }
+  .settings-model-status.error { color: var(--vscode-errorForeground); }
+  .settings-model-status-actions { display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
+  /* 排序播报只给屏幕阅读器；视觉上不占位。 */
+  .settings-model-announce {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
   .settings-model-add { align-self: flex-end; }
   .settings-model-remove {
     padding: 2px 6px; border: none; border-radius: 3px; cursor: pointer;

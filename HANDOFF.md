@@ -13,15 +13,17 @@
 
 ## 状态快照
 
-- **最近更新**：2026-11-05
-- **整体状态**：v1.11.0 已发布为 Latest（release commit `4a96c23`，tag `v1.11.0`）；VSIX `vscode-acp-client-1.11.0.vsix`（1077435 字节，SHA256 `532b6800…125cd6`）已上传并核对摘要。v1.10.0 保留为上一个正式版；v1.9.0 草稿仍在 GitHub。
-- **当前分支（必填）**：`main`；v1.11.0 已按授权提交推送、打包并上传 GitHub Release，不另建分支。
-- **最后验证状态**（2026-11-05）：check-webview-client、lint/typecheck、`sh check-docs.sh` ✅；unit **183 / 28 文件** ✅；客户端 mocha **395 passing** ✅；完整宿主 **725 passing** ✅（用 `VSCODE_TEST_VERSION=1.144.1` 且 `env -u ELECTRON_RUN_AS_NODE`；1.85 宿主上剪贴板用例本机偶发失败，非本轮代码路径）。真机 `npm run dev:host` 的验收（清单 259–266）尚未执行。已发布 v1.11.0（release commit `4a96c23`，tag `v1.11.0`，VSIX 1077435 字节 / SHA256 `532b6800…125cd6`）；v1.10.0 为上一正式版，v1.9.0 草稿仍在 GitHub。
+- **最近更新**：2026-11-06
+- **整体状态**：v1.12.0 发布中；保留 v1.11.0 已发布状态与此前所有待真机验收项。
+- **当前分支（必填）**：`release/v1.12.0`；发布提交将推送至 `origin/main`。
+- **最后验证状态**（2026-11-06）：lint/typecheck、webview 语法、npm audit ✅；unit **303 / 39 文件**、VS Code 1.144.1 宿主 **756 passing** ✅；真实 Chromium 验证 Read 黑块及模型拖拽落点。扩展开发宿主的人工验收尚未执行。
 
 ## 当前任务（In Progress）
 
-- **2026-11-05 第二轮交互修复（已随 v1.11.0 发布 / 待真机验收）**：① 滚动条拖拽手势闸门/位移分类 ② 中键/滚轮在底部无实际位移时不取消 Tail ③ Mermaid 限高与 50–200% 缩放 ④ Tail 左右 L 形两角 + 中间淡渐隐（无滚动条时隐藏、右角让出滚动条）⑤ `#history` / `#cwdMenu` 最大高度改为面板剩余高度。自动验证：check-webview-client、typecheck、lint、unit **183 / 28 文件**、客户端 mocha **395**、完整宿主 **725 passing** 通过。下一步 `npm run dev:host` 按 `docs/03-验收清单.md` 264–266 真机验收。计划见 `C:\Users\zouwei\.claude\plans\1-markdown-mermaid-fizzy-willow.md`。
-
+- **发布 v1.12.0**：版本与 CHANGELOG 已更新，lint/typecheck/unit/宿主测试和 npm audit 通过；下一步清理发布扫描命中、提交推送、打包 VSIX 并创建 Release。人工宿主验收仍待做。
+- **卡片渲染与设置增强待真机验收**：重载开发宿主后验证 Read 的 Markdown/C++ 黑块与高亮、复制；自定义模型拖拽/上下按钮及选择器顺序、冲突提示；历史上限 0/有限值、筛选与重载。
+- **VAC Chat 快捷键待真机验收**：扩展开发宿主已发出启动请求；在侧边栏、编辑区和 Side Chat 分别验证 Alt+A/E/I/P/N、焦点不在 Chat 时不生效、设置录制/禁用/重置/冲突提示、重载和 IME/系统快捷键。快捷键懒恢复单飞，成功/失败回执解除；其他点击恢复的焦点竞态沿用既有语义。
+- **2026-11-05 第二轮交互修复（已随 v1.11.0 发布 / 待真机验收）**：滚动条拖拽、Tail、Mermaid 缩放与下拉高度；下一步按 `docs/03-验收清单.md` 264–266 真机验收。
 - **2026-11-05 面板五项增强（代码与自动验证完成 / 待真机验收）**：Mermaid 图表与原文切换、代码高亮、双列表搜索、大纲 Messages/Cards、Tail 初始视觉；自动验证 unit 183、宿主 717 通过，真机 259–263 待做。
 
 - **Side Chat 真实验收（已随 v1.10.0 发布 / 待做）**：按「下一步」第一条执行 `npm run dev:host`，覆盖主/Side 工具栏隔离、主双面同步、全局设置共享、来源标题、Side 关闭/重载/Reset，以及真实 agent fork、权限/表单、通知与关闭清理。
@@ -114,7 +116,6 @@
   （每次 `--session` 会在该 agent 的历史里留一个空会话；输出含本机模型配置，别提交）
 - 端到端：需本机可执行 `npx`（默认 agent 经 `npx` 拉起 Claude Code / Codex 的 ACP 适配器）
 
-
 ## 关键决策记录（Key Decisions）
 
 - **v1.0.3 已发布**：GitHub Release 附 `vscode-acp-client-1.0.3.vsix`；`.vsix` 不进 git（`.gitignore`），
@@ -139,7 +140,6 @@
   Claude 适配器却会因这个声明改走 `_meta` 终端输出，改变现有 Bash 渲染。
 - **构建换成 esbuild**、**测试分两层**（vitest 纯逻辑 + mocha 真实宿主）。
 - **单价是估值**：Dashboard 的成本按等价 API 价格估算，未知模型计入 `unpriced`。
-
 
 ## 待解问题 / 给用户的提问（Open Questions）
 

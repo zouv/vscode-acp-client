@@ -34,6 +34,7 @@ import { tailClient } from '../ui/chat/html/client/tail';
 // [CUSTOM- 新输出自动展开（与 Times 同形态）+ 设置面板。
 import { autoExpandClient } from '../ui/chat/html/client/autoExpand';
 import { settingsPanelClient } from '../ui/chat/html/client/settingsPanel';
+import { shortcutsClient } from '../ui/chat/html/client/shortcuts';
 // [CUSTOM- 目录抽屉（草稿页/会话页的 Working directory 浮层）。
 import { directoryMenuClient } from '../ui/chat/html/client/directoryMenu';
 // [CUSTOM- 长任务看门狗。
@@ -399,7 +400,7 @@ function loadClient(
   // [CUSTOM- `sessionMenu` joined the list for its own suite: unlike
   // boot, its IIFE runs nothing at load time (init() is called by boot, and here by
   // the test), so loading it costs the record-layer tests nothing.
-  for (const source of [domClient, iconsClient, mermaidClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient]) {
+  for (const source of [domClient, iconsClient, mermaidClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, shortcutsClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient]) {
     new Function('window', 'document', source)(win, doc);
   }
   return { NS, metrics, doc, docListeners, jumps, timers, win };
@@ -1144,6 +1145,21 @@ suite('chat client logic: tab strip (stub DOM)', () => {
   const summary = (id: string) => ({
     sessionId: id, agentName: 'Claude Code', title: 'a session', cwd: '/tmp',
     createdAt: '', loading: false, running: false, unread: false,
+  });
+
+  test('relative shortcuts follow displayed live tab order and wrap', () => {
+    const { NS } = tabStrip();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.tabs.setSessions([summary('s1'), summary('s2'), summary('s3')]);
+    NS.tabs.applyPrefs({ tabOrder: ['s3', 's1', 's2'] });
+    NS.tabs.setFocus(summary('s1'));
+    NS.tabs.activateRelative(1);
+    assert.deepStrictEqual(posted.pop(), { type: 'focusSession', sessionId: 's2' });
+    NS.tabs.activateRelative(1);
+    assert.deepStrictEqual(posted.pop(), { type: 'focusSession', sessionId: 's3' });
+    NS.tabs.activateRelative(-1);
+    assert.deepStrictEqual(posted.pop(), { type: 'focusSession', sessionId: 's2' });
   });
 
   // [CUSTOM- The dot carries two independent signals, which is the whole
@@ -2596,6 +2612,50 @@ suite('chat client logic: tool-card markdown round trip (stub DOM)', () => {
     NS.toolCallView.applyMarkdown(first[0].key, '<p>x</p>');
     assert.strictEqual(NS.toolCallView.pendingMarkdownItems('s2').length, 0);
   });
+
+  test('a Read location arriving later invalidates the cached markdown request', () => {
+    const { NS } = loadClient();
+    recordRendering(NS);
+    const body = '1\tconst value = 1;';
+    const text = '```\n' + body + '\n```';
+    const readTool = (locations: Array<Record<string, unknown>>) => toolWith({
+      kind: 'read', command: null, locations,
+      items: [{ type: 'content', block: { type: 'text', text } }],
+    });
+    const node = NS.toolCallView.render(readTool([]), 'read-e1');
+    const first = NS.toolCallView.pendingMarkdownItems('s1')
+      .find((item: { text: string }) => item.text === text);
+    assert.ok(first, 'the unlabelled Read text is requested');
+    NS.toolCallView.applyMarkdown(first.key, '<p>PLAIN</p>');
+
+    NS.toolCallView.update(node, readTool([{ path: '/repo/a.ts', name: 'a.ts', line: 1 }]), 'read-e1');
+    const second = NS.toolCallView.pendingMarkdownItems('s1')
+      .find((item: { text: string }) => item.text === text);
+    assert.ok(second, 'the same text must be re-requested once the host has a path');
+    assert.notStrictEqual(second.key, first.key,
+      'the cache key must include the Read context, or the plain HTML stays forever');
+  });
+
+  test('a late Read kind change also invalidates the cached markdown request', () => {
+    const { NS } = loadClient();
+    recordRendering(NS);
+    const text = '```\n1\tconst value = 1;\n```';
+    const tool = (kind: string) => toolWith({
+      kind, command: null, locations: [{ path: '/repo/a.ts', name: 'a.ts', line: 1 }],
+      items: [{ type: 'content', block: { type: 'text', text } }],
+    });
+    const node = NS.toolCallView.render(tool('other'), 'read-e2');
+    const first = NS.toolCallView.pendingMarkdownItems('s1')
+      .find((item: { text: string }) => item.text === text);
+    assert.ok(first);
+    NS.toolCallView.applyMarkdown(first.key, '<p>PLAIN</p>');
+
+    NS.toolCallView.update(node, tool('read'), 'read-e2');
+    const second = NS.toolCallView.pendingMarkdownItems('s1')
+      .find((item: { text: string }) => item.text === text);
+    assert.ok(second, 'a kind change must rebuild the body and re-ask');
+    assert.notStrictEqual(second.key, first.key);
+  });
 });
 
 suite('chat client logic: history picker filter (stub DOM)', () => {
@@ -2895,6 +2955,22 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     assert.strictEqual(rows.length, 1, 'the beta session is now listed');
     assert.strictEqual(rows[0].getAttribute('data-open-session'), 'b1', 'it is the beta session');
     assert.deepStrictEqual(patches, [], 'temporary: the filter preference is NOT written');
+  });
+
+  test('history limit applies after filtering without hiding older searchable sessions', () => {
+    const { NS, tree } = openedPicker();
+    NS.sessionMenu.applyPrefs({ historyDisplayLimit: 1 });
+    assert.strictEqual(sessionRows(tree).length, 1);
+    assert.strictEqual(sessionRows(tree)[0].getAttribute('data-open-session'), 'a1');
+    assert.ok(tree.list.parentNode!.querySelector('.outline-head-info')!.textContent.includes('1'));
+    tree.search.value = 'beta';
+    tree.search.dispatch('input', {});
+    assert.strictEqual(sessionRows(tree).length, 1);
+    assert.strictEqual(sessionRows(tree)[0].getAttribute('data-open-session'), 'b1');
+    tree.search.value = '';
+    tree.search.dispatch('input', {});
+    NS.sessionMenu.applyPrefs({ historyDisplayLimit: 0 });
+    assert.strictEqual(sessionRows(tree).length, 3);
   });
 
   test('free-text search filters titles/ids, stays combined with the folder filter, and clears', () => {
@@ -8222,6 +8298,73 @@ suite('chat client logic: auto-expand new output (stub DOM)', () => {
   });
 });
 
+suite('chat client logic: shortcuts', () => {
+  function setup() {
+    const { NS, docListeners } = loadClient();
+    const calls: string[] = [];
+    NS.scroll.jumpToTop = () => calls.push('top');
+    NS.scroll.jumpToLatest = () => calls.push('bottom');
+    NS.tabs.activateRelative = (direction: number) => calls.push(String(direction));
+    NS.composer.isComposable = () => true;
+    NS.composer.focusInput = () => calls.push('input');
+    NS.shortcuts.init();
+    const dispatch = (code: string, extra: Record<string, unknown> = {}) => {
+      const event: Record<string, any> = {
+        code, altKey: true, target: null, defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { this.stopped = true; },
+        ...extra,
+      };
+      for (const listener of docListeners.keydown) { listener(event); }
+      return event;
+    };
+    return { NS, calls, dispatch };
+  }
+
+  test('dispatches five defaults and consumes only recognized shortcuts', () => {
+    const { calls, dispatch } = setup();
+    for (const code of ['KeyA', 'KeyE', 'KeyI', 'KeyP', 'KeyN']) {
+      const event = dispatch(code);
+      assert.strictEqual(event.defaultPrevented, true);
+      assert.strictEqual(event.stopped, true);
+    }
+    assert.deepStrictEqual(calls, ['top', 'bottom', 'input', '-1', '1']);
+    assert.strictEqual(dispatch('KeyZ').defaultPrevented, false);
+  });
+
+  test('applies custom bindings and respects disabled shortcuts', () => {
+    const { NS, calls, dispatch } = setup();
+    NS.shortcuts.applyPrefs({ shortcuts: { scrollTop: 'Ctrl+Shift+KeyQ', scrollBottom: null } });
+    assert.strictEqual(dispatch('KeyA').defaultPrevented, false);
+    assert.strictEqual(dispatch('KeyE').defaultPrevented, false);
+    assert.strictEqual(dispatch('KeyQ', { altKey: false, ctrlKey: true, shiftKey: true }).defaultPrevented, true);
+    assert.deepStrictEqual(calls, ['top']);
+  });
+
+  test('leaves IME, AltGr, repeat, extra modifiers and consumed events alone', () => {
+    const { calls, dispatch } = setup();
+    const extras = [
+      { isComposing: true }, { keyCode: 229 }, { repeat: true },
+      { getModifierState: () => true }, { ctrlKey: true }, { defaultPrevented: true },
+    ];
+    for (const extra of extras) { dispatch('KeyA', extra); }
+    assert.deepStrictEqual(calls, []);
+  });
+
+  test('settings and popovers take priority and input focus requires a composable chat', () => {
+    const { NS, calls, dispatch } = setup();
+    NS.settingsPanel.isOpen = () => true;
+    assert.strictEqual(dispatch('KeyA').defaultPrevented, false);
+    NS.settingsPanel.isOpen = () => false;
+    NS.popover.isOpen = () => true;
+    assert.strictEqual(dispatch('KeyA').defaultPrevented, false);
+    NS.popover.isOpen = () => false;
+    NS.composer.isComposable = () => false;
+    assert.strictEqual(dispatch('KeyI').defaultPrevented, true);
+    assert.deepStrictEqual(calls, []);
+  });
+});
+
 // [CUSTOM- 设置面板（2026-10-21）：左侧分组导航 + 右侧行；改动回传宿主，宿主重发整张表。
 suite('chat client logic: settings panel (stub DOM)', () => {
   function panel() {
@@ -8345,7 +8488,7 @@ suite('chat client logic: settings panel (stub DOM)', () => {
     NS.settingsPanel.setItems([
       {
         key: 'vac.customModels', group: 'advanced', label: 'Custom models', type: 'models',
-        value: [{ modelId: 'gpt-6-luna[1m]', name: 'Luna' }],
+        value: [{ modelId: 'custom-model-a', name: 'Model A' }],
       },
     ]);
     // 主面板只放一行摘要 + Edit…，不内联长列表。
@@ -8356,13 +8499,13 @@ suite('chat client logic: settings panel (stub DOM)', () => {
     const rows = els.settingsSubBody.querySelectorAll('.settings-model-row');
     assert.strictEqual(rows.length, 1);
     const inputs = rows[0].querySelectorAll('input');
-    inputs[1].value = 'Luna 2';
+    inputs[1].value = 'Model A 2';
     inputs[1].dispatch('change', {});
-    assert.deepStrictEqual(posted[posted.length - 1], {
-      type: 'setSetting',
-      key: 'vac.customModels',
-      value: [{ modelId: 'gpt-6-luna[1m]', name: 'Luna 2' }],
-    });
+    const request = posted[posted.length - 1];
+    assert.strictEqual(request.type, 'setModelList');
+    assert.ok(typeof request.requestId === 'string' && request.requestId.length > 0);
+    assert.strictEqual(request.force, false);
+    assert.deepStrictEqual(request.value, [{ modelId: 'custom-model-a', name: 'Model A 2' }]);
   });
 
   test('closing the model editor with Escape still commits the last edit', () => {
@@ -8371,7 +8514,7 @@ suite('chat client logic: settings panel (stub DOM)', () => {
     NS.settingsPanel.setItems([
       {
         key: 'vac.customModels', group: 'advanced', label: 'Custom models', type: 'models',
-        value: [{ modelId: 'gpt-6-luna[1m]', name: 'Luna' }],
+        value: [{ modelId: 'custom-model-a', name: 'Model A' }],
       },
     ]);
     (els.settingsBody.querySelector('.settings-action') as StubNode).dispatch('click', {});
@@ -8384,11 +8527,10 @@ suite('chat client logic: settings panel (stub DOM)', () => {
     const esc = { key: 'Escape', preventDefault() {}, stopPropagation() {} };
     for (const fn of docListeners.keydown ?? []) { fn(esc); }
 
-    assert.deepStrictEqual(posted[posted.length - 1], {
-      type: 'setSetting',
-      key: 'vac.customModels',
-      value: [{ modelId: 'gpt-6-luna[1m]', name: 'Luna', description: 'new description' }],
-    });
+    const request = posted[posted.length - 1];
+    assert.strictEqual(request.type, 'setModelList');
+    assert.strictEqual(request.force, false);
+    assert.deepStrictEqual(request.value, [{ modelId: 'custom-model-a', name: 'Model A', description: 'new description' }]);
   });
 
   test('rows show their scope, and Inspect lists every config layer', () => {

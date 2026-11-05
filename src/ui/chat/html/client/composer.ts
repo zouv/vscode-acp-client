@@ -916,7 +916,13 @@ export const composerClient = `
         option.currentValue ? 'Off' : 'On', option.description || ''));
       return;
     }
-    var options = option.options || [];
+    // [CUSTOM- 设置面板里的自定义模型顺序即菜单顺序：只重排 agent 现有的模型候选项，
+    // 不在设置列表里的内置模型保持 agent 原顺序，分组结构（entry.options）保持。
+    var shown = option;
+    if (option.category === 'model' && NS.modelOrder && NS.modelOrder.orderOption) {
+      shown = NS.modelOrder.orderOption(option, state.customModels);
+    }
+    var options = shown.options || [];
     for (var i = 0; i < options.length; i++) {
       var entry = options[i];
       if (entry && entry.options) {

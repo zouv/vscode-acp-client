@@ -105,6 +105,8 @@ function loadCompiled() {
   }
   const require = createRequire(import.meta.url);
   const dir = join(ROOT, 'out', 'ui', 'chat', 'html');
+  const SafeMarkdown = require(join(dir, '..', 'markdown')).SafeMarkdown;
+  const markdown = new SafeMarkdown();
   return {
     styles: require(join(dir, 'styles')).styles,
     body: require(join(dir, 'body')).body,
@@ -112,8 +114,10 @@ function loadCompiled() {
     // 宿主侧 SafeMarkdown 的**真实输出**，不做手写近似 ——
     // #linkclick 档要验的正是"宿主写出来的 HTML 经过真 sanitize / 真点击之后还剩什么"，
     // 于是它的**输入**必须是真产物（同 #bootround 用真 clientSource 的道理）。
-    fileLinkHtml: new (require(join(dir, '..', 'markdown')).SafeMarkdown)()
-      .render('[GOAL.md:74](GOAL.md:74)'),
+    fileLinkHtml: markdown.render('[GOAL.md:74](GOAL.md:74)'),
+    // 工具正文也必须走真的 SafeMarkdown：预览原先自己拼 `<pre><code>`，
+    // 既不是宿主产物，也绕过了 webview 默认样式（阅读卡片色块曾因此漏检）。
+    renderMarkdown: (text) => markdown.render(text),
   };
 }
 
@@ -124,6 +128,25 @@ function loadCompiled() {
  * pretending it returned something is honest here — it is the input, not the subject).
  */
 const AT = Date.parse('2026-09-29T10:24:00Z');
+// 脱敏的 Read 载荷：与 claude-agent-acp 0.91.0 的真实形状一致（无语言围栏 +
+// 「行号<Tab>原文」），但路径/内容全部换成虚构示例。用于验证真实 SafeMarkdown
+// 渲染 + 净化 + 工具卡装饰后的代码块观感（见 #readblock 档）。
+const READ_TEXT = [
+  '```',
+  '1\t# Sample module notes',
+  '2\t',
+  '3\t> Type: Editor · Source: Source/Editor/Sample',
+  '4\t',
+  '5\t## Overview',
+  '6\t',
+  '7\tSampleEditor is **the editor-side layer** for the sample feature.',
+  '8\t',
+  '9\tint main() {',
+  '10\t    return 0;',
+  '11\t    const veryLongName = "' + '0123456789'.repeat(24) + '";',
+  '12\t}',
+  '```',
+].join('\n');
 const FIXTURES = [
   { id: 'u1', kind: 'user', at: AT, text: '请继续' },
   {
@@ -196,6 +219,16 @@ const FIXTURES = [
       items: [{ type: 'content', block: { type: 'text', text: '   ' } }],
     },
   },
+  {
+    id: 'toolread', kind: 'tool', at: AT + 9000,
+    toolView: {
+      toolCallId: 'call_read_1', title: 'Read sample.txt', kind: 'read',
+      status: 'completed', toolName: 'Read', description: 'Read sample.txt',
+      locations: [{ path: '/project/src/sample.txt', name: 'sample.txt', line: 1 }],
+      elapsedMs: 12,
+      items: [{ type: 'content', block: { type: 'text', text: READ_TEXT } }],
+    },
+  },
 ];
 
 const THEME = `:root {
@@ -217,6 +250,12 @@ const THEME = `:root {
   --vscode-button-hoverBackground: #1177bb;
   --vscode-button-secondaryForeground: #ffffff;
   --vscode-textCodeBlock-background: #2b2b2b;
+  /* VS Code 的 webview 默认样式表（@layer vscode-default）给每个 <code> 上
+     --vscode-textPreformat-background。预览原先没带这份默认样式，于是真实 webview 里
+     「<pre> 内 <code> 逐行上背景」的观感在截图里根本复现不出来（Read 卡片缩进黑块）。 */
+  --vscode-textPreformat-background: #262626;
+  --vscode-textPreformat-foreground: #d19a66;
+  --monaco-monospace-font: Consolas, monospace;
   /* 真主题里这两个 token 一定有（Dark+ 就是下面这组），而这份预览主题
      原先没写 —— 子 agent 的 chip（.tool-subagent）用的正是它们，缺了就会与 .tool-name 撞成同色，
      于是"看截图"这条验收根本验不出东西。补上，让预览与真机一致。 */
@@ -246,6 +285,21 @@ const THEME = `:root {
   --vscode-list-activeSelectionBackground: #094771;
   --vscode-list-activeSelectionForeground: #ffffff;
   --vscode-editor-font-family: Consolas, monospace;
+}`;
+
+// VS Code webview 自带的默认元素样式（@layer vscode-default），从
+// resources/app/out/vs/workbench/contrib/webview/browser/pre/index.html 抄来。
+// **必须带上**：我们自己的样式叠在它上面，但没显式覆盖的属性（例如 <code> 的背景）
+// 会由它生效。预览漏掉这份样式时，「<pre> 内 <code> 逐行上背景」在截图里不可见。
+const VSCODE_WEBVIEW_DEFAULT = `@layer vscode-default {
+  code {
+    font-family: var(--monaco-monospace-font);
+    color: var(--vscode-textPreformat-foreground);
+    background-color: var(--vscode-textPreformat-background);
+    padding: 1px 3px;
+    border-radius: 4px;
+  }
+  pre code { padding: 0; }
 }`;
 
 /** The driver: render the fixtures, then honour '#collapsed' by closing every fold. */
@@ -306,11 +360,85 @@ function driver() {
       // everything itself — which is exactly how the "tool bodies stay empty" bug
       // stayed invisible here while the real panel showed empty boxes.
       if (!toolItems[p].sessionId) { dropped++; continue; }
+      var toolText = String(toolItems[p].text || '');
+      var reply = window.__vacToolMarkdownHtml && window.__vacToolMarkdownHtml[toolText];
       NS.toolCallView.applyMarkdown(
-        toolItems[p].key, '<pre><code>' + escapeHtml(String(toolItems[p].text || '')) + '</code></pre>');
+        toolItems[p].key, reply || '<pre><code>' + escapeHtml(toolText) + '</code></pre>');
     }
     if (dropped > 0) { console.warn(dropped + ' tool markdown item(s) DROPPED: the request carried no sessionId'); }
   } catch (err) { console.warn('markdown reply failed', err); }
+  // #readblock / #readblockprobe：展开工具卡，让 Read 正文可见。预览原先从不展开
+  // 工具卡，所以"Read 卡片逐行黑块"这类**只在正文里**出现的问题截图看不到。
+  if (hash.indexOf('readblock') >= 0) {
+    var emptyState = document.querySelector('.empty-state');
+    if (emptyState) { emptyState.style.display = 'none'; }
+    var toolBodies = messages.querySelectorAll('.tool-body');
+    for (var tb = 0; tb < toolBodies.length; tb++) { toolBodies[tb].hidden = false; }
+  }
+  // #readblockprobe：读**真实 DOM + 计算样式**，不靠看图。
+  // 判据：<pre> 保留代码块底色；<code> 的背景必须透明（VS Code webview 默认样式会
+  // 给每个 <code> 上 --vscode-textPreformat-background，多行时逐 line box 上色）。
+  if (hash.indexOf('readblockprobe') >= 0) {
+    var readCode = document.querySelector('.tool-body pre > code');
+    var readPre = readCode ? readCode.parentNode : null;
+    var preStyle = readPre ? getComputedStyle(readPre) : null;
+    var codeStyle = readCode ? getComputedStyle(readCode) : null;
+    var rects = [];
+    if (readCode) {
+      var readRange = document.createRange();
+      readRange.selectNodeContents(readCode);
+      var rangeRects = readRange.getClientRects();
+      for (var rr = 0; rr < rangeRects.length && rr < 40; rr++) {
+        rects.push(Math.round(rangeRects[rr].width));
+      }
+    }
+    var transparent = !codeStyle || codeStyle.backgroundColor === 'rgba(0, 0, 0, 0)'
+      || codeStyle.backgroundColor === 'transparent';
+    var readHost = readPre && readPre.closest('.tool-text.md');
+    var hostWhiteSpace = readHost ? getComputedStyle(readHost).whiteSpace : null;
+    var selectionText = null;
+    if (readCode) {
+      var selectRange = document.createRange();
+      selectRange.selectNodeContents(readCode);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(selectRange);
+      selectionText = selection.toString().slice(0, 40);
+      selection.removeAllRanges();
+    }
+    var probeEl = document.createElement('pre');
+    probeEl.id = 'probe';
+    probeEl.style.cssText = 'display:none';
+    probeEl.textContent = JSON.stringify({
+      kind: 'read-block',
+      preFound: !!readPre,
+      codeFound: !!readCode,
+      preBg: preStyle && preStyle.backgroundColor,
+      codeBg: codeStyle && codeStyle.backgroundColor,
+      codeColor: codeStyle && codeStyle.color,
+      codePadding: codeStyle && codeStyle.padding,
+      codeDisplay: codeStyle && codeStyle.display,
+      tabSize: codeStyle && codeStyle.tabSize,
+      lineBoxes: rects.length,
+      firstLineWidths: rects.slice(0, 6),
+      copyButton: !!document.querySelector('.code-copy[data-code-copy="1"]'),
+      textPrefix: readCode ? readCode.textContent.slice(0, 24) : null,
+      preScrolls: !!readPre && readPre.scrollWidth > readPre.clientWidth,
+      preClientWidth: readPre ? readPre.clientWidth : null,
+      preScrollWidth: readPre ? readPre.scrollWidth : null,
+      preWhiteSpace: preStyle && preStyle.whiteSpace,
+      preOverflowX: preStyle && preStyle.overflowX,
+      codeMaxRight: rects.length ? Math.max.apply(null, rects) : null,
+      codeBoxWidth: readCode ? Math.round(readCode.getBoundingClientRect().width) : null,
+      codeScrollWidth: readCode ? readCode.scrollWidth : null,
+      hostWhiteSpace: hostWhiteSpace,
+      selectionText: selectionText,
+      passed: !!readPre && !!readCode && transparent && hostWhiteSpace === 'normal'
+        && typeof selectionText === 'string' && selectionText.length > 0
+        && preStyle.backgroundColor !== 'rgba(0, 0, 0, 0)',
+    });
+    document.body.appendChild(probeEl);
+  }
   if (location.hash.indexOf('collapsed') >= 0) {
     var folds = messages.querySelectorAll('details');
     for (var f = 0; f < folds.length; f++) { folds[f].open = false; }
@@ -2701,8 +2829,24 @@ function buildHtml() {
   // `[GOAL.md:74](GOAL.md:74)` 的真实产物。`<` 转义掉，免得序列化后提前结束脚本标签。
   const linkHtmlScript = '<script>window.__vacLinkHtml = '
     + JSON.stringify(compiled.fileLinkHtml).replace(/</g, '\\u003c') + ';</script>';
-  return [title, `<style>${THEME}</style>`, `<style>${style}</style>`, markup,
-    vscodeStub, earlyErrors, linkHtmlScript,
+  // 工具正文的输入 → 宿主 SafeMarkdown 的真实 HTML。driver 按 text 精确匹配回填；
+  // 不在表里的文本仍回落到转义 <pre>（保持既有夹具可用）。
+  const toolMarkdownHtml = {};
+  for (const entry of FIXTURES) {
+    const items = entry.toolView && entry.toolView.items;
+    if (!Array.isArray(items)) { continue; }
+    for (const item of items) {
+      const text = item && item.block && item.block.text;
+      if (typeof text === 'string' && text.trim()) {
+        toolMarkdownHtml[text] = compiled.renderMarkdown(text);
+      }
+    }
+  }
+  const toolMarkdownScript = '<script>window.__vacToolMarkdownHtml = '
+    + JSON.stringify(toolMarkdownHtml).replace(/</g, '\\u003c') + ';</script>';
+  return [title, `<style>${THEME}</style>`, `<style>${VSCODE_WEBVIEW_DEFAULT}</style>`,
+    `<style>${style}</style>`, markup,
+    vscodeStub, earlyErrors, linkHtmlScript, toolMarkdownScript,
     `<script>${script}</script>`, `<script>${driver()}</script>`].join('\n');
 }
 
@@ -3128,6 +3272,11 @@ const SHOTS = [
   ['#expanded', 'expanded'],
   ['#collapsed', 'collapsed'],
   ['#tools', 'tools'],
+  // 真实 SafeMarkdown + 净化器 + 工具卡装饰后的 Read 卡片：代码块只该有 <pre> 的
+  // 一块底色，<code> 不逐行上色。#readblockprobe 的 #probe 读数用 --dump-dom 读
+  // （codeBg 必须是 rgba(0, 0, 0, 0)、lineBoxes > 1、preBg 不透明）。
+  ['#readblock', 'read-block', '900,900'],
+  ['#readblockprobe', 'read-block-probe', '900,900'],
   ['#empty', 'empty'],
   ['#connecting', 'connecting'],
   ['#ready', 'ready'],

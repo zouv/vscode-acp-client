@@ -48,11 +48,15 @@ export async function writeSetting(key: string, value: unknown, target: SettingW
   if (target === 'panel') {
     throw new Error(`not a VS Code setting: ${key}`);
   }
-  const useWorkspace = target === 'workspace' && (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
+  // [CUSTOM- 没有文件夹时不能把 workspace 目标静默降级成 user：那会让面板显示的层
+  // 与实际写入层不一致（模型列表的 CAS 会因此误报/写错层）。直接拒绝。
+  if (target === 'workspace' && (vscode.workspace.workspaceFolders?.length ?? 0) === 0) {
+    throw new Error('Workspace settings need an open folder.');
+  }
   await vscode.workspace.getConfiguration('vac').update(
     key,
     value,
-    useWorkspace ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global,
+    target === 'workspace' ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global,
   );
 }
 
