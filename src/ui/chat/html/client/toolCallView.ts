@@ -627,7 +627,15 @@ export const toolCallViewClient = `
       var item = items[j];
       if (item.type === 'content' && item.block && item.block.type === 'text' && isBlank(item.block.text)) { continue; }
       // Positional key so a rebuilt diff keeps the user's expansion state.
-      outputs.push(renderContentItem(item, 'i' + j + ':' + (item.path || ''), entryId, tool));
+      var itemKey = 'i' + j + ':' + (item.path || '');
+      var rendered = renderContentItem(item, itemKey, entryId, tool);
+      // [CUSTOM- Tag a markdown text host with its slot so a later update whose
+      // layout is unchanged can re-render just this host (see patchBodyContent).
+      if (item.type === 'content' && item.block && item.block.type === 'text' && rendered.setAttribute) {
+        rendered.setAttribute('data-tool-item', itemKey);
+        rendered.setAttribute('data-text-sig', signatureText(item.block.text));
+      }
+      outputs.push(rendered);
     }
     var commandLine = '' + (tool.command || '');
     // [CUSTOM- Nothing renderable, but the agent did report output text:
@@ -638,10 +646,13 @@ export const toolCallViewClient = `
     if (!hasVisibleItem(items) && tool.output) {
       if (hasTableRow(tool.output)) {
         var rawHost = el('div', 'tool-text md');
+        rawHost.setAttribute('data-tool-item', 'raw');
         markdownText(rawHost, (entryId || '') + '#raw', entryId || '', tool.output, readContextKey(tool));
         outputs.push(rawHost);
       } else {
-        outputs.push(el('pre', 'tool-raw', tool.output));
+        var rawPre = el('pre', 'tool-raw', tool.output);
+        rawOutputs.set(rawPre, String(tool.output));
+        outputs.push(rawPre);
       }
     }
     if (!commandLine && outputs.length === 0) {
@@ -737,69 +748,148 @@ export const toolCallViewClient = `
     return h + ':' + s.length;
   }
 
+  // [CUSTOM- Signature fingerprints are bounded: up to SIG_FULL chars are hashed
+  // whole; past that, head + tail + a strided sample + the length. A signature only
+  // decides "rebuild or not" and is recomputed on every output chunk of a running
+  // command, so it must not cost O(total output) each time. (Markdown cache KEYS
+  // still use the exact fingerprintText.)
+  var SIG_FULL = 65536;
+  var SIG_EDGE = 16384;
+  var SIG_STRIDE = 97;
+
+  function hashRange(s, from, to, step) {
+    var h = 2166136261;
+    for (var i = from; i < to; i += step) {
+      h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;
+    }
+    return h;
+  }
+
+  /** Never null: large values use the bounded form described above. */
+  function signatureText(value) {
+    if (value === null || value === undefined) { return '-'; }
+    var s = String(value);
+    if (s.length <= SIG_FULL) { return fingerprintText(s); }
+    return hashRange(s, 0, SIG_EDGE, 1) + '.' + hashRange(s, s.length - SIG_EDGE, s.length, 1)
+      + '.' + hashRange(s, SIG_EDGE, s.length - SIG_EDGE, SIG_STRIDE) + ':' + s.length;
+  }
+
+  /** How the raw-output fallback is rendered: '' (not at all) | 'md' | 'raw'. */
+  function outputMode(tool) {
+    if (hasVisibleItem(tool.items || []) || !tool.output) { return ''; }
+    return hasTableRow(tool.output) ? 'md' : 'raw';
+  }
+
   /**
-   * [CUSTOM- Cheap identity of everything the body renders.
+   * [CUSTOM- Cheap identity of everything the body renders, in two parts:
+   * · layout — the body's STRUCTURE (which nodes exist and everything that is not a
+   * text host's text). A change means the body is rebuilt.
+   * · content — the texts of the markdown text items and of the raw output. A
+   * content-only change is patched into the existing nodes (patchBodyContent):
+   * a running command streams output on every update, and a rebuild per chunk
+   * re-ran every diff, re-asked markdown and lost the reader's selection/scroll.
    *
-   * Most 'tool_call_update's change only the status, which lives in the head —
-   * rebuilding the body for those also re-runs every diff's LCS for nothing.
-   * Returns **null** when the body cannot be fingerprinted cheaply; the caller
-   * must then rebuild unconditionally.
-   *
-   * Deliberately never stringifies a payload: an image block's data URI is
-   * megabytes long, so image-bearing cards opt out of the cache instead.
+   * Most 'tool_call_update's change only the status, which lives in the head, and
+   * cost neither. INV-H: every field the body RENDERS must be in one of the two
+   * parts, or a change to it leaves the card permanently stale.
    */
   function bodySignature(tool) {
-    var command = fingerprintText(tool.command);
-    if (command === null) { return null; }
-    // [CUSTOM- The leading 'cmd:' is now a HASH, not a length —
+    // [CUSTOM- The leading 'cmd:' is a HASH, not a length —
     // see fingerprintText for why a length is not a safe change signal.
-    var parts = ['cmd:' + command];
-    // [CUSTOM- The body's Read markdown key now depends on kind; INV-H applies.
+    var parts = ['cmd:' + signatureText(tool.command)];
+    // [CUSTOM- The body's Read markdown key depends on kind; INV-H applies.
     parts.push('kind:' + (tool.kind || ''));
-    // [CUSTOM- INV-H: every field the body RENDERS must be in here, or a
-    // change to it leaves the card permanently stale. The raw-output fallback is one of
-    // them; whether it is used depends on the items, which are covered below.
-    var outputFp = fingerprintText(tool.output);
-    if (outputFp === null) { return null; }
-    parts.push('out:' + outputFp);
     // [CUSTOM- 正文那一段的标签取决于它（子 agent 的报告要标出来）—— INV-H：
     // 正文渲染读到的每个字段都得在这儿，漏一个就是"卡片永久停在旧样子"。
     parts.push('sub:' + ((tool.subagent && tool.subagent.type) || ''));
+    var mode = outputMode(tool);
+    parts.push('outmode:' + mode);
+    var content = [];
     var locations = tool.locations || [];
     for (var i = 0; i < locations.length; i++) {
-      var locFp = fingerprintText(locations[i].path);
-      if (locFp === null) { return null; }
-      parts.push('loc:' + locFp + ':' + (locations[i].line || 0));
+      parts.push('loc:' + signatureText(locations[i].path) + ':' + (locations[i].line || 0));
     }
     var items = tool.items || [];
     for (var j = 0; j < items.length; j++) {
       var item = items[j];
       if (item.type === 'diff') {
-        var oldFp = fingerprintText(item.oldText);
-        var newFp = fingerprintText(item.newText);
-        if (oldFp === null || newFp === null) { return null; }
-        parts.push('diff:' + item.path + ':' + oldFp + ':' + newFp);
+        parts.push('diff:' + item.path + ':' + signatureText(item.oldText) + ':' + signatureText(item.newText));
       } else if (item.type === 'terminal') {
         parts.push('term:' + item.terminalId);
       } else if (item.block) {
         var block = item.block;
-        // An image's data URI is megabytes long, so it is never scanned: the
-        // card opts out of the cache rather than risk a stale render.
-        if (block.type === 'image') { return null; }
-        var textFp = fingerprintText(block.text);
-        if (textFp === null) { return null; }
-        // Every field any non-image renderer reads, so a change cannot slip
-        // past the signature (an under-covered field = permanently stale card).
+        var textual = item.type === 'content' && block.type === 'text';
+        // Every field any renderer reads, so a change cannot slip past the
+        // signature (an under-covered field = permanently stale card). An image's
+        // data URI is fingerprinted in the bounded form, never stringified.
         parts.push('blk:' + block.type
-          + ':' + textFp
+          + ':' + (textual ? (isBlank(block.text) ? 'blank' : 'text') : signatureText(block.text))
+          + ':' + (block.type === 'image' ? signatureText(block.dataUri) : '')
           + ':' + (block.uri || '')
           + ':' + (block.name || '')
           + ':' + (block.title || '')
           + ':' + (block.mimeType || '')
           + ':' + (block.byteLength || 0));
+        if (textual) { content.push('t' + j + ':' + signatureText(block.text)); }
       }
     }
-    return parts.join('|');
+    if (mode) { content.push('out:' + signatureText(tool.output)); }
+    var layout = parts.join('|');
+    return { layout: layout, full: layout + '||' + content.join('|') };
+  }
+
+  // [CUSTOM- pre.tool-raw -> the output text it shows, for the append-only patch.
+  var rawOutputs = new WeakMap();
+
+  function itemHost(body, key) {
+    var hosts = body.querySelectorAll('.tool-text');
+    for (var i = 0; i < hosts.length; i++) {
+      if (hosts[i].getAttribute('data-tool-item') === key) { return hosts[i]; }
+    }
+    return null;
+  }
+
+  /**
+   * [CUSTOM- Same layout, new texts: patch the existing hosts instead of
+   * rebuilding the body. A markdown host keeps its current HTML until the new
+   * rendering arrives (no blank flash); raw output that only GREW gets just the
+   * new suffix appended, so a selection or inner scroll inside it survives.
+   * Returns false when a host is missing — the caller then rebuilds.
+   */
+  function patchBodyContent(body, tool, entryId) {
+    var items = tool.items || [];
+    for (var j = 0; j < items.length; j++) {
+      var item = items[j];
+      if (item.type !== 'content' || !item.block || item.block.type !== 'text' || isBlank(item.block.text)) { continue; }
+      var key = 'i' + j + ':' + (item.path || '');
+      var host = itemHost(body, key);
+      if (!host) { return false; }
+      var fp = signatureText(item.block.text);
+      if (host.getAttribute('data-text-sig') === fp) { continue; }
+      markdownText(host, (entryId || '') + '#' + key, entryId || '',
+        toolMarkdownSource(item.block.text, tool), readContextKey(tool));
+      host.setAttribute('data-text-sig', fp);
+    }
+    var mode = outputMode(tool);
+    if (mode === 'md') {
+      var mdHost = itemHost(body, 'raw');
+      if (!mdHost) { return false; }
+      markdownText(mdHost, (entryId || '') + '#raw', entryId || '', tool.output, readContextKey(tool));
+    } else if (mode === 'raw') {
+      var pre = body.querySelector('.tool-raw');
+      if (!pre) { return false; }
+      var next = String(tool.output);
+      var shown = rawOutputs.get(pre);
+      var last = pre.lastChild;
+      if (typeof shown === 'string' && next.length >= shown.length && next.lastIndexOf(shown, 0) === 0
+        && last && last.nodeType === 3 && last.appendData) {
+        if (next.length > shown.length) { last.appendData(next.slice(shown.length)); }
+      } else if (shown !== next) {
+        pre.textContent = next;
+      }
+      rawOutputs.set(pre, next);
+    }
+    return true;
   }
 
   /** Build the DOM for a tool call. */
@@ -844,7 +934,8 @@ export const toolCallViewClient = `
     body.hidden = true;
     fillToolBody(body, tool, entryId);
     var signature = bodySignature(tool);
-    if (signature !== null) { wrap.setAttribute('data-body-sig', signature); }
+    wrap.setAttribute('data-body-sig', signature.full);
+    wrap.setAttribute('data-body-layout', signature.layout);
     wrap.appendChild(body);
     return wrap;
   }
@@ -1007,12 +1098,16 @@ export const toolCallViewClient = `
       // move the status).
       var signature = bodySignature(tool);
       var previous = node.getAttribute('data-body-sig');
-      if (signature === null || previous === null || signature !== previous) {
-        var expansion = captureExpansion(body);
-        fillToolBody(body, tool, entryId);
-        applyExpansion(body, expansion);
-        if (signature === null) { node.removeAttribute('data-body-sig'); }
-        else { node.setAttribute('data-body-sig', signature); }
+      var previousLayout = node.getAttribute('data-body-layout');
+      if (previous !== signature.full) {
+        var patched = previousLayout === signature.layout && patchBodyContent(body, tool, entryId);
+        if (!patched) {
+          var expansion = captureExpansion(body);
+          fillToolBody(body, tool, entryId);
+          applyExpansion(body, expansion);
+        }
+        node.setAttribute('data-body-sig', signature.full);
+        node.setAttribute('data-body-layout', signature.layout);
       }
     }
     // [CUSTOM- Coalesced, not synchronous: this runs on every

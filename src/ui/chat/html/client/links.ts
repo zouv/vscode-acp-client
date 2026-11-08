@@ -79,6 +79,11 @@ export const linksClient = `
     return null;
   }
 
+  /** 权限/表单的动作只能由真正的按钮触发（委托分支的第二道门）。 */
+  function isButton(node) {
+    return !!node && String(node.tagName || '').toUpperCase() === 'BUTTON';
+  }
+
   function onCopyClicked(button) {
     var wrap = button.parentNode;
     var code = wrap ? wrap.querySelector('code') : null;
@@ -141,6 +146,8 @@ export const linksClient = `
       // permissionView.answer —— 两处各自发送就是两份知识（pitfall #19）。
       var permBtn = closestWithAttr(target, 'data-perm-option');
       if (permBtn) {
+        // 只认 BUTTON：data-* 已经从 sanitizer 的白名单里拿掉了，这是第二道门。
+        if (!isButton(permBtn)) { return; }
         event.preventDefault();
         if (permBtn.disabled) { return; }
         var permHost = target.closest
@@ -159,6 +166,7 @@ export const linksClient = `
       // data-elic-action 与 data-elic-id。收集字段值的活留在 elicitationView（它owner表单结构）。
       var elicBtn = closestWithAttr(target, 'data-elic-action');
       if (elicBtn) {
+        if (!isButton(elicBtn)) { return; }
         event.preventDefault();
         if (elicBtn.disabled) { return; }
         // [CUSTOM- 表单有两处宿主：记录里的内联条（.elic）与悬浮抽屉

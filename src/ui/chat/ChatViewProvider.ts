@@ -21,6 +21,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private readonly host: ChatPanelHost;
   private readonly editor: ChatEditorPanel;
   private readonly side: SideChatPanel;
+  private readonly subscriptions: vscode.Disposable[] = [];
 
   constructor(
     extensionUri: vscode.Uri,
@@ -38,7 +39,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.host.setStorageRoot(storageRoot);
     this.editor = new ChatEditorPanel(this.host, sessionManager, extensionUri, () => this.context());
     this.side = new SideChatPanel(this.host, sessionManager, extensionUri);
-    sessionManager.on('active-session-changed', () => this.syncFocus());
+    const syncFocus = () => this.syncFocus();
+    sessionManager.on('active-session-changed', syncFocus);
+    this.subscriptions.push({ dispose: () => sessionManager.off('active-session-changed', syncFocus) });
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -82,6 +85,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   dispose(): void {
+    for (const subscription of this.subscriptions) { subscription.dispose(); }
+    this.subscriptions.length = 0;
     this.side.dispose();
     this.editor.dispose();
     this.host.detach();

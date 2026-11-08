@@ -42,6 +42,12 @@ export const outlineClient = `
   var mode = 'popup';     // 'popup' | 'sidebar'（持久化）
   var isOpen = false;     // 当前形态是否可见
   var width = 240;        // 侧栏宽度 px（持久化）
+
+  /** IME 合成中（含死键 / AltGraph）的 Escape 属于输入法，不是大纲的快捷键。 */
+  function composing(event) {
+    return !!(event && (event.isComposing || event.keyCode === 229 || event.key === 'Dead'
+      || (event.getModifierState && event.getModifierState('AltGraph'))));
+  }
   // [CUSTOM- 侧栏的**开/关**按会话记 + 一个默认值（与 Times 200 同一套语义）：
   // · openBySession —— 用户在那个会话里最后一次的开/关；
   // · openDefault   —— 用户最后一次在**任何地方**做的选择；没有记录的会话用它。
@@ -99,17 +105,27 @@ export const outlineClient = `
     return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   }
 
+  /**
+   * [CUSTOM- Whitespace-collapsed text cut to 'max' (+ ellipsis). Collapses a
+   * bounded head only (the body can be 64KB and this runs per row); a head that
+   * collapses to <= max falls back to the whole text, so the result is identical.
+   */
+  function collapsed(value, max) {
+    var raw = String(value || '');
+    var head = max * 4;
+    var text = raw.slice(0, head).replace(/\\s+/g, ' ').trim();
+    if (text.length <= max && raw.length > head) { text = raw.replace(/\\s+/g, ' ').trim(); }
+    if (text.length > max) { text = text.slice(0, max) + '\\u2026'; }
+    return text;
+  }
+
   function labelOf(entry) {
-    var text = String((entry && entry.text) || '').replace(/\\s+/g, ' ').trim();
-    if (text.length > LABEL_MAX) { text = text.slice(0, LABEL_MAX) + '\\u2026'; }
-    return text || '(empty message)';
+    return collapsed(entry && entry.text, LABEL_MAX) || '(empty message)';
   }
 
   // [CUSTOM- 悬停时的全文（截到 TITLE_MAX）。
   function titleOf(entry) {
-    var text = String((entry && entry.text) || '').replace(/\\s+/g, ' ').trim();
-    if (text.length > TITLE_MAX) { text = text.slice(0, TITLE_MAX) + '\\u2026'; }
-    return text || '';
+    return collapsed(entry && entry.text, TITLE_MAX);
   }
 
   /** Anchor entries, in transcript order. Messages tab: user + assistant. */
@@ -168,7 +184,21 @@ export const outlineClient = `
     renderVisibility();
   }
 
-  function renderInto(head, list) {
+  function rowSignature(entry, cards) {
+    if (cards) {
+      return entry.id + '\\u0001' + entry.kind + '\\u0001' + (entry.status || '') + '\\u0001' + entry.typeLabel
+        + '\\u0001' + entry.label + '\\u0001' + (entry.at || 0) + (entry.atIsElapsed ? 'e' : '');
+    }
+    return entry.id + '\\u0001' + entry.kind + '\\u0001' + labelOf(entry) + '\\u0001' + titleOf(entry)
+      + '\\u0001' + (entry.at || 0) + (entry.atIsElapsed ? 'e' : '');
+  }
+
+  // [CUSTOM- What each list last showed. A transcript change that leaves every
+  // visible row the same (a streamed chunk past the label/title cut) must not
+  // rebuild 200 buttons — that also dropped hover and keyboard focus per chunk.
+  var renderedSig = new WeakMap();
+
+  function renderInto(head, list, onlyIfChanged) {
     var cards = tab === 'cards';
     var items = anchors();
     var hidden = 0;
@@ -176,6 +206,11 @@ export const outlineClient = `
       hidden = items.length - MAX_ITEMS;
       items = items.slice(hidden);
     }
+    var sigParts = [tab, String(hidden)];
+    for (var r = 0; r < items.length; r++) { sigParts.push(rowSignature(items[r], cards)); }
+    var sig = sigParts.join('\\u0002');
+    if (onlyIfChanged && renderedSig.get(list) === sig) { return; }
+    renderedSig.set(list, sig);
     NS.dom.clear(list);
     NS.dom.clear(head);
     var noun = cards ? 'card' : 'message';
@@ -231,10 +266,22 @@ export const outlineClient = `
   }
 
   /** Render the visible surface (dropdown or sidebar), if any. */
-  function render() {
+  function render(onlyIfChanged) {
     if (!isOpen) { return; }
-    if (mode === 'sidebar') { renderInto(sideHead, sideList); }
-    else { renderInto(drawerHead, drawerList); }
+    if (mode === 'sidebar') { renderInto(sideHead, sideList, onlyIfChanged); }
+    else { renderInto(drawerHead, drawerList, onlyIfChanged); }
+  }
+
+  // [CUSTOM- invalidate() fires per streamed chunk: coalesce its re-render to one
+  // per frame (and to nothing when the rows did not change, see renderInto).
+  var renderQueued = false;
+  function renderSoon() {
+    if (renderQueued) { return; }
+    renderQueued = true;
+    NS.dom.schedule(function () {
+      renderQueued = false;
+      render(true);
+    });
   }
 
   /** Sync .hidden and the button's .on state to isOpen/mode/有没有可导航的东西。 */
@@ -654,7 +701,7 @@ export const outlineClient = `
   function invalidate() {
     tops = null;
     syncButton();
-    if (isOpen) { render(); }
+    if (isOpen) { renderSoon(); }
   }
 
   function onClick(event) {
@@ -722,7 +769,7 @@ export const outlineClient = `
     // Capture + stopPropagation: Escape must close the surface instead of
     // cancelling the running turn (composer listens on the textarea).
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape' && isOpen) {
+      if (event.key === 'Escape' && isOpen && !composing(event)) {
         event.preventDefault();
         event.stopPropagation();
         hide();

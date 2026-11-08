@@ -45,6 +45,13 @@ export interface AssistantEntry extends EntryBase {
   html?: string;
   /** ACP `ContentChunk.messageId` when the agent supplies it (@experimental). */
   messageId?: string;
+  /**
+   * [CUSTOM- The sub-agent child session this prose came from, if any. Two prose
+   * streams flattened into the parent transcript (parallel children) must not
+   * merge into one bubble merely because the last entry is still streaming; the
+   * store merges only chunks of the same origin (`undefined` = the parent).
+   */
+  origin?: string;
   streaming: boolean;
 }
 
@@ -61,6 +68,8 @@ export interface ThoughtEntry extends EntryBase {
    */
   html?: string;
   messageId?: string;
+  /** [CUSTOM- Sub-agent origin for merge isolation, same as AssistantEntry.origin. */
+  origin?: string;
   streaming: boolean;
   /** Wall-clock duration, filled in when the thought block is finalized. */
   elapsedMs?: number;

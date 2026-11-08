@@ -47,6 +47,35 @@ const taskLikeCache = new WeakMap<
   { kind: unknown; title: unknown; rawInput: unknown; result: boolean }
 >();
 const payloadTextCache = new WeakMap<object, string>();
+// [CUSTOM- payload → (child id → mentioned?). Same identity-based invalidation:
+// an unchanged payload is probed for the same child ids on every round of every update.
+const mentionCache = new WeakMap<object, Map<string, boolean>>();
+
+/** The invocation fields a nesting decision reads (by value or by identity). */
+export interface NestingInputs {
+  kind: unknown;
+  title: unknown;
+  rawInput: unknown;
+  rawOutput: unknown;
+  meta: unknown;
+  status: unknown;
+  startedAt: number;
+  endedAt: number | undefined;
+}
+
+/** Capture before an in-place upsert, compare after (see `needsPass`). */
+export function nestingInputsOf(inv: ToolInvocation): NestingInputs {
+  return {
+    kind: inv.kind, title: inv.title, rawInput: inv.rawInput, rawOutput: inv.rawOutput,
+    meta: inv.meta, status: inv.status, startedAt: inv.startedAt, endedAt: inv.endedAt,
+  };
+}
+
+function sameInputs(a: NestingInputs, inv: ToolInvocation): boolean {
+  return a.kind === inv.kind && a.title === inv.title && a.rawInput === inv.rawInput
+    && a.rawOutput === inv.rawOutput && a.meta === inv.meta && a.status === inv.status
+    && a.startedAt === inv.startedAt && a.endedAt === inv.endedAt;
+}
 
 interface Decision {
   parentId?: string;
@@ -68,7 +97,23 @@ export class ClaudeCodeNesting implements NestingStrategy {
    * tool update. Converges in 2 rounds when there is nothing to nest, and in at
    * most MAX_DEPTH + 2 otherwise.
    */
+  /**
+   * [CUSTOM- Can this update change any parent link? A content-only update (a
+   * running command's output chunk) cannot, because decisions only read the time
+   * through OPEN intervals (`end = now`): a running Task can come to contain a child,
+   * and a running child can outgrow the parent it is linked to. With neither present
+   * nothing can move. Without a prior snapshot (a new call) the answer is always yes.
+   */
+  needsPass(prior: NestingInputs | undefined, updated: ToolInvocation, all: readonly ToolInvocation[]): boolean {
+    if (!prior || !sameInputs(prior, updated)) { return true; }
+    return all.some(inv => inv.endedAt === undefined && (inv.parentId !== undefined || isTaskLike(inv)));
+  }
+
   apply(all: readonly ToolInvocation[]): string[] {
+    // Only a Task can parent anything: with none present (and no stale links left to
+    // clear) every decision is "no parent", so the pass is skipped outright.
+    const tasks = all.filter(isTaskLike);
+    if (tasks.length === 0 && !all.some(inv => inv.parentId !== undefined || inv.inferredParent)) { return []; }
     const now = Date.now();
     const before = new Map(all.map(inv => [inv.toolCallId, fingerprint(inv)]));
 
@@ -78,7 +123,7 @@ export class ClaudeCodeNesting implements NestingStrategy {
       const next = new Map<string, Decision>();
       let moved = false;
       for (const inv of all) {
-        const decision = this.decide(inv, all, depth, now);
+        const decision = this.decide(inv, tasks, depth, now);
         next.set(inv.toolCallId, decision);
         const previous = decisions.get(inv.toolCallId);
         if (!previous
@@ -105,16 +150,16 @@ export class ClaudeCodeNesting implements NestingStrategy {
 
   private decide(
     inv: ToolInvocation,
-    all: readonly ToolInvocation[],
+    tasks: readonly ToolInvocation[],
     depth: ReadonlyMap<string, number>,
     now: number,
   ): Decision {
     // Only a task-delegation call can be a parent — so a Task may itself be a
     // child of another Task (sub-agents can delegate further), while a plain
-    // Edit/Read can never be grouped under one by accident.
-    const candidates = all.filter(candidate =>
+    // Edit/Read can never be grouped under one by accident. `tasks` is already
+    // filtered to task-like calls (in transcript order).
+    const candidates = tasks.filter(candidate =>
       candidate.toolCallId !== inv.toolCallId
-      && isTaskLike(candidate)
       && (depth.get(candidate.toolCallId) ?? 0) < MAX_DEPTH
       && contains(candidate, inv, now),
     );
@@ -212,6 +257,16 @@ function scanText(value: unknown): string | null {
 }
 
 function payloadContains(value: unknown, needle: string): boolean {
+  if (value && typeof value === 'object') {
+    let seen = mentionCache.get(value);
+    const hit = seen?.get(needle);
+    if (hit !== undefined) { return hit; }
+    const text = scanText(value);
+    const result = text === null ? false : text.includes(needle);
+    if (!seen) { seen = new Map(); mentionCache.set(value, seen); }
+    seen.set(needle, result);
+    return result;
+  }
   const text = scanText(value);
   return text === null ? false : text.includes(needle);
 }

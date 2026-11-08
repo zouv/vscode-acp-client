@@ -22,7 +22,7 @@ import { log, logFilePath } from '../../utils/Logger';
 import { buildStamp, readPackageVersion } from '../../utils/BuildInfo';
 import { renderChatHtml, createNonce } from './html';
 import { SafeMarkdown } from './markdown';
-import { MarkdownStreamCache, type MarkdownStreamFrame } from './MarkdownStream';
+import { MarkdownStreamCache, streamSourceOf, type MarkdownStreamFrame } from './MarkdownStream';
 // [CUSTOM- 回放里文件引用是一段文本（`[@名](file:///…)`），得先认出来。
 import { fileMentionViews } from './markdown';
 import { Outbox } from './Outbox';
@@ -33,6 +33,7 @@ import type {
   ExtToChat,
   ExtToChatMessage,
   MarkdownRendered,
+  RenderMarkdownItem,
   ModelListSync,
   RecoverableSession,
   RestoreChoice,
@@ -53,7 +54,7 @@ import {
   CONFIG_SETTING_KEYS, vscodeSettingIO, type SettingIO,
 } from '../../config/SettingScope';
 // [CUSTOM- 回放结束时的 markdown 预渲染（见 prefillReplayMarkdown）。
-import type { TranscriptEntry } from './transcript/types';
+import type { AssistantEntry, ThoughtEntry, ToolInvocation, TranscriptEntry } from './transcript/types';
 import type { IChatPanel, PanelContext, SideChatOpener } from './panelContract';
 import { primaryAgentName, getAgentNames, getAgentConfig, getAgentKind } from '../../config/AgentConfig';
 import { profileFor } from '../../agents/AgentProfile';
@@ -95,6 +96,7 @@ import { toContentView, hasVisibleContent } from './content/contentBlocks';
 import type { ContentBlockView } from './content/contentBlocks';
 import type { SubagentEntry } from './transcript/types';
 import { resolveNestingStrategy } from './nesting/NestingStrategy';
+import { nestingInputsOf, type NestingInputs } from './nesting/ClaudeCodeNesting';
 import {
   choiceChanges,
   choiceSnapshotFromState,
@@ -308,7 +310,29 @@ const SIDE_MESSAGE_TYPES = new Set([
   'permissionAnswer', 'elicitationAnswer', 'renderMarkdown',
   'copy', 'clientLog', 'openLink', 'openFile', 'setUiPref',
   'detachFile', 'attachPath', 'attachImage', 'setMode', 'setModel',
-  'setConfigOption', 'needToolView', 'openTerminal', 'sideFocus', 'sideClose',
+  'setConfigOption', 'needToolView', 'resyncEntry', 'openTerminal', 'sideFocus', 'sideClose',
+]);
+
+/**
+ * [CUSTOM- Child-session updates that may be aliased into the parent transcript.
+ *
+ * Aliasing EVERYTHING (the old behaviour) made a child's `usage_update` overwrite the
+ * parent's context ring, its `plan` replace the parent's plan card, its
+ * `session_info_update` rename the parent and its mode/config updates print bogus
+ * "Switched to …" notices. Only transcript-bearing traffic is flattened into the
+ * parent; everything else belongs to the child session and is dropped here (see
+ * `subagentParents`).
+ */
+const SUBAGENT_TRANSCRIPT_KINDS: ReadonlySet<string> = new Set([
+  'tool_call', 'tool_call_update',
+  'agent_message_chunk', 'agent_thought_chunk',
+  // Grandchild cards created by a child's own subagent_update stay visible.
+  'subagent_update',
+]);
+
+/** Records/markdown that a `session/load` replay must not stream (see `post`). */
+const TRANSCRIPT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+  'append', 'appendText', 'revise', 'toolUpdate',
 ]);
 
 export class ChatPanelHost implements IChatPanel, PermissionPresenter, ElicitationPresenter {
@@ -328,10 +352,19 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   private connecting = false;
 
   private readonly transcripts = new TranscriptStore((sessionId, entries) => {
+    // One uncopied pass over the remaining rows, and only when a tool row was removed
+    // (a trim removes one entry per append; copying the snapshot per row was O(n) each).
+    let visible: Set<string> | null = null;
     for (const entry of entries) {
       if (entry.kind !== 'tool') { continue; }
+      if (!visible) {
+        visible = new Set();
+        for (const row of this.transcripts.peekEntries(sessionId)) {
+          if (row.kind === 'tool') { visible.add(row.toolCallId); }
+        }
+      }
       // Duplicate ids can still have a newer visible transcript row.
-      if (this.transcripts.snapshot(sessionId)?.entries.some(row => row.kind === 'tool' && row.toolCallId === entry.toolCallId)) { continue; }
+      if (visible.has(entry.toolCallId)) { continue; }
       this.tools.remove(sessionId, entry.toolCallId);
       this.toolEntryIds.delete(toolKey(sessionId, entry.toolCallId));
     }
@@ -369,6 +402,16 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * 子 agent 分组）因此原样生效，卡片只承担身份、状态与取消。
    */
   private readonly subagentParents: Map<string, string> = new Map();
+  /**
+   * [CUSTOM- Sessions this host is currently opening from history/restore.
+   *
+   * `SessionManager.openExistingSession` joins an in-flight open and then force-focuses
+   * the session once it resolves (`openedLive`). A duplicate click while the agent is
+   * still connecting therefore becomes a "steal focus back after the load" — exactly
+   * what the tab-switch-during-load fix must not do. Dropping the duplicate request
+   * here keeps one opener (which already focuses early) and avoids a second load.
+   */
+  private readonly openingHistorySessions = new Set<string>();
   /** sessionId → entry id of the single plan card (ACP replaces the list). */
   private readonly planEntryIds: Map<string, string> = new Map();
   // [CUSTOM- Sessions that produced output while they were NOT the
@@ -630,6 +673,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       }
       // [CUSTOM- Its notification keys can never fire again.
       this.notifier.forget(sessionId);
+      // [CUSTOM- A closed tab must not leave an attention dot behind (the id is
+      // never reused, so the marker could only leak).
+      this.unread.delete(sessionId);
       this.turnSeq.delete(sessionId);
       // [CUSTOM- …and a mode application that never got awaited.
       this.modeApply.delete(sessionId);
@@ -658,7 +704,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       this.clearCompactReplayState(sessionId);
       refresh();
     });
-    on('session-load-end', (sessionId: string) => {
+    on('session-load-end', (sessionId: string, agentName: string) => {
       // [CUSTOM- 回放结束：之后的记录回到墙钟。
       this.transcripts.endReplay(sessionId);
       // [CUSTOM- No-messageId fallback chunks belong to the replay that just ended.
@@ -671,24 +717,49 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // which silently mutes the screen reader. (Found by
       // src/test/chat-panel.test.ts against a real captured replay.)
       this.finalizeEntries(sessionId);
+      // [CUSTOM- Same argument for the tool index: a replay whose last tool call
+      // has no terminal update would keep an interval open to `now`, swallowing
+      // every call made after the session is reopened.
+      this.closeOpenTools(sessionId, agentName);
       // [CUSTOM- 回放结束 ⇒ 宿主自己把 markdown 补齐（见 prefillReplayMarkdown）。
       // 放在 finalizeEntries 之后：只有**已收尾**的记录才该被渲染。
       this.prefillReplayMarkdown(sessionId);
+      // [CUSTOM- 回放用的转录侧表（真实时刻 / 用户图片与文件引用）只服务这一次回放：
+      // 留着它们等于让每个打开过的历史会话把整份图片 base64 常驻宿主内存。下次重开会重新读。
+      this.replayTimes.delete(sessionId);
+      this.replayUserParts.delete(sessionId);
       // [CUSTOM- `loadSession` 把 configOptions 写进 placeholder 是在
       // `session-created` **之后**（而且不走 applyConfigOptions）—— 不在这儿再记一次的话，
       // 打开一个历史会话会把草稿页快照的配置项清成空，用户点「+」就又看不到模式/模型了。
       this.rememberAgentOptions(sessionId);
+      // [CUSTOM- The replay itself was not streamed (records are suppressed while
+      // `isLoading`, see `post`), so the panel's copy of this session is only what the
+      // pre-load focus carried (an empty snapshot + the loading overlay). Hand it the
+      // finished transcript now.
+      //
+      // A load must NEVER steal focus: only refresh the snapshot when this session is
+      // still the focused one, and only focus it when nothing else took over (e.g. the
+      // session was focused when the load started and is still the only candidate).
+      if (this.focused.sessionId === sessionId) {
+        this.pushFocus();
+      } else if (!this.focused.sessionId) {
+        this.sessionManager.focusSession(sessionId, { force: true });
+      }
       refresh();
     });
     on('active-session-changed', (sessionId: string | null, agentName: string | null) => {
       // The router owns focus decisions, but a focus change originating from
       // elsewhere (e.g. the tree) must still reach an attached panel.
       this.focused = { agentName, sessionId };
-      if (this.lastActive && this.lastActive !== 'side') {
-        this.surfaceFocused.set(this.lastActive, sessionId);
-      }
-      // [CUSTOM- Focusing a session consumes its unread marker, and
-      // the strip has to be told — otherwise the attention dot lingers.
+      // [CUSTOM- Every main surface receives the `focus` broadcast below, so every
+      // main surface's recorded session must move with it. Updating only
+      // `lastActive` left the other surface's entry stale: pushMeta skipped it (old
+      // usage/mode/attachments), openSide from it was dropped, isSessionOnScreen
+      // claimed the old session was on screen (suppressing notifications) and
+      // requestStop targeted the wrong surface. Side keeps its own entry (see
+      // pushFocus: the side surface is never part of this broadcast).
+      // [CUSTOM- Focusing a session consumes its unread marker; the strip
+      // has to be told, otherwise the attention dot lingers.
       if (sessionId) { this.unread.delete(sessionId); }
       this.saveOpenSessions();
       this.pushFocus();
@@ -838,7 +909,6 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   onFocusChanged(ctx: PanelContext): void {
     this.focused = ctx;
-    if (this.lastActive) { this.surfaceFocused.set(this.lastActive, ctx.sessionId); }
     this.pushFocus();
   }
 
@@ -1185,7 +1255,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // markdown rendering (and therefore code blocks, Copy buttons and links)
       // dead on arrival.
       case 'renderMarkdown': {
-        const items = (msg as { items?: Array<{ entryId: string; sessionId: string; text: string }> }).items ?? [];
+        const items = (msg as { items?: RenderMarkdownItem[] }).items ?? [];
         this.handleRenderMarkdown(items.filter(item => !!item && this.canSurfaceAccess(from, item.sessionId)));
         return;
       }
@@ -1468,6 +1538,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           focus: true,
         })
           .then(created => {
+            if (created.additionalDirectories?.length) {
+              this.sessionManager.getHistoryStore()?.setAdditionalDirectories(
+                created.agentName, created.sessionId, created.additionalDirectories);
+            }
             this.placeSessionAfterInTabOrder(sessionId, created.sessionId);
             this.refreshSessions();
           })
@@ -1481,7 +1555,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         if (!source) { return; }
         log(`${LOG_PREFIX}: duplicating session ${sessionId} (agent ${source.agentName})`);
         void this.sessionManager.forkSession(source.agentName, sessionId)
-          .then(() => this.refreshSessions())
+          .then(forked => {
+            if (forked.additionalDirectories?.length) {
+              this.sessionManager.getHistoryStore()?.setAdditionalDirectories(
+                forked.agentName, forked.sessionId, forked.additionalDirectories);
+            }
+            this.refreshSessions();
+          })
           .catch(e => this.reportError(sessionId, e));
         return;
       }
@@ -1550,6 +1630,16 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           })
           .catch(e => this.reportError(sessionId, e));
         return;
+      // [CUSTOM- Session-scoped: an `appendText` delta did not line up with the
+      // client's copy; answer with the whole entry, to the surface that asked.
+      case 'resyncEntry': {
+        const entry = this.transcripts.getEntry(sessionId, (msg as { entryId?: string }).entryId ?? '');
+        if (entry) {
+          this.outbox.flush();
+          this.post({ type: 'append', sessionId, entries: [entry] }, from);
+        }
+        return;
+      }
       // [CUSTOM- Session-scoped: it must sit AFTER the guard above.
       case 'needToolView': {
         this.resendToolView(
@@ -1593,6 +1683,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // rest of this method runs would otherwise index into state that is being
     // torn down.
     this.sessionUpdateHandler.removeListener(this.updateListener);
+    if (this.refreshSoonTimer) { clearTimeout(this.refreshSoonTimer); this.refreshSoonTimer = null; }
     this.outbox.dispose();
     for (const d of this.subscriptions) { d.dispose(); }
     this.subscriptions.length = 0;
@@ -1694,9 +1785,6 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     }
 
     this.sessionManager.recordFirstPrompt(sessionId, text);
-    this.attachments.set(sessionId, []);
-    this.imageData.delete(sessionId);
-    this.post({ type: 'attachments', sessionId, attachments: [] });
 
     // 轮次进行中：把这条消息**注入**正在跑的那一轮
     // （Claude Code 的 steering），而不是当第二个 `session/prompt` 发出去。
@@ -1709,7 +1797,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     if (this.sessionManager.hasRunningTurn(sessionId) && this.sessionManager.supportsSteering(sessionId)) {
       try {
         const how = await this.sessionManager.steerPrompt(sessionId, blocks);
-        if (how === 'steered') { return; }
+        if (how === 'steered') {
+          // [CUSTOM- Only a send that actually went out consumes the attachments.
+          // Clearing them up front lost pasted images when the prompt failed.
+          this.clearPendingAttachments(sessionId);
+          return;
+        }
         // 'idle'：agent 说它没在跑（我们这边的标记陈旧了，例如后台任务）⇒ 落回普通路径。
       } catch (e: any) {
         this.reportError(sessionId, e);
@@ -1734,6 +1827,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       this.pushMeta(sessionId);
 
       const response = await pending;
+      // [CUSTOM- The prompt is on the wire now, so its attachments have been
+      // consumed. A failed send keeps them (the composer still has the chips).
+      this.clearPendingAttachments(sessionId);
       this.applyStopReason(sessionId, response.stopReason);
       // [CUSTOM- 这里原来还有一次 `applyResponseUsage`（把 PromptResponse 的
       // totalTokens 折进圆环）—— 那是单位张冠李戴，已删除；圆环只认 usage_update。
@@ -1745,6 +1841,17 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     } finally {
       this.finalizeTurn(sessionId, outcome);
     }
+  }
+
+  /**
+   * Drop the pending attachments of a session after its prompt went out.
+   * Kept separate so every successful send path (normal prompt / steering)
+   * consumes them exactly once.
+   */
+  private clearPendingAttachments(sessionId: string): void {
+    this.attachments.set(sessionId, []);
+    this.imageData.delete(sessionId);
+    this.post({ type: 'attachments', sessionId, attachments: [] });
   }
 
   /**
@@ -1821,6 +1928,37 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   }
 
   /**
+   * [CUSTOM- Post a streamed prose entry. A merged chunk that only APPENDED to the
+   * text the client already has goes out as an `appendText` delta (offset = old
+   * length); a new entry, or a merge the 64KB clamp rewrote, goes out whole. Sending
+   * the whole live entry every frame made a long reply quadratic in bytes.
+   */
+  private postProse(sessionId: string, entry: AssistantEntry | ThoughtEntry, previousText: string | undefined): void {
+    if (previousText !== undefined && entry.text.length > previousText.length && entry.text.startsWith(previousText)) {
+      this.post({
+        type: 'appendText',
+        sessionId,
+        entryId: entry.id,
+        offset: previousText.length,
+        text: entry.text.slice(previousText.length),
+      });
+      return;
+    }
+    this.post({ type: 'append', sessionId, entries: [entry] });
+  }
+
+  private refreshSoonTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Trailing, coalesced `refreshSessions` for per-chunk callers. */
+  private refreshSessionsSoon(): void {
+    if (this.refreshSoonTimer) { return; }
+    this.refreshSoonTimer = setTimeout(() => {
+      this.refreshSoonTimer = null;
+      this.refreshSessions();
+    }, ChatPanelHost.REFRESH_SOON_MS);
+  }
+
+  /**
    * Close streaming entries and tell the webview, so its copy of the entry
    * learns `streaming: false` (and, for thoughts, the elapsed time).
    */
@@ -1842,6 +1980,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // [CUSTOM- 一轮跑完 ⇒ 下一次发言到来时标题就该冻住了。
     this.turnsDone.add(sessionId);
     this.finalizeEntries(sessionId);
+    // [CUSTOM- A cancelled/interrupted turn can end with a Task (or any tool)
+    // still `in_progress`; without an end it stays "running" and its open interval
+    // contains every later call, so the nesting heuristic nests them under it.
+    const agentName = sessionOf(this.sessionManager, sessionId)?.agentName;
+    if (agentName) { this.closeOpenTools(sessionId, agentName); }
     this.sessionManager.touchHistory(sessionId);
     this.refreshSessions();
     this.pushTurnState(sessionId);
@@ -1873,9 +2016,18 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // --- Session update → transcript ----------------------------------------
 
   private onSessionUpdate(update: SessionNotification): void {
-    // [CUSTOM- 子会话别名（见 subagentParents 的注释）：子会话自己的流量并回父会话再渲染。
+    // [CUSTOM- 子会话别名（见 subagentParents 的注释）：只把**承载记录**的子会话流量
+    // 并回父会话渲染；子会话自己的 usage / plan / 标题 / 模式 / 配置 / 压缩等状态属于
+    // 子会话，并过来会直接改坏父会话的元数据（上下文圆环、Todo 卡、tab 名、"Switched to …"）。
+    // 它们被丢弃（协议级子会话卡片已经承担身份/状态）。
     const parentOfChild = this.subagentParents.get(update.sessionId);
-    if (parentOfChild) { update = { ...update, sessionId: parentOfChild }; }
+    let subagentOrigin: string | undefined;
+    if (parentOfChild) {
+      const kind = (update.update as { sessionUpdate?: unknown } | null | undefined)?.sessionUpdate;
+      if (typeof kind !== 'string' || !SUBAGENT_TRANSCRIPT_KINDS.has(kind)) { return; }
+      subagentOrigin = update.sessionId;
+      update = { ...update, sessionId: parentOfChild };
+    }
     const sessionId = update.sessionId;
     const data = update.update as any;
     const session = sessionOf(this.sessionManager, sessionId);
@@ -1912,13 +2064,21 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // done. Closing the assistant entry here too was the bug that turned
         // one reply into one bubble per chunk.
         this.finalizeEntries(sessionId, { only: 'thought' });
-        const entry = this.transcripts.appendAssistantChunk(sessionId, text, data.messageId ?? undefined);
+        const before = this.transcripts.lastEntry(sessionId);
+        const beforeText = before?.kind === 'assistant' ? before.text : undefined;
+        const entry = this.transcripts.appendAssistantChunk(
+          sessionId, text, data.messageId ?? undefined, subagentOrigin);
+        const created = !!entry && entry !== before;
         if (entry) {
           this.stampReplayTime(sessionId, entry, data.messageId);
-          this.post({ type: 'append', sessionId, entries: [entry] });
+          this.postProse(sessionId, entry, created ? undefined : beforeText);
         }
         // A chunk means a turn is in flight even if we did not start it.
-        this.refreshSessions();
+        // [CUSTOM- Immediately when a bubble opens; otherwise coalesced: the summary
+        // cannot change per chunk, and rebuilding it (plus the side-surface JSON) per
+        // token was measurable in long replies. INV-C still holds - any real state
+        // change refreshes on its own path, and sessionsChanged itself is never delayed.
+        if (created) { this.refreshSessions(); } else { this.refreshSessionsSoon(); }
         return;
       }
 
@@ -1937,10 +2097,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           this.postContentNotice(sessionId, data.content);
           return;
         }
-        const entry = this.transcripts.appendThoughtChunk(sessionId, text, data.messageId ?? undefined);
+        const before = this.transcripts.lastEntry(sessionId);
+        const beforeText = before?.kind === 'thought' ? before.text : undefined;
+        const entry = this.transcripts.appendThoughtChunk(
+          sessionId, text, data.messageId ?? undefined, subagentOrigin);
         if (entry) {
           this.stampReplayTime(sessionId, entry, data.messageId);
-          this.post({ type: 'append', sessionId, entries: [entry] });
+          this.postProse(sessionId, entry, entry === before ? beforeText : undefined);
         }
         return;
       }
@@ -2179,6 +2342,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // the transcript reads text → tool → text. (Only the assistant entry:
     // the thought block was already closed by the first prose chunk.)
     this.finalizeEntries(sessionId, { only: 'assistant' });
+    // [CUSTOM- A thought followed DIRECTLY by a tool call (no prose in between)
+    // never saw a prose chunk, so it stayed "Thinking…" for the whole tool run and
+    // its elapsed_ms included the tool's runtime. A tool call ends the reasoning
+    // too.
+    this.finalizeEntries(sessionId, { only: 'thought' });
     const inv = this.tools.upsertCall(sessionId, data);
     const entry = this.transcripts.appendTool(sessionId, inv.toolCallId);
     if (!entry) { this.tools.remove(sessionId, inv.toolCallId); }
@@ -2194,12 +2362,15 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   /** Apply one ACP `tool_call_update`. */
   private applyToolCallUpdate(sessionId: string, agentName: string, data: any): void {
+    const existing = typeof data?.toolCallId === 'string' ? this.tools.get(sessionId, data.toolCallId) : undefined;
+    const prior = existing ? nestingInputsOf(existing) : undefined;
     const inv = this.tools.upsertUpdate(sessionId, data);
     if (!inv) { return; }
     // A Task's output often arrives only at the END of the call, which is
     // when an explicit parent link becomes discoverable — so re-run the
-    // strategy on every update, not just on first sight.
-    const changed = this.applyNesting(sessionId, agentName);
+    // strategy on every update that could move a link (see needsPass), not
+    // just on first sight.
+    const changed = this.applyNesting(sessionId, agentName, { prior, updated: inv });
     const entryId = this.toolEntryIds.get(toolKey(sessionId, inv.toolCallId));
     if (entryId) {
       this.post({ type: 'toolUpdate', sessionId, entryId, tool: toToolCallView(inv) });
@@ -2449,9 +2620,15 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * strategy is per-agent and the default is a no-op, which is why the flat
    * list is the guaranteed-correct baseline rather than a fallback branch.
    */
-  private applyNesting(sessionId: string, agentName: string): string[] {
+  private applyNesting(
+    sessionId: string,
+    agentName: string,
+    update?: { prior: NestingInputs | undefined; updated: ToolInvocation },
+  ): string[] {
     const strategy = resolveNestingStrategy(agentName);
-    return strategy.apply(this.tools.list(sessionId));
+    const all = this.tools.list(sessionId);
+    if (update && strategy.needsPass && !strategy.needsPass(update.prior, update.updated, all)) { return []; }
+    return strategy.apply(all);
   }
 
   /** Push fresh views for cards whose nesting changed since they were sent. */
@@ -2465,9 +2642,17 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     }
   }
 
+  /** Stamp `endedAt` on tools the turn/load never closed, then re-run nesting. */
+  private closeOpenTools(sessionId: string, agentName: string): void {
+    const closed = this.tools.finalizeOpen(sessionId);
+    if (closed.length === 0) { return; }
+    const changed = this.applyNesting(sessionId, agentName);
+    this.pushNestingUpdates(sessionId, changed);
+  }
+
   // --- Markdown round-trip -------------------------------------------------
 
-  private handleRenderMarkdown(items: Array<{ entryId: string; sessionId: string; text: string; key?: string; streaming?: boolean }>): void {
+  private handleRenderMarkdown(items: RenderMarkdownItem[]): void {
     // [CUSTOM- A malformed item must never take the whole batch with it.
     //
     // 这条请求是一条**批**：客户端把"所有还缺 html 的记录"一次发来（大会话回放时
@@ -2500,10 +2685,15 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // Accept an older prefix so fast streams do not starve rendering.
         if (!item.key && item.streaming === true) {
           const current = this.transcripts.getEntry(sessionId, item.entryId);
-          if (current && (current.kind === 'assistant' || current.kind === 'thought')
-            && current.streaming && current.text.startsWith(item.text)) {
+          const source = current && (current.kind === 'assistant' || current.kind === 'thought') && current.streaming
+            ? streamSourceOf(current.text, item)
+            : undefined;
+          if (source !== undefined) {
+            const have = typeof item.streamGeneration === 'number' && typeof item.streamBlocks === 'number'
+              ? { generation: item.streamGeneration, blocks: item.streamBlocks }
+              : undefined;
             rendered.push({ entryId: item.entryId, sessionId, html: '',
-              stream: this.markdownStreams.render(streamKey, item.text) });
+              stream: this.markdownStreams.render(streamKey, source, have) });
           }
           continue;
         }
@@ -2578,21 +2768,40 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     const entries = this.collectMissingMarkdown(sessionId);
     if (entries.length === 0) { return; }
     log(`${LOG_PREFIX}: pre-rendering markdown for ${entries.length} replayed record(s) in ${sessionId}`);
+    // [CUSTOM- Only tell the client when it is actually showing this session.
+    // A load that finished after the user switched tabs must not push hundreds of
+    // HTML revisions behind the new tab; the next `focus` snapshot carries them.
+    const notify = this.isSessionFocusedOnAnySurface(sessionId);
     for (let at = 0; at < entries.length; at += ChatPanelHost.PREFILL_BATCH) {
       const batch = entries.slice(at, at + ChatPanelHost.PREFILL_BATCH);
       if (at === 0) {
-        this.renderMarkdownBatch(sessionId, batch, true);
+        this.renderMarkdownBatch(sessionId, batch, notify);
       } else {
         // [CUSTOM- 大回放分片跑：一次渲染几百条会在宿主线程上造成一段可见的长任务。
-        setTimeout(() => this.renderMarkdownBatch(sessionId, batch, true), 0);
+        setTimeout(() => this.renderMarkdownBatch(sessionId, batch, notify), 0);
       }
     }
   }
 
+  /** Is any MAIN surface recording this session as what it shows? */
+  private isSessionFocusedOnAnySurface(sessionId: string): boolean {
+    for (const [key, value] of this.surfaceFocused) {
+      if (key !== 'side' && value === sessionId) { return true; }
+    }
+    return false;
+  }
+
   /** 快照路径同样补齐：切回一个会话时不该再出现"先原文、后 markdown"。 */
+  // [CUSTOM- 只同步补最新的 SNAPSHOT_PREFILL_LIMIT 条：快照在每次 boot/focus 上同步构建，
+  // 一个刚回放完、几百条都没 html 的会话会在这里把 highlight.js 跑成一整个长任务。
+  // 视口恢复后几乎总在末尾；更早的那些照常走客户端 markPending → renderMarkdown 往返。
   private prefillSnapshotMarkdown(sessionId: string): void {
     const entries = this.collectMissingMarkdown(sessionId);
-    if (entries.length > 0) { this.renderMarkdownBatch(sessionId, entries, false); }
+    if (entries.length === 0) { return; }
+    const recent = entries.length > ChatPanelHost.SNAPSHOT_PREFILL_LIMIT
+      ? entries.slice(entries.length - ChatPanelHost.SNAPSHOT_PREFILL_LIMIT)
+      : entries;
+    this.renderMarkdownBatch(sessionId, recent, false);
   }
 
   /**
@@ -2633,9 +2842,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     sessionId: string,
     opts: { includeStreaming?: boolean } = {},
   ): TranscriptEntry[] {
-    const entries = this.transcripts.snapshot(sessionId)?.entries ?? [];
     const out: TranscriptEntry[] = [];
-    for (const entry of entries) {
+    for (const entry of this.transcripts.peekEntries(sessionId)) {
       if (entry.kind !== 'assistant' && entry.kind !== 'thought' && entry.kind !== 'compact') { continue; }
       const prose = entry as { text?: string; html?: string; streaming?: boolean };
       if (prose.streaming && !opts.includeStreaming) { continue; }
@@ -3526,6 +3734,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   ): Promise<boolean> {
     const agent = this.panelAgent(agentName);
     if (!agent || !sessionId) { return false; }
+    if (this.openingHistorySessions.has(sessionId)) {
+      log(`${LOG_PREFIX}: ${sessionId} is already being opened; ignoring the duplicate request`);
+      return true;
+    }
+    this.openingHistorySessions.add(sessionId);
     log(`${LOG_PREFIX}: opening history session ${sessionId} of ${agent}${cwd ? ` (cwd ${cwd})` : ''}`);
     try {
       // [CUSTOM- Picking from the history list SWITCHES the panel, it does
@@ -3544,12 +3757,14 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // other session). The client discards its draft itself.
       const alreadyLive = !!this.sessionManager.getSession(sessionId);
       const current = this.focused.sessionId ? this.sessionManager.getSession(this.focused.sessionId) : undefined;
+      let replaced: SessionInfo | undefined;
       if (!alreadyLive && !fromDraft && !keepOthers && current && current.sessionId !== sessionId) {
-        try {
-          await this.sessionManager.closeSession(current.agentName, current.sessionId);
-        } catch (e) {
-          // A failed teardown must not block the session the user asked for.
-          log(`${LOG_PREFIX}: could not close ${current.sessionId} before switch (${String(e)})`);
+        // [CUSTOM- Never tear down a session that is still working: a running
+        // turn would be cancelled, and a `session/load` in flight is closed under
+        // its own loader (which then reports "Session was closed while loading").
+        // The pick simply opens as an extra tab in that case.
+        if (!this.isSessionRunning(current.sessionId) && !this.sessionManager.isLoading(current.sessionId)) {
+          replaced = current;
         }
       }
       // [CUSTOM- Real per-message times, read before the replay starts
@@ -3561,16 +3776,42 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // session belonging elsewhere was reopened as if it lived here.
       // [CUSTOM- The title too: the replay does not always re-send
       // session_info_update, so without it the tab would show the id prefix.
-      const how = await this.sessionManager.openExistingSession(agent, sessionId, { cwd, title });
+      // [CUSTOM- …and the extra roots this session was created with, so a
+      // multi-root session reopens with the same view (persisted by the host on
+      // first open, see SessionHistoryStore.setAdditionalDirectories).
+      const stored = this.sessionManager.getHistoryStore()?.get(agent, sessionId);
+      const how = await this.sessionManager.openExistingSession(agent, sessionId, {
+        cwd, title, additionalDirectories: stored?.additionalDirectories,
+      });
       if (how === 'resume') {
         const entry = this.transcripts.appendNotice(sessionId, 'info',
           'Resumed without replaying history (this agent does not support session/load).');
         if (entry) { this.post({ type: 'append', sessionId, entries: [entry] }); }
       }
+      // [CUSTOM- The replace happens only AFTER the new session opened: a
+      // failed load must leave the previous tab exactly where it was. `replaced`
+      // was decided before the open (running/loading sessions are never replaced).
+      if (replaced && this.sessionManager.getSession(replaced.sessionId)) {
+        try {
+          await this.sessionManager.closeSession(replaced.agentName, replaced.sessionId);
+        } catch (e) {
+          // A failed teardown must not undo the session the user asked for.
+          log(`${LOG_PREFIX}: could not close ${replaced.sessionId} after switch (${String(e)})`);
+        }
+      }
+      // [CUSTOM- Persist what this session actually has (the first open is the
+      // only chance to learn it for sessions that came from the agent's list).
+      const opened = sessionOf(this.sessionManager, sessionId);
+      if (opened?.additionalDirectories?.length) {
+        this.sessionManager.getHistoryStore()?.setAdditionalDirectories(
+          opened.agentName, sessionId, opened.additionalDirectories);
+      }
       return true;
     } catch (e) {
       this.reportError(null, e);
       return false;
+    } finally {
+      this.openingHistorySessions.delete(sessionId);
     }
   }
 
@@ -3609,6 +3850,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   /** 回放预渲染 markdown 的每片条数（一次几百条会变成宿主线程上的长任务）。 */
   private static readonly PREFILL_BATCH = 40;
+  /** Upper bound on how stale the tab strip may be while a reply streams. */
+  private static readonly REFRESH_SOON_MS = 200;
+  /** Snapshot prefill renders only this many newest records synchronously (see prefillSnapshotMarkdown). */
+  private static readonly SNAPSHOT_PREFILL_LIMIT = 30;
 
   /** 会话安静多久之后补渲染 markdown（见 armSettlePrefill）。 */
   private static readonly SETTLE_PREFILL_MS = 600;
@@ -3976,6 +4221,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
     try {
       const session = await this.sessionManager.createSession(agent, { cwd: target, focus: true, additionalDirectories });
+      // [CUSTOM- Remember the extra roots with the history row so reopening this
+      // session (also after a window reload) can pass them to session/load.
+      if (session.additionalDirectories?.length) {
+        this.sessionManager.getHistoryStore()?.setAdditionalDirectories(
+          session.agentName, session.sessionId, session.additionalDirectories);
+      }
       // [CUSTOM- 草稿页选过的模式/模型先落到位，再让客户端把草稿换成真会话。
       // 顺序反了的话，客户端会先收到 `focus` 里那份**会话创建时**的选项（如 opus），
       // 再等一条 `meta` 把用户选的模型推回去 —— 用户看到的就是"选好的模型自己弹回内置模型"。
@@ -4083,11 +4334,22 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // 或 INV-C（sessionsChanged 被延迟，Send/Stop 按钮状态错）。
   private post(message: ExtToChat | MarkdownRendered, to?: SurfaceKey): void {
     const type = (message as { type?: string }).type ?? '';
+    // [CUSTOM- While a `session/load` replay is running, its records are NOT
+    // streamed to the webview. The client shows the loading overlay anyway, and
+    // thousands of per-entry appends would fill the webview's FIFO message queue;
+    // a tab switch made during the load (the client posts `focusSession`) would
+    // then wait behind that backlog and the message panel would only follow once
+    // the load ended. The store still receives every record; the load-end handler
+    // sends one fresh `focus` snapshot when the session is still the focused one.
+    if (TRANSCRIPT_MESSAGE_TYPES.has(type)) {
+      const sessionId = (message as { sessionId?: string }).sessionId;
+      if (sessionId && this.sessionManager.isLoading(sessionId)) { return; }
+    }
     // [CUSTOM- One choke point for "a session produced output": every
     // transcript-bearing message goes through here, so the unread marker cannot be
     // remembered on some append paths and forgotten on others (which is what a
     // per-call-site approach would eventually do).
-    if (type === 'append' || type === 'revise' || type === 'toolUpdate') {
+    if (type === 'append' || type === 'appendText' || type === 'revise' || type === 'toolUpdate') {
       const sessionId = (message as { sessionId?: string }).sessionId;
       const session = sessionId ? sessionOf(this.sessionManager, sessionId) : undefined;
       const current = session?.sideChat
@@ -4182,9 +4444,19 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   private async openSnapshotSession(entry: RecoverableSession): Promise<void> {
     const agent = this.panelAgent(entry.agentName);
     if (!agent) { return; }
+    if (this.openingHistorySessions.has(entry.sessionId)) { return; }
+    this.openingHistorySessions.add(entry.sessionId);
     try {
       await this.preloadTranscriptTimes(agent, entry.sessionId, entry.cwd);
-      await this.sessionManager.openExistingSession(agent, entry.sessionId, { cwd: entry.cwd, title: entry.title });
+      const stored = this.sessionManager.getHistoryStore()?.get(agent, entry.sessionId);
+      await this.sessionManager.openExistingSession(agent, entry.sessionId, {
+        cwd: entry.cwd, title: entry.title, additionalDirectories: stored?.additionalDirectories,
+      });
+      const opened = sessionOf(this.sessionManager, entry.sessionId);
+      if (opened?.additionalDirectories?.length) {
+        this.sessionManager.getHistoryStore()?.setAdditionalDirectories(
+          opened.agentName, entry.sessionId, opened.additionalDirectories);
+      }
     } catch (e) {
       log(`${LOG_PREFIX}: could not restore ${entry.sessionId}: ${(e as Error)?.message ?? String(e)}`);
       this.openSessions = {
@@ -4193,6 +4465,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       };
       this.globalState?.update(OPEN_SESSIONS_KEY, this.openSessions);
       this.reportError(null, e);
+    } finally {
+      this.openingHistorySessions.delete(entry.sessionId);
     }
   }
 
@@ -5039,7 +5313,16 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     if (this.attachedCount === 0) { return; }
     this.outbox.flush();
     const side = to === 'side';
-    const sessionId = side ? this.surfaceFocused.get('side') : this.focused.sessionId;
+    const sessionId = (side ? this.surfaceFocused.get('side') : this.focused.sessionId) ?? null;
+    // The focus message is broadcast to both main surfaces, so both now show
+    // this session (the client applies `focus` unconditionally). Recording it
+    // for every main surface (not just `lastActive`) is what keeps
+    // pushMeta / openSide / isSessionOnScreen / requestStop honest.
+    if (!side) {
+      for (const surface of this.surfaces.values()) {
+        if (surface.key !== 'side') { this.surfaceFocused.set(surface.key, sessionId); }
+      }
+    }
     const summary = sessionId ? this.buildSummary(sessionId) : null;
     this.post({
       type: 'focus',

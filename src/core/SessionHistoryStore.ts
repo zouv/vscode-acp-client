@@ -8,6 +8,12 @@ export interface PersistedSessionEntry {
   firstPrompt?: string;
   createdAt: string;
   lastActiveAt: string;
+  /**
+   * [CUSTOM- Extra roots this session was created with (`additionalDirectories`).
+   * `session/load` / `session/resume` take them again, and they are not part of
+   * `session/list`, so without this cache a reopened session lost its extra roots.
+   */
+  additionalDirectories?: string[];
 }
 
 interface PersistedShape {
@@ -103,7 +109,7 @@ export class SessionHistoryStore {
     return Array.from(seen);
   }
 
-  upsertNew(agentName: string, cwd: string, sessionId: string): void {
+  upsertNew(agentName: string, cwd: string, sessionId: string, additionalDirectories?: readonly string[]): void {
     const now = new Date().toISOString();
     // 这个目录又被用了（新建会话）⇒ 之前若从「Recently used」里删过，让它回来。
     this.undismissRecentDirectory(cwd);
@@ -111,13 +117,44 @@ export class SessionHistoryStore {
     if (existing) {
       existing.lastActiveAt = now;
       existing.cwd = cwd;
+      this.mergeAdditionalDirectories(existing, additionalDirectories);
     } else {
-      this.entries.set(keyOf(agentName, sessionId), {
+      const entry: PersistedSessionEntry = {
         agentName, cwd, sessionId, createdAt: now, lastActiveAt: now,
-      });
+      };
+      this.mergeAdditionalDirectories(entry, additionalDirectories);
+      this.entries.set(keyOf(agentName, sessionId), entry);
       this.enforceCap(agentName);
     }
     this.persist();
+  }
+
+  /**
+   * [CUSTOM- Record a live session's extra roots. Update-only: a row the history
+   * does not know about has nothing to reopen it with, and inventing one would put
+   * a session into the picker that never lived in this workspace's cache.
+   */
+  setAdditionalDirectories(agentName: string, sessionId: string, directories: readonly string[] | undefined): void {
+    const entry = this.get(agentName, sessionId);
+    if (!entry) { return; }
+    if (!this.mergeAdditionalDirectories(entry, directories)) { return; }
+    this.persist();
+  }
+
+  /** Copy the (deduplicated, non-empty) directories; returns whether anything changed. */
+  private mergeAdditionalDirectories(
+    entry: PersistedSessionEntry,
+    directories: readonly string[] | undefined,
+  ): boolean {
+    if (!directories) { return false; }
+    const next = Array.from(new Set(directories.filter(d => typeof d === 'string' && d.length > 0)));
+    if (next.length === 0) { return false; }
+    const previous = entry.additionalDirectories ?? [];
+    if (previous.length === next.length && previous.every((value, index) => value === next[index])) {
+      return false;
+    }
+    entry.additionalDirectories = next;
+    return true;
   }
 
   setTitle(agentName: string, sessionId: string, title: string | null | undefined): void {

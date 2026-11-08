@@ -43,6 +43,12 @@ export const elicitationViewClient = `
   /** What the buttons send. 'submit' = accept, 'skip' = decline, 'cancel' = cancel. */
   var ACTION_OF = { submit: 'accept', skip: 'decline', cancel: 'cancel' };
 
+  /** IME 合成中（含 Options 死键 / AltGraph）的 Escape 属于输入法，不是抽屉快捷键。 */
+  function composing(event) {
+    return !!(event && (event.isComposing || event.keyCode === 229 || event.key === 'Dead'
+      || (event.getModifierState && event.getModifierState('AltGraph'))));
+  }
+
   /** The body-level floating drawer (#elicDrawer). Null in the stub DOM. */
   var drawer = null;
   /** The pending form the drawer is showing right now (promptId). */
@@ -1099,7 +1105,7 @@ export const elicitationViewClient = `
   }
 
   function onDocumentKeyDown(event) {
-    if (event.key !== 'Escape') { return; }
+    if (event.key !== 'Escape' || composing(event)) { return; }
     // Escape COLLAPSES the drawer; it must never cancel. 'Cancel' aborts the agent's tool call,
     // and that is not something a stray keypress may do.
     // [CUSTOM- 2026-10-29：capture 阶段消费 Escape（与 popover/outline 同族），

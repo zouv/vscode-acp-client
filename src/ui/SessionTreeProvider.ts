@@ -92,6 +92,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
   readonly onDidChangeTreeData = this.changed.event;
   private readonly listStates = new Map<string, AgentListState>();
   private refreshTimer: NodeJS.Timeout | undefined;
+  private readonly subscriptions: vscode.Disposable[] = [];
 
   constructor(
     private readonly sessions: SessionManager,
@@ -99,9 +100,13 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
     private readonly workspaceCwd: () => string | undefined,
   ) {
     for (const event of ['agent-connected', 'agent-disconnected', 'active-session-changed', 'session-info-changed']) {
-      sessions.on(event, () => this.refresh());
+      const handler = () => this.refresh();
+      sessions.on(event, handler);
+      this.subscriptions.push({ dispose: () => sessions.off(event, handler) });
     }
-    history?.onDidChange(() => this.refresh());
+    if (history) {
+      this.subscriptions.push(history.onDidChange(() => this.refresh()));
+    }
   }
 
   /** Coalesces bursts (every title/focus/history change fires) into one tree refresh. */
@@ -159,9 +164,17 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
   private agentSourced(name: string): TreeNode[] {
     const state = this.listStates.get(name);
     if (state?.state === 'loading') { return [this.loadingLeaf(name)]; }
-    if (!state || state.state === 'idle' || state.state === 'error') {
+    // [CUSTOM- Only an explicit invalidate/Retry refetches. Re-fetching on
+    // every getChildren() for a persistently failing `session/list` made VS Code's
+    // repeated tree queries a retry loop (~50ms apart, each possibly respawning the
+    // agent) and the error row never became visible because the next query replaced
+    // it with the loading leaf again.
+    if (!state || state.state === 'idle') {
       void this.fetchList(name);
       return [this.loadingLeaf(name)];
+    }
+    if (state.state === 'error') {
+      return [this.errorLeaf(name, state.error || 'Unknown error')];
     }
     if (state.state === 'auth-required') { return [this.authLeaf(name)]; }
     if (state.state === 'unsupported') { return [new InfoTreeItem('unsupported', name, 'Session list not supported')]; }
@@ -276,6 +289,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
 
   dispose(): void {
     if (this.refreshTimer) { clearTimeout(this.refreshTimer); }
+    for (const subscription of this.subscriptions) { subscription.dispose(); }
+    this.subscriptions.length = 0;
     this.changed.dispose();
   }
 }

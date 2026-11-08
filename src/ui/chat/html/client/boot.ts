@@ -300,6 +300,8 @@ export const bootClient = `
   // 于是后来的诊断（'form fields'）永远进不了日志。改成**只报前几次 + 每 25 次报一次**，
   // 保留"这条链路确实在跑"的信息量，同时不再淹掉别人。
   var markdownAsks = 0;
+  // [CUSTOM- entryId -> last time an appendText mismatch asked for the whole entry.
+  var resyncAsked = {};
   function requestMarkdown() {
     // [CUSTOM- 这里原来有一条 if (!currentSessionId) { return; }：聚焦会话为空
     // 时整批请求都发不出去。而 transcriptView 的 item **自带 sessionId**（请求方就是它），
@@ -353,6 +355,9 @@ export const bootClient = `
   var drafts = [];
   var focusedDraftId = null;
   var draftSeq = 0;
+  // [CUSTOM- webview 文档重载后 draftSeq 会从 0 重来，旧 id（draft-1）与持久化的草稿
+  // 文本撞车 ⇒ 已发出的首条消息在重载后又变回输入框里的文字。给每一轮文档一个种子。
+  var draftSeed = Date.now().toString(36) + '-' + Math.floor(Math.random() * 100000).toString(36);
 
   function draftById(draftId) {
     for (var i = 0; i < drafts.length; i++) {
@@ -367,7 +372,7 @@ export const bootClient = `
 
   /** Open a new draft and focus it. 'initialCwd' pre-fills the directory. */
   function startDraft(initialCwd) {
-    var draft = { draftId: 'draft-' + (++draftSeq), cwd: initialCwd || null, additionalDirectories: [] };
+    var draft = { draftId: 'draft-' + draftSeed + '-' + (++draftSeq), cwd: initialCwd || null, additionalDirectories: [] };
     drafts.push(draft);
     focusDraft(draft.draftId);
     return draft;
@@ -458,6 +463,10 @@ export const bootClient = `
     // 'focus' normally arrived first (the host focuses the new session), which
     // already moved the composer to it — this is the safety net.
     NS.composer.resolveDraft();
+    // [CUSTOM- 草稿文本按 draftId 存在 webview 本地状态里；resolveDraft 只清 textarea，
+    // 不删那一份 ⇒ 重载（或 id 被复用）后已发出的首条消息会作为草稿文字回来。
+    // 必须在这里 forget：焦点先走时 composer 已经不知道刚才是哪个 draftId 了。
+    NS.composer.forgetDraft(draftId);
     // [CUSTOM- 建会话这条路走完了。成功时卡片马上就会藏起来（真会话接管），
     // 但相位本身必须复位 —— 否则下一个草稿页会带着上一轮的"建会话中"进来。
     if (NS.stateCard) { NS.stateCard.endCreating(); }
@@ -738,6 +747,26 @@ export const bootClient = `
         break;
       }
 
+      // [CUSTOM- Streamed text delta: same downstream effects as the whole-entry
+      // append it replaces. A delta that does not line up asks for the whole entry
+      // (throttled per entry, so a persistent mismatch cannot spin).
+      case 'appendText':
+        if (message.sessionId === currentSessionId) {
+          if (!NS.transcriptView.appendText(message.entryId, message.offset, message.text)) {
+            var lastAsk = resyncAsked[message.entryId] || 0;
+            if (Date.now() - lastAsk > 1000) {
+              resyncAsked[message.entryId] = Date.now();
+              NS.bridge.post({ type: 'resyncEntry', sessionId: message.sessionId, entryId: message.entryId });
+            }
+            break;
+          }
+          showEmpty(false);
+          NS.outline.invalidate();
+          NS.rail.invalidate();
+          NS.stickyUser.schedule();
+        }
+        break;
+
       case 'revise':
         if (message.sessionId === currentSessionId) {
           NS.transcriptView.patch(message.entryId, message.patch);
@@ -961,16 +990,39 @@ export const bootClient = `
     return false;
   }
 
-  function attachPaths(paths) {
+  function attachPaths(paths, sessionId, draftId) {
     if (paths.length === 0) { return false; }
-    if (!currentSessionId) {
+    // [CUSTOM- 显式传入的目标会话/草稿：粘贴是异步读文件，读回时用户可能已经切了会话，
+    // 不能再读 currentSessionId（那会把 A 的文件挂到 B 上）。
+    var targetSession = sessionId === undefined ? currentSessionId : sessionId;
+    if (!targetSession) {
+      var targetDraft = draftId === undefined ? focusedDraftId : draftId;
       // [CUSTOM- 草稿页同理（粘图那一条的兄弟）：先本地攒着，随首条消息交上去。
-      if (NS.composer && NS.composer.addDraftPaths && NS.composer.addDraftPaths(paths)) { return true; }
-      NS.bridge.post({ type: 'error', message: 'Attach File: no session is focused.' });
+      if (NS.composer && NS.composer.addDraftPaths
+        && NS.composer.addDraftPaths(paths, null, targetDraft)) { return true; }
+      showLocalError('Attach File: no session is focused.');
       return false;
     }
-    NS.bridge.postForSession({ type: 'attachPath', paths: paths });
+    NS.bridge.postForSession({ type: 'attachPath', paths: paths, sessionId: targetSession });
     return true;
+  }
+
+  /**
+   * [CUSTOM- 本面板自己产生的错误就地显示。
+   *
+   * 'error' 不是 webview → 宿主的协议消息（宿主会静默丢弃），所以这几条不能 post：
+   * 有会话时进记录区（与宿主 'error' 消息同形），空态/草稿页则写在状态卡上。
+   */
+  function showLocalError(text) {
+    if (!currentSessionId) {
+      if (NS.stateCard) { NS.stateCard.setError(text); }
+      showEmpty(true);
+      return;
+    }
+    NS.transcriptView.append(noticeNode('error', text));
+    showEmpty(false);
+    NS.outline.invalidate();
+    NS.rail.invalidate();
   }
 
   function installFileDrop(root) {
@@ -989,58 +1041,88 @@ export const bootClient = `
       if (!transferHasFiles(event)) { return; }
       event.preventDefault();
       root.classList.remove('drop-active');
-      if (!attachPaths(pathsFromTransfer(event.dataTransfer))) {
-        NS.bridge.post({ type: 'error', message: 'Could not read the dropped file location. Use VAC: Attach File instead.' });
+      var paths = pathsFromTransfer(event.dataTransfer);
+      if (paths.length === 0) {
+        showLocalError('Could not read the dropped file location. Use VAC: Attach File instead.');
+        return;
       }
+      attachPaths(paths);
     });
   }
 
   function installImagePaste(input) {
     if (!input) { return; }
     // [CUSTOM- 剪贴板里的位图是无路径的 Blob，读成 data URL 交给宿主；
-    // 有路径的文件粘贴仍走 attachPaths（现状）。
+    // 有路径的文件粘贴仍走 attachPaths。
     input.addEventListener('paste', function (event) {
       var dt = event.clipboardData;
       if (!dt || !dt.files || dt.files.length === 0) { return; }
+      // [CUSTOM- Excel / Office 会在文本旁附带一张位图：只要还有 text/plain，就让原生
+      // 文本粘贴通过（否则整段文本被吞掉、只剩一张截图）。用户明确复制文件时没有文本。
+      var text = '';
+      try { text = dt.getData ? String(dt.getData('text/plain') || '') : ''; } catch (e) { text = ''; }
+      if (text) { return; }
+      // 在异步 FileReader 开始前固定目标：读回时用户可能已经切走。
+      var pasteSession = currentSessionId;
+      var pasteDraft = focusedDraftId;
       var paths = pathsFromTransfer(dt);
-      if (paths.length === 0) {
-        var file = dt.files[0];
-        if (file && typeof FileReader !== 'undefined' && (!file.type || file.type.indexOf('image/') === 0)) {
-          event.preventDefault();
-          var reader = new FileReader();
-          reader.onload = function () {
-            attachImage(file.name || 'pasted-image.png', file.type || 'image/png', String(reader.result));
-          };
-          reader.readAsDataURL(file);
-          return;
-        }
+      if (paths.length > 0) {
         event.preventDefault();
-        NS.bridge.post({ type: 'error', message: 'Could not read the pasted file. Drop it into the panel, or use VAC: Attach File.' });
+        attachPaths(paths, pasteSession, pasteDraft);
+        return;
+      }
+      var images = [];
+      for (var i = 0; i < dt.files.length; i++) {
+        var file = dt.files[i];
+        if (!file) { continue; }
+        // 旧行为允许 type 为空的 File；只有明确的非 image 才跳过。
+        if (typeof FileReader !== 'undefined' && (!file.type || file.type.indexOf('image/') === 0)) {
+          images.push(file);
+        }
+      }
+      if (images.length === 0) {
+        showLocalError('Could not read the pasted file. Drop it into the panel, or use VAC: Attach File instead.');
         return;
       }
       event.preventDefault();
-      attachPaths(paths);
+      // 所有文件都读，不再只看 files[0]（多张截图一起粘贴时其余的不该凭空消失）。
+      for (var j = 0; j < images.length; j++) {
+        (function (pasted) {
+          var reader = new FileReader();
+          reader.onload = function () {
+            attachImage(pasted.name || 'pasted-image.png', pasted.type || 'image/png',
+              String(reader.result), pasteSession, pasteDraft);
+          };
+          reader.readAsDataURL(pasted);
+        })(images[j]);
+      }
     });
   }
 
   // [CUSTOM- 把剪贴板位图作为 image 附件发到宿主。缩略图留客户端本地缓存，
   // 全图 base64 交给宿主（宿主内存持有、发送时拼进 image ContentBlock）。
-  function attachImage(name, mimeType, dataUrl) {
+  function attachImage(name, mimeType, dataUrl, sessionId, draftId) {
     // [CUSTOM- 草稿页（新建会话）也可以粘图：那里还没有会话，宿主收不了会话作用域的
     // attachImage，于是先交给 composer 本地攒着（展示 chip），首条消息时随 createDraftAndSend 交上去。
     // 用户报的正是"New Session 的输入框没法粘贴图片" —— 以前这里直接报 "no session is focused"。
-    if (!currentSessionId) {
-      var id = 'img-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
+    var targetSession = sessionId === undefined ? currentSessionId : sessionId;
+    var id = 'img-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
+    if (!targetSession) {
+      var targetDraft = draftId === undefined ? focusedDraftId : draftId;
       if (NS.composer && NS.composer.addDraftImage
-        && NS.composer.addDraftImage({ id: id, name: name, mimeType: mimeType, dataUrl: dataUrl })) {
+        && NS.composer.addDraftImage({
+          id: id, name: name, mimeType: mimeType, dataUrl: dataUrl
+        }, targetDraft)) {
         return;
       }
-      NS.bridge.post({ type: 'error', message: 'Attach Image: no session is focused.' });
+      showLocalError('Attach Image: no session is focused.');
       return;
     }
-    var id = 'img-' + Date.now() + '-' + Math.floor(Math.random() * 100000);
     if (NS.composer && NS.composer.rememberImage) { NS.composer.rememberImage(id, dataUrl); }
-    NS.bridge.postForSession({ type: 'attachImage', id: id, name: name, mimeType: mimeType, dataUrl: dataUrl });
+    NS.bridge.postForSession({
+      type: 'attachImage', sessionId: targetSession,
+      id: id, name: name, mimeType: mimeType, dataUrl: dataUrl
+    });
   }
 
   /**

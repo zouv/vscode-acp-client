@@ -69,3 +69,37 @@ describe('reference-driven tool collection', () => {
     expect(tools.get('s', 't')?.content).toEqual([]);
   });
 });
+
+describe('finalizeOpen bounds interrupted tool intervals', () => {
+  it('stamps endedAt only on non-terminal, still-open invocations', () => {
+    const tools = new ToolInvocationStore();
+    const done = tools.upsertCall('s', { toolCallId: 'done', title: 'Bash', status: 'completed' });
+    const open = tools.upsertCall('s', { toolCallId: 'open', title: 'Task', status: 'in_progress' });
+    const failed = tools.upsertCall('s', { toolCallId: 'failed', title: 'Read', status: 'failed' });
+    const before = done.endedAt!;
+
+    expect(tools.finalizeOpen('s', 1234)).toEqual(['open']);
+    expect(open.endedAt).toBe(1234);
+    expect(done.endedAt).toBe(before);
+    expect(failed.endedAt).toBeDefined();
+    // Idempotent: a second call has nothing left to close.
+    expect(tools.finalizeOpen('s', 9999)).toEqual([]);
+    expect(open.endedAt).toBe(1234);
+  });
+
+  it('a closed parent no longer swallows later sibling calls', async () => {
+    const { ClaudeCodeNesting } = await import('../nesting/ClaudeCodeNesting');
+    const tools = new ToolInvocationStore();
+    const nesting = new ClaudeCodeNesting();
+    const task = tools.upsertCall('s', {
+      toolCallId: 'task', title: 'Task explore', status: 'in_progress', rawInput: { subagent_type: 'Explore' },
+    });
+    task.startedAt = 0;
+    tools.finalizeOpen('s', 100);
+    expect(task.endedAt).toBe(100);
+    const later = tools.upsertCall('s', { toolCallId: 'later', title: 'Read x', status: 'in_progress' });
+    later.startedAt = 200;
+    nesting.apply(tools.list('s'));
+    expect(later.parentId).toBeUndefined();
+  });
+});

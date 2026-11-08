@@ -11,7 +11,7 @@
 import { profileFor } from '../../../agents/AgentProfile';
 import { getAgentKind } from '../../../config/AgentConfig';
 import type { ToolInvocation } from '../transcript/types';
-import { ClaudeCodeNesting } from './ClaudeCodeNesting';
+import { ClaudeCodeNesting, type NestingInputs } from './ClaudeCodeNesting';
 
 export interface NestingStrategy {
   /** Stable id, used in logs and (potentially) persisted UI preferences. */
@@ -30,6 +30,12 @@ export interface NestingStrategy {
    * just those to the webview.
    */
   apply(all: readonly ToolInvocation[]): string[];
+  /**
+   * Optional gate for `tool_call_update`: false = this update cannot change any
+   * link, so `apply` may be skipped. `prior` is `nestingInputsOf(inv)` taken
+   * before the in-place upsert. Absent = always run.
+   */
+  needsPass?(prior: NestingInputs | undefined, updated: ToolInvocation, all: readonly ToolInvocation[]): boolean;
 }
 
 /** Pick the strategy for an agent from its profile (`kind`), not from its configured name. */
@@ -53,5 +59,8 @@ export const flatNesting: NestingStrategy = {
   label: 'Flat list — no nesting information is available for this agent',
   apply(): string[] {
     return [];
+  },
+  needsPass(): boolean {
+    return false;
   },
 };

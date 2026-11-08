@@ -20,8 +20,15 @@ export const domClient = `
     .forEach(function (t) { ALLOWED_TAGS[t] = true; });
 
   var ALLOWED_ATTRS = {};
-  'class title data-href data-lang data-src data-terminal data-path data-line start'.split(' ')
+  'class title start'.split(' ')
     .forEach(function (a) { ALLOWED_ATTRS[a] = true; });
+
+  // [CUSTOM- 只放行宿主 SafeMarkdown 渲染器真正会写的 data-*。旧实现放行一切
+  // data-*，于是将来任何新委托属性都能从 agent 文本里长出来（data-perm-option /
+  // data-elic-action 这类"点了就代表用户作答"的钩子尤其危险）。
+  var ALLOWED_DATA_ATTRS = {};
+  'data-href data-lang data-mermaid data-path data-line data-end-line'.split(' ')
+    .forEach(function (a) { ALLOWED_DATA_ATTRS[a] = true; });
 
   /**
    * Backstop for the extension-side SafeMarkdown renderer: parse into an inert
@@ -50,7 +57,7 @@ export const domClient = `
         var attrs = Array.prototype.slice.call(child.attributes);
         for (var j = 0; j < attrs.length; j++) {
           var name = attrs[j].name.toLowerCase();
-          if (!ALLOWED_ATTRS[name] && name.indexOf('data-') !== 0) {
+          if (!ALLOWED_ATTRS[name] && !ALLOWED_DATA_ATTRS[name]) {
             child.removeAttribute(attrs[j].name);
           }
         }

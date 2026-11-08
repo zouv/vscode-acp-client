@@ -1,10 +1,26 @@
 import type { AgentCapabilities } from '@agentclientprotocol/sdk';
 
 import { abortable } from '../utils/Abortable';
+import { DeadlineExceededError, withDeadline } from '../utils/AsyncDeadline';
 import { getAgentConfigs } from '../config/AgentConfig';
 import type { AgentManager } from './AgentManager';
 import type { ConnectionInfo, ConnectionManager } from './ConnectionManager';
 import type { AgentCapabilitySummary } from './types';
+
+/**
+ * Per-task deadline of the control-plane queue: when it passes, the caller's promise rejects
+ * with `DeadlineExceededError` and the queue moves on (the RPC itself may still answer later).
+ */
+export const CONTROL_PLANE_TIMEOUT_MS = 60_000;
+/** `session/load` replays the whole history before answering, so it gets longer. */
+export const SESSION_LOAD_TIMEOUT_MS = 300_000;
+/** session/close is best-effort (the session is already gone locally): don't let it hold the queue long. */
+export const SESSION_CLOSE_TIMEOUT_MS = 15_000;
+
+export interface EnqueueOptions {
+  timeoutMs?: number;
+  label?: string;
+}
 
 export interface ConnectorHooks {
   resolveCwd(): string;
@@ -91,14 +107,24 @@ export class AgentConnector {
     return true;
   }
 
-  /** Control-plane RPCs (new/load/resume/close) run one at a time per connection; prompts stay concurrent. */
-  enqueue<T>(agentId: string, task: () => Promise<T>): Promise<T> {
+  /**
+   * Control-plane RPCs (new/load/resume/close/delete/fork) run one at a time per connection;
+   * prompts stay concurrent. Each task has a deadline measured from when it starts, so one
+   * hung RPC cannot block every later one. Keep interactive UI (auth dialogs) out of tasks.
+   */
+  enqueue<T>(agentId: string, task: (expired: AbortSignal) => Promise<T>, opts: EnqueueOptions = {}): Promise<T> {
     const prev = this.queues.get(agentId) ?? Promise.resolve();
     const run = () => {
       if (this.disposed || !this.nameById.has(agentId) || !this.connections.getConnection(agentId)) {
         throw new Error('Agent connection cancelled.');
       }
-      return task();
+      // `expired` aborts once the caller has been rejected, so a late answer can skip its side effects.
+      const expired = new AbortController();
+      return withDeadline(() => task(expired.signal), opts.timeoutMs ?? CONTROL_PLANE_TIMEOUT_MS, opts.label ?? 'ACP control-plane request')
+        .catch((error: unknown) => {
+          if (error instanceof DeadlineExceededError) { expired.abort(error); }
+          throw error;
+        });
     };
     const next = prev.then(run, run);
     this.queues.set(agentId, next.catch(() => undefined));

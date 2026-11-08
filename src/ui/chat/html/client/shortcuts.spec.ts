@@ -12,7 +12,10 @@ function createClient() {
   };
   const window = { __vac: {
     scroll: { jumpToTop: () => calls.push('top'), jumpToLatest: () => calls.push('bottom') },
-    tabs: { activateRelative: (n: number) => calls.push(String(n)) },
+    tabs: {
+      activateRelative: (n: number) => calls.push(String(n)),
+      closeActive: () => calls.push('close'),
+    },
     composer: { isComposable: () => true, focusInput: () => calls.push('input') },
   } };
   new Function('window', 'document', shortcutsClient)(window, document);
@@ -34,10 +37,10 @@ function createClient() {
 describe('chat shortcuts', () => {
   it('dispatches defaults and stops their propagation', () => {
     const { calls, key } = createClient();
-    for (const code of ['KeyA', 'KeyE', 'KeyI', 'KeyP', 'KeyN']) {
+    for (const code of ['KeyA', 'KeyE', 'KeyI', 'KeyP', 'KeyN', 'KeyW']) {
       expect(key(code)).toMatchObject({ defaultPrevented: true, stopped: true });
     }
-    expect(calls).toEqual(['top', 'bottom', 'input', '-1', '1']);
+    expect(calls).toEqual(['top', 'bottom', 'input', '-1', '1', 'close']);
     expect(key('KeyZ').defaultPrevented).toBe(false);
   });
 
@@ -67,6 +70,19 @@ describe('chat shortcuts', () => {
     expect(event.defaultPrevented).toBe(false);
     expect(event.stopped).toBeUndefined();
     expect(calls).toEqual([]);
+  });
+
+  it('does not swallow Option-typed characters that differ from the physical letter', () => {
+    const { calls, key, shortcuts } = createClient();
+    // macOS：Option+A 输入 å、Option+E 输入死键重音，不能当成 Alt+KeyA / Alt+KeyE。
+    expect(shortcuts.fromEvent({ code: 'KeyA', altKey: true, key: 'å' })).toBeNull();
+    const typed = key('KeyA', { key: 'å' });
+    expect(typed.defaultPrevented).toBe(false);
+    expect(typed.stopped).toBeUndefined();
+    // 非字母 code（方向键）不受"键入字符"判据影响。
+    shortcuts.applyPrefs({ shortcuts: { scrollTop: 'Alt+ArrowUp' } });
+    expect(key('ArrowUp', { key: 'ArrowUp' }).defaultPrevented).toBe(true);
+    expect(calls).toEqual(['top']);
   });
 
   it('stops repeated keydowns from bubbling without repeating the action', () => {

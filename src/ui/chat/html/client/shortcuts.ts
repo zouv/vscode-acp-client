@@ -7,7 +7,8 @@ export const shortcutsClient = `
     scrollBottom: 'Alt+KeyE',
     focusInput: 'Alt+KeyI',
     previousSession: 'Alt+KeyP',
-    nextSession: 'Alt+KeyN'
+    nextSession: 'Alt+KeyN',
+    closeSession: 'Alt+KeyW'
   };
   var installed = false;
   var navigationKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'];
@@ -20,6 +21,13 @@ export const shortcutsClient = `
       || (code.length === 6 && code.slice(0, 5) === 'Digit' && code.charAt(5) >= '0' && code.charAt(5) <= '9')
       || navigationKeys.indexOf(code) >= 0;
     if (!valid) { return null; }
+    // macOS 的 Option 会产出真实字符（Option+A → å），而默认 Alt 快捷键正是字母键。
+    // 键面字符与物理 code 的字母不一致 ⇒ 这次按下的意图是输入，不是快捷键。
+    // 方向键 / Home / End 等非字母 code 不受影响。
+    if (code.length === 4 && code.slice(0, 3) === 'Key') {
+      var typed = typeof event.key === 'string' ? event.key : '';
+      if (typed.length === 1 && typed.toLowerCase() !== code.charAt(3).toLowerCase()) { return null; }
+    }
     // Shift 只能叠加：仅 Shift 的绑定会吞掉正常的大写文本输入。
     if (!event.ctrlKey && !event.altKey && !event.metaKey) { return null; }
     var modifiers = [];
@@ -67,6 +75,9 @@ export const shortcutsClient = `
         && NS.composer.isComposable() && NS.composer.focusInput) { NS.composer.focusInput(); }
     else if (action === 'previousSession' && NS.tabs && NS.tabs.activateRelative) { NS.tabs.activateRelative(-1); }
     else if (action === 'nextSession' && NS.tabs && NS.tabs.activateRelative) { NS.tabs.activateRelative(1); }
+    // 与 tab 上的 × / 中键 / 右键 Close 共用 closeModel 那条路（草稿丢弃、待恢复遗忘、
+    // 运行中二次确认都在那里，不另写一份）。
+    else if (action === 'closeSession' && NS.tabs && NS.tabs.closeActive) { NS.tabs.closeActive(); }
   }
 
   function onKeyDown(event) {

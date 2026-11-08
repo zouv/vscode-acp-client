@@ -304,8 +304,46 @@ export const scrollClient = `
     }
   }
 
+  // [CUSTOM- 观察器回调里只**记下**变化点（不读布局）；展开祖先链 / 新增子树、
+  // 判"能不能滚"（getComputedStyle + scrollHeight）一律挪到 flushTails（帧内读阶段）。
+  // 回调是同步跑在每条宿主消息之后的，原先在这里量布局 = 每条消息一次强制重排。
+  var mutatedNodes = [];
+  var addedLists = [];
+
+  /** 只认还在流式的卡片里的变化点：flushTails 本来就只追这些（isLiveCard）。 */
+  function liveCardOf(node, cache) {
+    var card = topCardOf(node);
+    if (!card) { return false; }
+    for (var i = 0; i < cache.length; i++) {
+      if (cache[i].card === card) { return cache[i].live; }
+    }
+    var live = isLiveCard(card);
+    cache.push({ card: card, live: live });
+    return live;
+  }
+
+  function collectTailCandidates() {
+    var changed = mutatedNodes;
+    var added = addedLists;
+    mutatedNodes = [];
+    addedLists = [];
+    var cards = [];
+    for (var i = 0; i < changed.length; i++) {
+      if (liveCardOf(changed[i], cards)) { noteTailCandidate(changed[i]); }
+    }
+    for (var j = 0; j < added.length; j++) {
+      var list = added[j];
+      var live = [];
+      for (var k = 0; k < list.length; k++) {
+        if (list[k] && list[k].nodeType === 1 && liveCardOf(list[k], cards)) { live.push(list[k]); }
+      }
+      if (live.length > 0) { noteAddedNodes(live); }
+    }
+  }
+
   function flushTails() {
     tailPending = false;
+    if (container) { collectTailCandidates(); }
     var list = tailQueue;
     tailQueue = [];
     if (!container) { return; }
@@ -503,11 +541,12 @@ export const scrollClient = `
         for (var i = 0; i < records.length; i++) {
           var changed = records[i].target;
           if (changed && changed.nodeType === 3) { changed = changed.parentNode; }
-          if (changed) { noteTailCandidate(changed); }
-          noteAddedNodes(records[i].addedNodes);
+          if (changed && mutatedNodes.indexOf(changed) < 0) { mutatedNodes.push(changed); }
+          var added = records[i].addedNodes;
+          if (added && added.length > 0) { addedLists.push(Array.prototype.slice.call(added)); }
         }
         reclaimActive();
-        if (tailQueue.length === 0 || tailPending) { return; }
+        if ((mutatedNodes.length === 0 && addedLists.length === 0 && tailQueue.length === 0) || tailPending) { return; }
         tailPending = true;
         if (NS.dom && NS.dom.schedule) { NS.dom.schedule(flushTails); } else { flushTails(); }
       });

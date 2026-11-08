@@ -1267,25 +1267,28 @@ export const composerClient = `
   }
 
   /** 草稿页收到一张粘贴的位图（boot.attachImage 在没有会话时转到这里）。 */
-  function addDraftImage(info) {
-    if (!state.draft || !info || !info.id) { return false; }
-    var draftId = state.draft.draftId;
-    var list = draftFiles[draftId] || (draftFiles[draftId] = []);
+  function addDraftImage(info, draftId) {
+    // [CUSTOM- 可选 draftId：粘贴是异步读文件，读回时可能已经换了草稿。默认仍是当前草稿。
+    var target = draftId === undefined ? (state.draft ? state.draft.draftId : null) : draftId;
+    if (!target || !info || !info.id) { return false; }
+    var list = draftFiles[target] || (draftFiles[target] = []);
     list.push({
       id: info.id, kind: 'image', name: info.name || 'image',
       path: info.id, mimeType: info.mimeType || 'image/png', dataUrl: info.dataUrl,
     });
     rememberImage(info.id, info.dataUrl);
-    syncDraftAttachments();
-    refreshControls();
+    if (state.draft && state.draft.draftId === target) {
+      syncDraftAttachments();
+      refreshControls();
+    }
     return true;
   }
 
   /** 草稿页收到拖入/粘贴的文件路径（同上）。 */
-  function addDraftPaths(paths, meta) {
-    if (!state.draft || !paths || paths.length === 0) { return false; }
-    var draftId = state.draft.draftId;
-    var list = draftFiles[draftId] || (draftFiles[draftId] = []);
+  function addDraftPaths(paths, meta, draftId) {
+    var target = draftId === undefined ? (state.draft ? state.draft.draftId : null) : draftId;
+    if (!target || !paths || paths.length === 0) { return false; }
+    var list = draftFiles[target] || (draftFiles[target] = []);
     var labels = meta && meta.length ? meta : [];
     for (var i = 0; i < paths.length; i++) {
       var p = String(paths[i] || '');
@@ -1299,8 +1302,10 @@ export const composerClient = `
         lineStart: m.lineStart, lineEnd: m.lineEnd,
       });
     }
-    syncDraftAttachments();
-    refreshControls();
+    if (state.draft && state.draft.draftId === target) {
+      syncDraftAttachments();
+      refreshControls();
+    }
     return true;
   }
 
@@ -1457,13 +1462,16 @@ export const composerClient = `
 
   /** The first message was accepted: leave draft mode and clear the box. */
   function resolveDraft() {
+    var draftId = state.draft ? state.draft.draftId : null;
     // [CUSTOM- 附件已随首条消息交给宿主（draftResolved 才走到这里），本地这份清掉；
     // 与 textarea 同一条规矩 —— 失败时（failDraft）文字和图片都留着。
-    if (state.draft) { delete draftFiles[state.draft.draftId]; }
+    if (draftId) { delete draftFiles[draftId]; }
     state.draft = null;
     state.draftPending = false;
     state.attachments = [];
     input.value = '';
+    // 按 draftId 存的文字草稿也必须忘掉，否则重载/id 复用后它会作为"未发送的草稿"回来。
+    if (draftId) { forgetDraft(draftId); }
     autoGrow();
     renderAttachments();
     refreshControls();

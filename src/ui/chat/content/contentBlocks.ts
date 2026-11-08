@@ -23,6 +23,18 @@ export type ContentBlockView =
 const WINDOWS_ABS = /^[a-zA-Z]:[\\/]/;
 const URI_SCHEME = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
 
+/**
+ * [CUSTOM- Reject UNC paths (`\\host\share`, also spelled `//host/share`).
+ *
+ * The webview turns a local `path` into `openTextDocument`; on Windows the SMB
+ * redirector then connects to `host` and can leak NTLM credentials. A transcript
+ * is agent output, i.e. attacker-influenced, so a crafted prompt could plant such
+ * a link. Normal absolute paths (single leading slash / drive letter) are kept.
+ */
+function isUncPath(value: string): boolean {
+  return /^[\\/]{2}/.test(value);
+}
+
 // [CUSTOM- Exported so markdown.ts can route a **link** to the same
 // channel a content-block chip takes. The judgement "is this a local path, and
 // which form" belongs here once — a second copy in markdown.ts is exactly the
@@ -31,7 +43,8 @@ const URI_SCHEME = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
 export function localPathOf(uri: string | null | undefined): string | undefined {
   const value = (uri ?? '').trim();
   if (!value) { return undefined; }
-  if (WINDOWS_ABS.test(value) || value.startsWith('/') || value.startsWith('\\\\')) {
+  if (isUncPath(value)) { return undefined; }
+  if (WINDOWS_ABS.test(value) || value.startsWith('/')) {
     return value;
   }
   const scheme = URI_SCHEME.exec(value)?.[1]?.toLowerCase();
@@ -39,8 +52,14 @@ export function localPathOf(uri: string | null | undefined): string | undefined 
   // session's working directory (ChatPanelHost.fileUri).
   if (scheme === undefined) { return value; }
   if (scheme === 'file') {
+    let url: URL;
+    try { url = new URL(value); } catch { return undefined; }
+    // `file://host/share` is a UNC share, not a local file (see isUncPath).
+    // (`file://localhost/...` is normalised to an empty host by URL, which is
+    // exactly right: it denotes the local machine, not a remote authority.)
+    if (url.protocol !== 'file:' || url.host.length > 0) { return undefined; }
     // Handles percent-encoding and the Windows `file:///C:/x` form.
-    try { return fileURLToPath(value); } catch { return undefined; }
+    try { return fileURLToPath(url); } catch { return undefined; }
   }
   return undefined;
 }

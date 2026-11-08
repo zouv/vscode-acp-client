@@ -124,6 +124,28 @@ export class ToolInvocationStore {
     if (tools?.size === 0) { this.bySession.delete(sessionId); }
   }
 
+  /**
+   * [CUSTOM- Close every invocation whose terminal update never arrived.
+   *
+   * ACP sends a tool call's status updates as they happen, but a cancelled or
+   * interrupted turn (and an agent that drops the tail of a replay) can leave a
+   * call `in_progress` forever. Its interval is then "open up to `now`", so the
+   * nesting heuristic sees the dead Task containing every LATER tool call — the
+   * cancelled Task swallows the rest of the session. Stamping `endedAt` bounds the
+   * interval; the status is left as the agent reported it.
+   */
+  finalizeOpen(sessionId: string, now: number = Date.now()): string[] {
+    const changed: string[] = [];
+    const tools = this.bySession.get(sessionId);
+    if (!tools) { return changed; }
+    for (const inv of tools.values()) {
+      if (inv.endedAt !== undefined) { continue; }
+      inv.endedAt = now;
+      changed.push(inv.toolCallId);
+    }
+    return changed;
+  }
+
   drop(sessionId: string): void {
     this.bySession.delete(sessionId);
   }

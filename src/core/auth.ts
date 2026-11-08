@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { RequestError, type AuthMethod } from '@agentclientprotocol/sdk';
+import type { AuthMethod } from '@agentclientprotocol/sdk';
 
 import { log, logError } from '../utils/Logger';
 import type { ConnectionInfo } from './ConnectionManager';
@@ -12,13 +12,7 @@ export function setAuthSecrets(storage: vscode.SecretStorage): void { secrets = 
 
 const apiKeySecret = (agentName: string): string => `vac.apiKey.${agentName}`;
 
-/** ACP "auth required" is JSON-RPC code -32000. */
-export function isAuthRequiredError(e: unknown): boolean {
-  const err = e as { code?: unknown; message?: unknown } | null;
-  return (e instanceof RequestError && e.code === -32000)
-    || err?.code === -32000
-    || (typeof err?.message === 'string' && /auth.?required/i.test(err.message));
-}
+export { isAuthRequiredError } from './authError';
 
 /**
  * A method marked `_meta['api-key']` takes the key from the client in

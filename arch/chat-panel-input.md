@@ -61,6 +61,7 @@
 | '/' 命令按钮与本地 `/side` | 输入栏左下角、'+' 旁边的 `/` 按钮（`#slashBtn`）：`openSlash()` 与输入斜杠共用 `commandList()`，直接弹列表、不在输入框写 '/'；已建立的主会话会把本地 `/side` 合并进 ACP commands，并覆盖同名 agent 命令，草稿页与 Side 不提供。`send()` 里的 `isSideCommand()` 只认无附件的单独 `/side`，且在 running/steering 早退之前发 `openSide`，绝不变成 prompt 或 steering。选中的普通命令仍由 `acceptSlash` 落成 `/name `；点弹层与输入框之外收起，Esc 仍可用 |
 | Send 灰置（2026-10-28） | `refreshSendState()` 是唯一判据：`draftPending`、或「没有可发往的会话/草稿」、或「没东西可发」时灰置。**没东西可发 = `input.value.trim()` 为空（只有空白 / 换行也算空）且没有附件**。输入、附件增删、焦点切换、草稿恢复、发送清空都要重算；`state.running` 时按钮是 Stop，**始终可点**（逃生门） |
 | Side 引用预填 | `boot.ts` 仅当定向 `sideQuote.sessionId === currentSessionId` 时调用 `composer.appendQuote()`：CRLF/CR 归一为 LF，逐行加 `> `，保留并追加到现有草稿，随后 stash/persist、autoGrow、刷新 Send/steerHint 并聚焦；**不发 `sendPrompt`**。ready 前的引用由 `SideChatPanel` 按 Side sessionId 分队列，激活对应 tab 后才 flush，不覆盖其他 Side 草稿 |
+| 粘贴（2026-11-08） | 剪贴板里有 `text/plain` 时**让原生文本粘贴通过**（Excel / Office 会在文本旁附带位图，旧逻辑会把整段文本吞成一张截图）；没有文本时才遍历**所有** `files` 读成图片附件（不再只看 `files[0]`）。目标会话/草稿在 paste 事件里**当场捕获**，异步 `FileReader` 读回时不再读 `currentSessionId`（快速切 tab 不会挂错会话）。本地失败写状态卡 / 记录区，**不发 `{type:'error'}`**——它不是 webview→宿主的协议类型，宿主会丢弃 |
 | 预留功能区（138 + 143） | 与输入区并列的第二列，宽度与大纲栏同源。**[143] 只在钉住的大纲栏可见时才占宽度**（`applyReserve` 写 0 或侧栏宽）—— 没有大纲就没有那根竖线，输入卡随之在面板里居中；`width` / `border-left` / `padding-left` 三处都用 `min(…, var(--vac-aside-w, 0px))`，否则宽度归零时那 1px 边框与 8px padding 仍然占着位置。**里面先空着**：用户要求"留着后面设计好方案再谈怎么用"，138 搬进去的上下文圆环 143 已回到按钮栏。`max-width: 40%` 仍是窄面板下的安全阀 |
 | 未连接时不显示底栏（143） | `body[data-phase="disconnected"] .composer, body[data-phase="connecting"] .composer { display: none }` —— 那时输入框本来就是禁用的，露一个"看得见却打不了字"的框只会让人以为它坏了。相位由 `stateCard` 写在 `body[data-phase]` 上（与上面 `Times` 那条同一个机制）。副产品：`display: none` 让 ResizeObserver 把 `--vac-composer-h` 归零，消息区不再为一条并不存在的底栏留白 |
 | 空态也不显示底栏 | `body[data-composer="off"] .composer { display: none }` —— **连上了但没有会话/草稿**（真正的空态）时同样藏掉底栏（同 143 的道理）。`data-composer` 由 `composer.refreshControls` 按「`state.sessionId || state.draft`」写（`on`/`off`），`<body>` 初始 `data-composer="off"` 防空态闪一下。**注意别用 `data-phase="ready"` 当判据**：`phase()` 在会话聚焦时也返回 `ready`，会误藏有会话的底栏 |
@@ -100,6 +101,7 @@
 | 隐藏依赖 | `config-options-changed` / `available-commands-changed` / `mode-changed` 都由 **core 自己**从 agent 推送里落账：`SessionManager` 订阅构造器注入的 `SessionUpdateHandler`，把 `config_option_update` / `available_commands_update` / `current_mode_update` 分别交给 `applyConfigOptions` / `applyAvailableCommands` / `applyCurrentMode`。**不要**改回"由面板监听器顺手调一下"——`ChatPanelHost.onSessionUpdate` 开头会丢弃**会话注册前**到达的通知，而 core 侧的 `apply*` 带 `PendingSessionState` 缓冲、由 `registerSession` 的 `drainInto` 落盘，正好覆盖那个竞态（`applyStateFrom` 在注册之前跑，drain 时响应里的 `modes`/`configOptions` 已就位） |
 | 谁发起请求 | `composer.setDraft()` 自己发 `listDraftOptions`（不是 boot）：要渲染应答的组件才是知道自己缺东西的那个，而且这样能落在 `chat-client.test.ts` 的桩 DOM 覆盖里（`loadClient` **刻意不加载 boot**）。应答由 boot 的消息 switch 转给 `NS.composer.setDraftOptions` |
 | 迟到的应答 | 请求与应答都带 `draftId`，`setDraftOptions` 只认**当前聚焦的那个草稿**。`draftSeq` 是每个 webview 独立的，两个面会同时存在 `draft-1` ⇒ 定向与 `draftId` 两道判定都不能省 |
+| 草稿生命周期（2026-11-08） | 草稿 id = `draft-<文档种子>-<序号>`（种子含时间戳/随机数），**不再从 `draft-1` 重来**——否则重载后新的草稿会复用旧 id、持久化的旧文本（已随首条消息发出的那句）又回到输入框。`resolveDraft` 在 boot 侧（知道 draftId）与 composer 侧都调 `forgetDraft(draftId)`，把按 id 存的文字与本地附件一起忘掉 |
 | 选择存在哪 | 存在 **boot 持有的 draft 对象**上（`draft.selections`），composer 只读它 —— 一份副本（pitfall #19）。切走再切回时靠它重放；快照每次聚焦都会重新下发，所以"快照值"永远不许覆盖用户已经选过的值 |
 | 草稿态点菜单**不发** `setConfigOption` | 草稿没有 sessionId，那条消息会带 `sessionId: null` 被守卫静默丢弃（§5.4 规则一）—— 用户选了等于没选。改为只改本地副本的 `currentValue`（显示即所得）+ 记进 `selections` |
 | 应用时机 | `createSession` → 发 `draftResolved`（保持 058 的不变量）→ 逐项校验后 `await setConfigOption` → 播种切换基线 → `pushMeta` → 首条消息。**在首条消息之前**是重点：第一轮就该跑在用户选的模式/模型上 |
@@ -149,6 +151,7 @@
 | 子会话归属（2026-10-29） | `PermissionBridge.setSessionResolver` 把 sub-agent 子会话 id 解析到父会话：`Pending` 保留原始 id（`cancelSubagent` 用）与 `panelSessionId`（记录锚点），`cancelSession` / `hasPendingFor` 双匹配。这样父会话的抽屉能作答，而 `cancelTurn(parent)` 也能把子会话的待决请求答成 cancelled |
 | 没有"收起" | 与表单刻意不同：权限请求是阻塞的，收起它没有意义；记录行的 `Review` 是唯一的主动打开入口。Escape 不接管 |
 | 回答路径唯一 | 发送与"发送中"守卫都在 `permissionView.answer(host, promptId, optionId)`（`links.ts` 只把按钮解析到宿主：`.perm` **或** `.perm-drawer`，与表单的写法一致）。按钮在两个宿主里都存在，两处各自发送就是两份知识；发送中禁用**全文档**同 promptId 的按钮 |
+| 发送中守卫（2026-11-08） | 按 **promptId** 记 `{at, timer}`（不再是模块级布尔）：切会话 `setSession` 清全部、`sync` 只保留仍 pending 的、20s 超时兜底。旧实现在 A 会话点完后切到 B，A 的更新被 boot 丢掉 ⇒ 标志永久卡住，**所有会话**的权限按钮都看起来可点却没有反应。现在清的是那一条 prompt，同会话的其它请求不受牵连 |
 | 高度让位 | 消息区 `padding-bottom` 与 `#jumpToLatest` 的 `bottom` 都把两个变量**相加**（`composer-h + elic-h + perm-h`）。观察器 + 显式 poke 两条腿（pitfall #27：ResizeObserver 回调按帧投递，不是每个宿主都送达） |
 | 桩 DOM 注意 | 客户端用 `document.querySelectorAll('[data-perm-option]')` 找按钮——测试桩的 `document` 起初**没有** `querySelectorAll`，那会让"发送中禁用"这条断言永远绿（假阴性）。桩已补上（解析到 body） |
 

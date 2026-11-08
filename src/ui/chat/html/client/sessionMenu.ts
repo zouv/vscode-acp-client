@@ -32,6 +32,12 @@ export const sessionMenuClient = `
   var open = false;
   var pending = false;
 
+  /** IME 合成中（含死键 / AltGraph）的 Escape 属于输入法，不是抽屉快捷键。 */
+  function composing(event) {
+    return !!(event && (event.isComposing || event.keyCode === 229 || event.key === 'Dead'
+      || (event.getModifierState && event.getModifierState('AltGraph'))));
+  }
+
   // [CUSTOM- Working-directory filter.
   var filterChip = null;
   var filterMenu = null;
@@ -781,7 +787,7 @@ export const sessionMenuClient = `
       });
     }
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape' && open) {
+      if (event.key === 'Escape' && open && !composing(event)) {
         event.preventDefault();
         event.stopPropagation();
         // [CUSTOM- Layered: the menu is the innermost open thing, so

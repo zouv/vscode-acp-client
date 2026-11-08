@@ -36,6 +36,8 @@ interface SessionTranscript {
   seq: number;
   /** LRU stamp. */
   touched: number;
+  /** Assistant / thought entries still marked streaming (finalize must not scan every entry). */
+  open: Set<AssistantEntry | ThoughtEntry>;
   /**
    * [CUSTOM- 回放计时起点（epoch ms）。设置后，本会话所有 append 的记录
    * `at` 都写成「从该起点 0 起的相对毫秒」并打 `atIsElapsed`——回放拿不到转录
@@ -100,6 +102,7 @@ export class TranscriptStore {
       entries: [],
       seq: 0,
       touched: ++this.clock,
+      open: new Set(),
     });
     this.evictIfNeeded();
   }
@@ -131,6 +134,20 @@ export class TranscriptStore {
       agentName: t.agentName,
       entries: t.entries.map(e => ({ ...e })),
     };
+  }
+
+  /**
+   * The live entry list, read-only and uncopied (no LRU touch). For host-side scans
+   * that only read; anything handed to the webview must go through `snapshot`.
+   */
+  peekEntries(sessionId: string): readonly TranscriptEntry[] {
+    return this.sessions.get(sessionId)?.entries ?? [];
+  }
+
+  /** The session's last entry, if any. */
+  lastEntry(sessionId: string): TranscriptEntry | undefined {
+    const entries = this.sessions.get(sessionId)?.entries;
+    return entries ? entries[entries.length - 1] : undefined;
   }
 
   /** True when any session of this agent holds content (confirm dialogs). */
@@ -313,11 +330,15 @@ export class TranscriptStore {
   }
 
   /** Append raw text to the current assistant entry, creating one if needed. */
-  appendAssistantChunk(sessionId: string, text: string, messageId?: string): AssistantEntry | null {
+  appendAssistantChunk(sessionId: string, text: string, messageId?: string, origin?: string): AssistantEntry | null {
     const t = this.sessions.get(sessionId);
     if (!t) { return null; }
     const last = t.entries[t.entries.length - 1];
+    // [CUSTOM- `origin` keeps two flattened prose streams apart: without it a
+    // chunk from a parallel sub-agent merged into the parent's (or a sibling's)
+    // still-open bubble whenever messageId was absent.
     const merges = !!last && last.kind === 'assistant' && last.streaming
+      && last.origin === origin
       && (messageId === undefined || last.messageId === undefined || last.messageId === messageId);
     // [CUSTOM- Merging blank text into an open bubble is fine (it
     // is how paragraph breaks arrive), but STARTING a bubble from blank text is
@@ -337,15 +358,17 @@ export class TranscriptStore {
       text: clampText(text),
       streaming: true,
       messageId,
+      ...(origin !== undefined ? { origin } : {}),
     }));
   }
 
   /** Append raw text to the current thought entry, creating one if needed. */
-  appendThoughtChunk(sessionId: string, text: string, messageId?: string): ThoughtEntry | null {
+  appendThoughtChunk(sessionId: string, text: string, messageId?: string, origin?: string): ThoughtEntry | null {
     const t = this.sessions.get(sessionId);
     if (!t) { return null; }
     const last = t.entries[t.entries.length - 1];
     const merges = !!last && last.kind === 'thought' && last.streaming
+      && last.origin === origin
       && (messageId === undefined || last.messageId === undefined || last.messageId === messageId);
     // [CUSTOM- Same rule as the assistant entry above: never start
     // a reasoning block that has nothing in it (it showed up as a bare
@@ -368,6 +391,7 @@ export class TranscriptStore {
       text: clampText(text),
       streaming: true,
       messageId,
+      ...(origin !== undefined ? { origin } : {}),
     }));
   }
 
@@ -424,12 +448,18 @@ export class TranscriptStore {
    */
   finalizeStreaming(sessionId: string, opts: { only?: 'assistant' | 'thought' } = {}): string[] {
     const t = this.sessions.get(sessionId);
-    if (!t) { return []; }
-    const finalized: string[] = [];
-    for (const entry of t.entries) {
-      if (entry.kind !== 'assistant' && entry.kind !== 'thought') { continue; }
-      if (!entry.streaming) { continue; }
+    if (!t || t.open.size === 0) { return []; }
+    const closing: Array<AssistantEntry | ThoughtEntry> = [];
+    for (const entry of t.open) {
+      if (!entry.streaming) { t.open.delete(entry); continue; }
       if (opts.only && entry.kind !== opts.only) { continue; }
+      closing.push(entry);
+    }
+    // Same order as a scan of the transcript would produce.
+    if (closing.length > 1) { closing.sort((a, b) => t.entries.indexOf(a) - t.entries.indexOf(b)); }
+    const finalized: string[] = [];
+    for (const entry of closing) {
+      t.open.delete(entry);
       entry.streaming = false;
       // [CUSTOM- elapsed 记录（`at` 是 0 起的相对毫秒）没有真实起点，
       // 算 `Date.now() - at` 会得到巨大的错数——直接不产耗时。
@@ -450,7 +480,7 @@ export class TranscriptStore {
     if (entry.kind === 'assistant') {
       if (patch.text !== undefined) { entry.text = clampText(patch.text); }
       if (patch.html !== undefined) { entry.html = patch.html; }
-      if (patch.streaming !== undefined) { entry.streaming = patch.streaming; }
+      if (patch.streaming !== undefined) { entry.streaming = patch.streaming; this.trackOpen(t, entry); }
     } else if (entry.kind === 'thought') {
       if (patch.text !== undefined) { entry.text = clampText(patch.text); }
       // [CUSTOM- Thoughts render markdown too. Without this line the
@@ -458,7 +488,7 @@ export class TranscriptStore {
       // succeeded, the client got its html, and the store kept nothing — so a
       // session switch re-hydrated the thought as raw text again.
       if (patch.html !== undefined) { entry.html = patch.html; }
-      if (patch.streaming !== undefined) { entry.streaming = patch.streaming; }
+      if (patch.streaming !== undefined) { entry.streaming = patch.streaming; this.trackOpen(t, entry); }
       if (patch.elapsedMs !== undefined) { entry.elapsedMs = patch.elapsedMs; }
     } else if (entry.kind === 'plan') {
       // [CUSTOM- 键名 = 记录字段名（`entries`），不要写成 `plan`。
@@ -501,6 +531,10 @@ export class TranscriptStore {
 
   // --- Internals -----------------------------------------------------------
 
+  private trackOpen(t: SessionTranscript, entry: AssistantEntry | ThoughtEntry): void {
+    if (entry.streaming) { t.open.add(entry); } else { t.open.delete(entry); }
+  }
+
   private nextEntryId(t: SessionTranscript): string {
     return `${t.sessionId}:${++t.seq}:${++this.entrySeq}`;
   }
@@ -520,9 +554,13 @@ export class TranscriptStore {
       entry.atIsElapsed = true;
     }
     t.entries.push(entry);
+    if ((entry.kind === 'assistant' || entry.kind === 'thought') && entry.streaming) { t.open.add(entry); }
     t.touched = ++this.clock;
     if (t.entries.length > MAX_ENTRIES_PER_SESSION) {
       const removed = t.entries.splice(0, t.entries.length - MAX_ENTRIES_PER_SESSION);
+      for (const gone of removed) {
+        if (gone.kind === 'assistant' || gone.kind === 'thought') { t.open.delete(gone); }
+      }
       this.onRemove?.(sessionId, removed);
     }
     return entry;

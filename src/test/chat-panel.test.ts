@@ -4100,6 +4100,7 @@ suite('chat panel: ui prefs merge ()', () => {
       focusInput: DEFAULT_SHORTCUTS.focusInput,
       previousSession: null,
       nextSession: DEFAULT_SHORTCUTS.nextSession,
+      closeSession: DEFAULT_SHORTCUTS.closeSession,
     };
     for (const surface of [harness.surface, editor, side]) {
       surface.sent.length = 0;
@@ -5612,9 +5613,51 @@ suite('chat panel: a stale markdown reply is not stored', () => {
     const item = replies.flatMap(message => message.type === 'markdownRendered' ? message.items : [])
       .find(item => item.entryId === id && item.stream);
     assert.ok(item?.stream);
-    assert.strictEqual(item.stream.source, 'first\n\ntail');
-    assert.strictEqual(item.stream.blocks.join('') + item.stream.tailHtml, new SafeMarkdown().render(item.stream.source));
+    assert.strictEqual(item.stream.sourceLength, 'first\n\ntail'.length);
+    assert.strictEqual(item.stream.start, 0);
+    assert.strictEqual(item.stream.blocks.join('') + item.stream.tailHtml, new SafeMarkdown().render('first\n\ntail'));
     assert.strictEqual(entry?.html, undefined);
+    harness.host.dispose();
+  });
+
+  test('a length-based streaming request renders the host text and ships only new blocks', () => {
+    const harness = makeHarness('s-1', 'Claude Code');
+    chunk(harness, 'one\n\ntwo\n\nthree');
+    const id = assistantId(harness);
+    const ask = (text: string, have?: { streamGeneration: number; streamBlocks: number }) => {
+      harness.surface.sent.length = 0;
+      harness.host.onMessage({ type: 'renderMarkdown', items: [
+        { entryId: id, sessionId: 's-1', text: '', streaming: true, textLength: text.length, check: text.slice(-16), ...have },
+      ] });
+      harness.host.onFocusChanged({ agentName: harness.agentName, sessionId: harness.sessionId });
+      return harness.surface.sent.flatMap(message => message.type === 'markdownRendered' ? message.items : [])
+        .find(item => item.entryId === id)?.stream;
+    };
+    const first = ask('one\n\ntwo\n\nthree');
+    assert.ok(first);
+    assert.strictEqual(first.start, 0);
+    assert.strictEqual(first.blocks.join('') + first.tailHtml, new SafeMarkdown().render('one\n\ntwo\n\nthree'));
+    chunk(harness, '\n\nfour');
+    const next = ask('one\n\ntwo\n\nthree\n\nfour', { streamGeneration: first.generation, streamBlocks: first.blocks.length });
+    assert.ok(next);
+    assert.strictEqual(next.start, first.blocks.length, 'held blocks are not shipped again');
+    assert.strictEqual(next.blocks.length, 1);
+    assert.strictEqual(ask('one\n\nWRONG'), undefined, 'a mismatching check is refused');
+    harness.host.dispose();
+  });
+
+  test('streamed chunks after the first travel as appendText deltas', () => {
+    const harness = makeHarness('s-1', 'Claude Code');
+    chunk(harness, 'hello');
+    harness.host.onFocusChanged({ agentName: harness.agentName, sessionId: harness.sessionId });
+    harness.surface.sent.length = 0;
+    chunk(harness, ' world');
+    chunk(harness, '!');
+    harness.host.onFocusChanged({ agentName: harness.agentName, sessionId: harness.sessionId });
+    const deltas = harness.surface.sent.filter(message => message.type === 'appendText');
+    assert.deepStrictEqual(deltas.map(m => m.type === 'appendText' ? [m.offset, m.text] : null), [[5, ' world!']],
+      'one coalesced delta, offset = text the client already had');
+    assert.ok(!harness.surface.sent.some(m => m.type === 'append'), 'the whole entry is not re-sent');
     harness.host.dispose();
   });
 
@@ -6859,5 +6902,406 @@ suite('chat panel: Side Chat surface isolation', () => {
     });
     assert.strictEqual(prefMessages(harness.surface).length, 0);
     assert.strictEqual(prefMessages(side).length, 1);
+  });
+});
+
+// --- CUSTOM- 2026-11-08 review fixes -------------------------------------
+
+import { AgentTreeItem, InfoTreeItem, SessionTreeProvider } from '../ui/SessionTreeProvider';
+
+suite('session tree: a persistently failing session/list is not retried', () => {
+  test('renders the error leaf, refetches only on invalidate, and unsubscribes on dispose', async () => {
+    let listings = 0;
+    const offs: string[] = [];
+    const fake = {
+      getCachedCapabilities: () => ({ list: true, load: false, resume: false }),
+      listSessions: async () => {
+        listings++;
+        throw new Error('boom');
+      },
+      on: () => fake,
+      off: (event: string) => { offs.push(event); return fake; },
+      getActiveSessionId: () => null,
+      isAgentConnected: () => true,
+    };
+    const provider = new SessionTreeProvider(
+      fake as unknown as SessionManager, null, () => undefined,
+    );
+    const agent = new AgentTreeItem('Claude Code', true, vscode.TreeItemCollapsibleState.None);
+    try {
+      const loading = await provider.getChildren(agent);
+      assert.strictEqual((loading[0] as InfoTreeItem).kind, 'loading');
+      for (let i = 0; i < 100 && listings === 0; i++) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      assert.strictEqual(listings, 1);
+
+      const failed = await provider.getChildren(agent);
+      assert.strictEqual(failed.length, 1);
+      assert.strictEqual((failed[0] as InfoTreeItem).kind, 'error',
+        'the failed row must be the error leaf, not a fresh loading leaf');
+      // Repeated tree queries (VS Code asks often) must not retry the agent call.
+      await provider.getChildren(agent);
+      await provider.getChildren(agent);
+      assert.strictEqual(listings, 1, 'no retry loop from getChildren alone');
+
+      provider.invalidate('Claude Code');
+      await provider.getChildren(agent);
+      for (let i = 0; i < 100 && listings === 1; i++) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      assert.strictEqual(listings, 2, 'explicit invalidate/Retry refetches exactly once');
+    } finally {
+      provider.dispose();
+    }
+    assert.deepStrictEqual(offs.slice().sort(),
+      ['active-session-changed', 'agent-connected', 'agent-disconnected', 'session-info-changed'],
+      'every manager subscription is released on dispose');
+  });
+});
+
+suite('chat panel: every main surface tracks the shared focus', () => {
+  test('a focus change reaches BOTH main surfaces, so meta is delivered to both', () => {
+    const harness = makeHarness('s1');
+    registerFakeSession(harness.sessionManager, 's2', harness.agentName);
+    const editor = new RecordingSurface('editor');
+    harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 's1' });
+    harness.surface.sent.length = 0;
+    editor.sent.length = 0;
+
+    // The switch originates on the editor surface, so (with the old code) only
+    // `lastActive` = editor would have had its recorded session updated.
+    harness.host.onMessage({ type: 'focusSession', sessionId: 's2' }, 'editor');
+    harness.surface.sent.length = 0;
+    editor.sent.length = 0;
+
+    harness.handler.handleUpdate({
+      sessionId: 's2',
+      update: { sessionUpdate: 'usage_update', used: 42, size: 100 },
+    } as never);
+
+    const metas = (surface: RecordingSurface) => surface.sent.filter(message =>
+      message.type === 'meta' && (message as { sessionId?: string }).sessionId === 's2',
+    ) as Array<{ meta?: { usage?: { used?: number } } }>;
+    assert.strictEqual(metas(harness.surface).length, 1,
+      'the sidebar surface still records s2 as what it shows');
+    assert.strictEqual(metas(harness.surface)[0].meta?.usage?.used, 42);
+    assert.strictEqual(metas(editor).length, 1,
+      'the editor surface records s2 too');
+  });
+});
+
+suite('chat panel: sub-agent child meta does not corrupt the parent', () => {
+  function announce(harness: Harness, child: string): void {
+    harness.handler.handleUpdate({
+      sessionId: harness.sessionId,
+      update: {
+        sessionUpdate: 'subagent_update', sessionId: child,
+        title: 'story_editor', capabilities: { cancel: {} }, state: { state: 'running' },
+      },
+    } as never);
+    // Flush the card, then isolate the following assertions from it.
+    harness.host.onFocusChanged({ agentName: harness.agentName, sessionId: harness.sessionId });
+    harness.surface.sent.length = 0;
+  }
+
+  test('child usage / title / plan are dropped; child tools still render in the parent', () => {
+    const harness = makeHarness('parent');
+    announce(harness, 'child-1');
+
+    harness.handler.handleUpdate({
+      sessionId: 'child-1',
+      update: { sessionUpdate: 'usage_update', used: 999, size: 1000 },
+    } as never);
+    harness.handler.handleUpdate({
+      sessionId: 'child-1',
+      update: { sessionUpdate: 'session_info_update', title: 'Child renamed the parent' },
+    } as never);
+    harness.handler.handleUpdate({
+      sessionId: 'child-1',
+      update: { sessionUpdate: 'plan', entries: [{ content: 'child plan', status: 'in_progress', priority: 'high' }] },
+    } as never);
+
+    harness.host.onFocusChanged({ agentName: harness.agentName, sessionId: 'parent' });
+    const focus = harness.surface.sent.filter(m => m.type === 'focus').pop() as
+      | { meta?: { usage?: unknown }; summary?: { title?: unknown } }
+      | undefined;
+    assert.ok(focus);
+    assert.strictEqual(focus.meta?.usage ?? null, null,
+      "the child's usage_update must not overwrite the parent's context ring");
+    assert.notStrictEqual(focus.summary?.title, 'Child renamed the parent',
+      "the child's session_info_update must not rename the parent");
+    const planAppends = harness.surface.sent.filter(m => m.type === 'append')
+      .flatMap(m => (m as { entries: Array<{ kind?: string }> }).entries)
+      .filter(entry => entry.kind === 'plan');
+    assert.strictEqual(planAppends.length, 0,
+      "the child's plan must not replace the parent's plan card");
+
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'child-1',
+      update: {
+        sessionUpdate: 'tool_call', toolCallId: 'child-tool', title: 'Read x',
+        kind: 'read', status: 'in_progress', content: [],
+      },
+    } as never);
+    const state = settle(harness, harness.agentName, 'parent');
+    const tool = state.entries.find(entry =>
+      entry.kind === 'tool' && (entry as { toolCallId?: string }).toolCallId === 'child-tool');
+    assert.ok(tool, "the child's tool call still renders in the parent transcript");
+  });
+});
+
+suite('chat panel: interrupted tools are closed at turn end', () => {
+  test('a Task left in_progress stops containing tool calls from the next turn', async () => {
+    const harness = makeHarness('s1');
+    harness.handler.handleUpdate({
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'tool_call', toolCallId: 'task', title: 'Task explore',
+        kind: 'execute', status: 'in_progress', content: [], rawInput: { subagent_type: 'Explore' },
+      },
+    } as never);
+
+    // The seeded session has no connection, so this prompt fails — which still runs
+    // handleSendPrompt's `finally` (the one and only finalizeTurn call site).
+    harness.host.onMessage({ type: 'sendPrompt', sessionId: 's1', text: 'go' });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    // Let more than MIN_CONTAINMENT_MS (50ms) elapse after the turn ended.
+    await new Promise(resolve => setTimeout(resolve, 70));
+
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'tool_call', toolCallId: 'later', title: 'Read x',
+        kind: 'read', status: 'in_progress', content: [],
+      },
+    } as never);
+    const state = settle(harness, harness.agentName, 's1');
+    const later = state.entries.find(entry =>
+      entry.kind === 'tool' && (entry as { toolCallId?: string }).toolCallId === 'later') as
+      { toolView?: { parentId?: string } } | undefined;
+    assert.ok(later);
+    assert.strictEqual(later.toolView?.parentId, undefined,
+      'the cancelled Task interval must be closed, so it cannot swallow the next turn');
+  });
+
+  test('a thought followed directly by a tool call is finalized (no eternal "Thinking…")', () => {
+    const harness = makeHarness('s1');
+    harness.handler.handleUpdate({
+      sessionId: 's1',
+      update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'reasoning…' } },
+    } as never);
+    harness.handler.handleUpdate({
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Read x',
+        kind: 'read', status: 'in_progress', content: [],
+      },
+    } as never);
+    const state = settle(harness, harness.agentName, 's1');
+    const thought = state.entries.find(entry => entry.kind === 'thought') as
+      { streaming?: boolean } | undefined;
+    assert.ok(thought);
+    assert.strictEqual(thought.streaming, false,
+      'the thought must not keep streaming while its elapsed time absorbs the tool run');
+  });
+});
+
+suite('chat panel: history replace is ordered around a successful open', () => {
+  class LifecycleManager extends SessionManager {
+    readonly events: string[] = [];
+    running = false;
+    failOpen = false;
+    override isTurnInFlight(): boolean { return this.running; }
+    override async openExistingSession(): Promise<'live' | 'load' | 'resume'> {
+      this.events.push('open');
+      if (this.failOpen) { throw new Error('load failed'); }
+      return 'live';
+    }
+    override async closeSession(_agentName: string, sessionId: string): Promise<void> {
+      this.events.push(`close:${sessionId}`);
+    }
+  }
+
+  async function until(check: () => boolean): Promise<void> {
+    for (let i = 0; i < 100 && !check(); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  }
+
+  function newManager(): LifecycleManager {
+    const handler = new SessionUpdateHandler();
+    return new LifecycleManager(new AgentManager(), new ConnectionManager(handler), handler);
+  }
+
+  test('a running session is never replaced (its turn survives)', async () => {
+    const manager = newManager();
+    manager.running = true;
+    const harness = makeHarness('dummy-session', 'Claude Code', () => manager);
+    harness.host.onMessage({ type: 'openHistorySession', agentName: 'Claude Code', sessionId: 'next' });
+    await until(() => manager.events.includes('open'));
+    assert.deepStrictEqual(manager.events, ['open'],
+      'the running tab is left alone; the pick opens alongside it');
+  });
+
+  test('the old tab closes only after the new session opened', async () => {
+    const manager = newManager();
+    const harness = makeHarness('dummy-session', 'Claude Code', () => manager);
+    harness.host.onMessage({ type: 'openHistorySession', agentName: 'Claude Code', sessionId: 'next' });
+    await until(() => manager.events.length >= 2);
+    assert.deepStrictEqual(manager.events, ['open', 'close:dummy-session']);
+  });
+
+  test('a failed open leaves the previous session in place', async () => {
+    const manager = newManager();
+    manager.failOpen = true;
+    const harness = makeHarness('dummy-session', 'Claude Code', () => manager);
+    harness.host.onMessage({ type: 'openHistorySession', agentName: 'Claude Code', sessionId: 'next' });
+    await until(() => manager.events.includes('open'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepStrictEqual(manager.events, ['open'],
+      'no close when the load threw');
+  });
+});
+
+suite('chat panel: attachments survive a failed send', () => {
+  test('a prompt that never reached the agent keeps its image chip', async () => {
+    const harness = makeHarness('s1');
+    harness.host.onMessage({
+      type: 'attachImage', sessionId: 's1', id: 'img-1', name: 'shot.png',
+      mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAAA',
+    }, 'view');
+    harness.surface.sent.length = 0;
+
+    // The seeded session has no connection, so the prompt fails.
+    harness.host.onMessage({ type: 'sendPrompt', sessionId: 's1', text: 'look' });
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    harness.host.onFocusChanged({ agentName: harness.agentName, sessionId: 's1' });
+    const focus = harness.surface.sent.filter(m => m.type === 'focus').pop() as
+      | { meta?: { attachments?: Array<{ path?: string }> } }
+      | undefined;
+    assert.ok(focus);
+    assert.deepStrictEqual((focus.meta?.attachments ?? []).map(a => a.path), ['img-1'],
+      'the image must still be pending, not silently consumed by a failed send');
+    assert.strictEqual(harness.surface.sent.some(m => m.type === 'attachments'), false,
+      'no empty-attachments broadcast on failure');
+  });
+});
+
+suite('chat panel: a tab switch during session/load is honored immediately', () => {
+  class LoadingManager extends SessionManager {
+    loadingId: string | null = null;
+    override isLoading(sessionId: string): boolean { return this.loadingId === sessionId; }
+  }
+
+  function harnessWithLoading(): { harness: Harness; manager: LoadingManager } {
+    const handler = new SessionUpdateHandler();
+    const manager = new LoadingManager(new AgentManager(), new ConnectionManager(handler), handler);
+    const harness = makeHarness('A', 'Claude Code', () => manager);
+    registerFakeSession(manager, 'B', 'Claude Code');
+    return { harness, manager };
+  }
+
+  function appendsFor(harness: Harness, sessionId: string): ExtToChatMessage[] {
+    return harness.surface.sent.filter(m =>
+      m.type === 'append' && (m as { sessionId?: string }).sessionId === sessionId);
+  }
+
+  test('replay records are not streamed while loading, and a switch is not delayed by them', () => {
+    const { harness, manager } = harnessWithLoading();
+    harness.surface.sent.length = 0;
+    manager.loadingId = 'A';
+    harness.sessionManager.emit('session-load-start', 'A', harness.agentName);
+    harness.handler.handleUpdate({
+      sessionId: 'A',
+      update: { sessionUpdate: 'agent_message_chunk', messageId: 'm1', content: { type: 'text', text: 'replayed hello' } },
+    } as never);
+    assert.strictEqual(appendsFor(harness, 'A').length, 0,
+      'the loading overlay covers the replay; per-entry appends would saturate the webview queue');
+
+    // The user clicks tab B mid-load. The host must answer now, not after load end.
+    harness.host.onMessage({ type: 'focusSession', sessionId: 'B' }, 'view');
+    const focus = harness.surface.sent.filter(m => m.type === 'focus').pop() as
+      | { summary?: { sessionId?: string } } | undefined;
+    assert.strictEqual(focus?.summary?.sessionId, 'B', 'the focus reply is immediate');
+
+    const mark = harness.surface.sent.length;
+    manager.loadingId = null;
+    harness.sessionManager.emit('session-load-end', 'A', harness.agentName);
+    const afterLoad = harness.surface.sent.slice(mark);
+    assert.strictEqual(
+      afterLoad.some(m => m.type === 'focus' && (m as { summary?: { sessionId?: string } }).summary?.sessionId === 'A'),
+      false,
+      'a completed load must not steal focus from the tab the user selected',
+    );
+    // The records are not lost: switching back hydrates the full transcript.
+    harness.host.onMessage({ type: 'focusSession', sessionId: 'A' }, 'view');
+    const back = harness.surface.sent.filter(m => m.type === 'focus').pop() as
+      | { summary?: { sessionId?: string }; snapshot?: { entries: Array<{ text?: string }> } } | undefined;
+    assert.strictEqual(back?.summary?.sessionId, 'A');
+    assert.ok((back?.snapshot?.entries ?? []).some(entry => (entry.text ?? '').includes('replayed hello')),
+      'the replay was stored even though it was not streamed');
+  });
+
+  test('a load that is still the focused session gets one fresh snapshot at the end', () => {
+    const { harness, manager } = harnessWithLoading();
+    harness.surface.sent.length = 0;
+    manager.loadingId = 'A';
+    harness.sessionManager.emit('session-load-start', 'A', harness.agentName);
+    harness.handler.handleUpdate({
+      sessionId: 'A',
+      update: { sessionUpdate: 'agent_message_chunk', messageId: 'm1', content: { type: 'text', text: 'still here' } },
+    } as never);
+    manager.loadingId = null;
+    harness.sessionManager.emit('session-load-end', 'A', harness.agentName);
+
+    const focus = harness.surface.sent.filter(m => m.type === 'focus').pop() as
+      | { summary?: { sessionId?: string; loading?: boolean }; snapshot?: { entries: Array<{ text?: string }> } }
+      | undefined;
+    assert.strictEqual(focus?.summary?.sessionId, 'A');
+    assert.strictEqual(focus?.summary?.loading, false);
+    assert.ok((focus?.snapshot?.entries ?? []).some(entry => (entry.text ?? '').includes('still here')),
+      'the panel is handed the finished transcript instead of the empty pre-load snapshot');
+  });
+});
+
+suite('chat panel: additionalDirectories ride along on a history reopen', () => {
+  class DirRecorder extends SessionManager {
+    readonly opened: Array<{ agentName: string; sessionId: string; additionalDirectories?: string[] }> = [];
+    override async openExistingSession(
+      agentName: string,
+      sessionId: string,
+      opts: { cwd?: string; title?: string; additionalDirectories?: string[] } = {},
+    ): Promise<'live' | 'load' | 'resume'> {
+      this.opened.push({ agentName, sessionId, additionalDirectories: opts.additionalDirectories });
+      return 'live';
+    }
+  }
+
+  test('persisted extra roots are passed back to session/load', async () => {
+    const handler = new SessionUpdateHandler();
+    const manager = new DirRecorder(new AgentManager(), new ConnectionManager(handler), handler);
+    const harness = makeHarness('dummy-session', 'Claude Code', () => manager);
+    const memento = new FakeMemento();
+    const store = new SessionHistoryStore(memento as unknown as vscode.Memento);
+    manager.setHistoryStore(store);
+    store.upsertNew('Claude Code', '/workspace', 'old-session');
+    store.setAdditionalDirectories('Claude Code', 'old-session', ['D:\\other-root']);
+
+    harness.host.onMessage({ type: 'openHistorySession', agentName: 'Claude Code', sessionId: 'old-session' });
+    for (let i = 0; i < 100 && manager.opened.length === 0; i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.deepStrictEqual(manager.opened, [{
+      agentName: 'Claude Code', sessionId: 'old-session', additionalDirectories: ['D:\\other-root'],
+    }]);
+
+    // And the value survives a reload of the workspace state.
+    const reloaded = new SessionHistoryStore(memento as unknown as vscode.Memento);
+    assert.deepStrictEqual(reloaded.get('Claude Code', 'old-session')?.additionalDirectories,
+      ['D:\\other-root']);
   });
 });

@@ -101,6 +101,13 @@ export const permissionDrawerClient = `
   function sync() {
     if (!drawer) { return; }
     var pending = pendingPrompts();
+    // [CUSTOM- 发送中状态只对"仍 pending 且属于当前会话"的 prompt 有意义：切走再切回时
+    // 别的会话那条记录可能已经结算（而它的更新曾被 boot 丢弃），不能让它永久禁用按钮。
+    if (NS.permissionView && NS.permissionView.pruneSending) {
+      var ids = [];
+      for (var i = 0; i < pending.length; i++) { ids.push(pending[i].promptId); }
+      NS.permissionView.pruneSending(ids);
+    }
     if (pending.length === 0) { activeId = null; hide(); return; }
     // Keep showing the one the user opened if it is still pending; otherwise the first.
     var active = promptOf(activeId, pending) || pending[0];
@@ -165,7 +172,15 @@ export const permissionDrawerClient = `
   }
 
   /** Tell the drawer which session is on screen (boot calls this on every focus change). */
-  function setSession(id) { sessionId = id || null; }
+  function setSession(id) {
+    var next = id || null;
+    if (next === sessionId) { return; }
+    sessionId = next;
+    // 焦点换了："发送中"是上一个会话界面的状态，不能跟着用户跨会话活着。
+    if (NS.permissionView && NS.permissionView.clearAllSending) {
+      NS.permissionView.clearAllSending();
+    }
+  }
 
   NS.permissionDrawer = {
     init: init,

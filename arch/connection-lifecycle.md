@@ -8,7 +8,10 @@
 |---|---|
 | 握手超时 | core/ConnectionManager.connect → utils/AsyncDeadline.withDeadline |
 | 取消/晚到防护 | core/AgentConnector.ensure / cancel / ensureOnce |
-| 崩溃暂停 | core/SessionManager.suspendAgent / canRecover |
+| 崩溃暂停 | core/SessionManager.handleAgentGone / suspendAgent / canRecover |
+| 连接被 SDK 关闭（进程仍活） | core/ConnectionManager.watchClose / onConnectionLost → SessionManager.handleAgentGone(kill) |
+| 控制面截止 | core/AgentConnector.enqueue（CONTROL_PLANE_TIMEOUT_MS / SESSION_LOAD_TIMEOUT_MS / SESSION_CLOSE_TIMEOUT_MS） |
+| 并发打开去重 | SessionManager.liveOrJoin / shareOpen（openings） |
 | 恢复任务 | SessionManager.startRecovery / recoverAgent / resumeRetainedSession / resumeRetainedSessionOnce |
 | 退避预算 | core/AgentRecovery.RecoveryBudget / recoveryDelay |
 | 手动重连 | SessionManager.ensureConnected / connectToAgent / openExistingSession |
@@ -28,6 +31,11 @@
 - 同 retained SessionInfo / 同 ConnectionInfo 的并发手动恢复共享一次 resume；失败释放共享任务，可再次显式重试，不与新连接混用。
 - 同 agent、同一个 retained SessionInfo 对象且 resume 成功后，才更新 agentId/能力并 claim 新 owner；禁止放宽 SessionStore.add 的跨连接覆盖禁令。
 - 恢复过程中关闭的会话不复活；用户切换的焦点不被恢复抢走。旧 prompt 的晚到响应不能结束新连接上的轮次。
+- SDK 自行关闭仍登记的连接（流错误、超 32MB 消息）时，宽限 500ms 让真实退出先走 `agent-closed`；仍登记则杀进程并走与 `agent-closed` 相同的 suspend/recover/teardown 分支。两路径谁先 detach 谁生效，另一方 no-op。
+- 控制面队列每任务有截止（默认 60s、load 300s、close 15s），超时拒绝调用方并推进队列；RPC 可能仍在 agent 侧执行，session/new 的晚到应答借 `expired` 信号不注册。认证弹框不在队列槽内：`withAuthRetry` 包 `enqueue`。
+- closeSession 先本地移除（tab 立即关闭），再 best-effort `session/close`。
+- 同 sessionId 的并发 open/load/resume 共享一次 RPC（`openings`），避免历史重放两次；跨 agent 同 id 明确拒绝。
+- load / resume / 自动恢复与 new 一样按 `additionalDirectories` 能力门控传会话的额外根（`directoriesParam`），fork 原样沿用源会话的额外根；历史缓存不存额外根，从历史打开时需调用方传入。
 - Disconnect / dispose / 关闭 autoReconnect 取消延时和握手，不再启动后台恢复；dispose 不发失败通知。配置变更只提示 Reload Window，不自动重载。
 - Side 与普通 fork 共用 `requestFork` 的 live 主会话、agent 归属和 fork capability 校验，并通过 `connector.enqueue` 在同一连接调用 `unstable_forkSession`。Side 不传 messageId，从打开时末尾派生；不 load/resume/focus/写历史，`SessionInfo.sideChat` 记录源 sessionId 与 forkedAt。
 - `forkSideSession` 注册后立即 emit `session-created(..., 'side')`；`getMainLiveSessions` 与默认 `getSessionIdsForAgent` 排除 Side，ownership、通知和 transcript 活跃集合仍包含它。`SessionStore.focus` 拒绝 Side，后继焦点跳过 Side。

@@ -65,6 +65,7 @@ describe('shortcut map normalization', () => {
       focusInput: DEFAULT_SHORTCUTS.focusInput,
       previousSession: null,
       nextSession: DEFAULT_SHORTCUTS.nextSession,
+      closeSession: DEFAULT_SHORTCUTS.closeSession,
     });
     expect(new Set(Object.values(normalized).filter(Boolean)).size)
       .toBe(Object.values(normalized).filter(Boolean).length);
@@ -77,6 +78,7 @@ describe('shortcut map normalization', () => {
       focusInput: DEFAULT_SHORTCUTS.focusInput,
       previousSession: DEFAULT_SHORTCUTS.previousSession,
       nextSession: DEFAULT_SHORTCUTS.nextSession,
+      closeSession: DEFAULT_SHORTCUTS.closeSession,
     });
   });
 });
@@ -107,6 +109,17 @@ describe('shortcut setting updates', () => {
       binding: 'Alt+KeyE',
     });
     expect(applyShortcutSetting(base, 'scrollBottom', 'default')).toEqual({
+      ok: true,
+      shortcuts: base,
+    });
+    // 新动作（Alt+W 关闭当前 tab）也走同一套重复判定。
+    expect(applyShortcutSetting(base, 'closeSession', 'Alt+KeyA')).toEqual({
+      ok: false,
+      reason: 'duplicate',
+      conflictAction: 'scrollTop',
+      binding: 'Alt+KeyA',
+    });
+    expect(applyShortcutSetting(base, 'closeSession', 'default')).toEqual({
       ok: true,
       shortcuts: base,
     });

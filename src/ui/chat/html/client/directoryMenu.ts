@@ -34,6 +34,12 @@ export const directoryMenuClient = `
   var searchClearEl = null;
   var query = '';
 
+  /** IME 合成中（含死键 / AltGraph）的 Escape 属于输入法，不是抽屉快捷键。 */
+  function composing(event) {
+    return !!(event && (event.isComposing || event.keyCode === 229 || event.key === 'Dead'
+      || (event.getModifierState && event.getModifierState('AltGraph'))));
+  }
+
   function currentDraft() {
     if (!draftId || !NS.draft || !NS.draft.get) { return null; }
     return NS.draft.get(draftId);
@@ -284,7 +290,7 @@ export const directoryMenuClient = `
       });
     }
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape' && open) {
+      if (event.key === 'Escape' && open && !composing(event)) {
         event.preventDefault();
         event.stopPropagation();
         if (query) { clearSearch(); return; }

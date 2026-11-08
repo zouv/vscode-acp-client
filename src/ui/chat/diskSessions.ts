@@ -15,7 +15,8 @@
 // · 只对 profile 声明了 `transcriptStore: 'claude'` 的 agent 生效（按 kind，不按配置里的名字）——
 // 别的 agent 没有这个目录。
 import { existsSync } from 'node:fs';
-import { createReadStream, readdirSync, statSync } from 'node:fs';
+import { createReadStream } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import type { ContentBlock } from '@agentclientprotocol/sdk';
@@ -96,16 +97,15 @@ function aiTitleOf(record: Record<string, unknown>): string | undefined {
  * has not recorded its head yet: measured on the live session of this very project).
  */
 export async function readDiskSessions(dir: string, fallbackCwd?: string): Promise<DiskSessionRow[]> {
-  if (!existsSync(dir)) { return []; }
   let names: string[];
-  try { names = readdirSync(dir); } catch { return []; }
+  try { names = await readdir(dir); } catch { return []; }
 
   const rows: DiskSessionRow[] = [];
   for (const name of names) {
     if (!name.endsWith('.jsonl')) { continue; }
     const file = join(dir, name);
     const row: DiskSessionRow = { sessionId: name.slice(0, -'.jsonl'.length) };
-    try { row.updatedAt = new Date(statSync(file).mtimeMs).toISOString(); } catch { /* keep going */ }
+    try { row.updatedAt = new Date((await stat(file)).mtimeMs).toISOString(); } catch { /* keep going */ }
     rows.push(row);
 
     // Stop once the summary title and cwd are both known; the rest of the file can be

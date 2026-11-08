@@ -8,7 +8,6 @@
 > **体量铁律**：本文件超过 ~400 行即拆分——保留总览 + §0.5 路由 + §1 文件职责总表，各模块 §2/§3 拆到 `arch/<module>.md`，由 §0.5 路由指向（详见 `AGENTS.md` §1.1）。
 
 ---
-
 ## 0. 一句话架构
 
 VS Code 扩展，作为 **ACP（Agent Client Protocol）客户端**：把 agent CLI 拉成子进程，
@@ -77,19 +76,19 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/config/CustomModels.ts` / `CustomModelList.ts` / `ModelListSync.ts` | 自定义模型读取/规整、顺序签名、设置层 CAS 与串行任务；后两者纯逻辑 | 模型排序、冲突与设置作用域 |
 | `src/config/GlobalSettings.ts` | **跨 IDE 全局配置** `VAC_HOME/config.json`（默认 `~/.vac`）：原子写、白名单（首期仅 `vac.customModels`）、`firstSetLayer` 解析；纯逻辑，禁 import vscode | 新增/改动全局层配置键 |
 | `src/config/SettingScope.ts` | VS Code 三层 + 全局层的解析（`resolveSetting`）与写入（`writeSetting` 写当前生效层）、移除覆盖、打开对应配置文件；`SettingIO` 是可注入的测试缝 | 设置作用域 / 覆盖提示 / 写入层 |
-| `src/core/AgentManager.ts` | agent 子进程生命周期：`spawnAgent`/`killAgent`/`killAll`；Windows 走 `cmd.exe`，类 Unix 走 login shell（修 npx ENOENT）；进程组 + `taskkill /T /F` 一并收子孙；**npx 启动的 agent 命中本地缓存时直接 `node <entry>`**（`scheduleInstall` 在首次连接 15s 后后台缓存） | agent 起不来 / 平台差异 / 进程泄漏 |
+| `src/core/AgentManager.ts` | agent 子进程生命周期：`spawnAgent`/`killAgent`/`killAll`；Windows 不用 `shell:true`：`resolveWindowsCommand` 查 PATH×PATHEXT，exe 直启、`.cmd` 垫片经 `cmd /d /s /v:off /c` + `cmdShimCommandLine`（拒 `%`/引号/换行），类 Unix 走 login shell（修 npx ENOENT）；env 用 `mergeEnv`（win32 键大小写不敏感）；stderr 经 `LineSplitter`；`killAgent` 后 `trackDying` 在宿主 `exit` 时同步 SIGKILL 未退出的进程组；进程组 + `taskkill /T /F` 一并收子孙；**npx 启动的 agent 命中本地缓存时直接 `node <entry>`**（`scheduleInstall` 在首次连接 15s 后后台缓存） | agent 起不来 / 平台差异 / 进程泄漏 |
 | `src/core/AgentInstall.ts` | agent 本地缓存：`npxSpecOf` 只优化简单 `npx [-y/--yes] package`，复杂选项保留 npx 语义；`installDirFor` 用安全 slug + 名称 SHA256 前 16 位，目录为 `globalStorage/agents/<slug-hash>`；`readInstalled` 7 天 TTL，`entryFromInstall` 找入口。旧目录不自动迁移/删除 | 首次连接慢 / 安装路径与参数 |
-| `src/core/ConnectionManager.ts` | stdio → Web Streams → `ndJsonStream`；`initialize` + steering 协商 + traffic tap；握手期间 `pendingTerminals`，移除连接后 `retiredTerminals` 保留输出，最终 `dispose` 全清 | 协议握手 / 抓包 / 终端生命周期 |
-| `src/core/AgentConnector.ts` | agent 名 ↔ 进程 id；`ensure` 单飞 + AbortController、`cancel` 中止握手并拒绝晚到成功；`enqueue` 每连接控制面串行、执行前检查连接是否仍有效 | 连接去重 / 取消 / RPC 排队 |
+| `src/core/ConnectionManager.ts` | stdio → Web Streams → `ndJsonStream`；`initialize` + steering 协商 + traffic tap；握手期间 `pendingTerminals`；所有连接共享一个 `retainedTerminals` 池（上限 `RETAINED_TERMINAL_CAP`），移除连接 `retire` 其终端；`watchClose`/`onConnectionLost`：SDK 自行关闭仍登记的连接（流错误/超 32MB 消息）时宽限 `CONNECTION_LOST_GRACE_MS` 后通知 SessionManager；最终 `dispose` 全清 | 协议握手 / 抓包 / 终端生命周期 |
+| `src/core/AgentConnector.ts` | agent 名 ↔ 进程 id；`ensure` 单飞 + AbortController、`cancel` 中止握手并拒绝晚到成功；`enqueue` 每连接控制面串行、执行前检查连接是否仍有效，每个任务有截止（`CONTROL_PLANE_TIMEOUT_MS` 60s / `SESSION_LOAD_TIMEOUT_MS` 300s / `SESSION_CLOSE_TIMEOUT_MS` 15s），超时调用方收到 `DeadlineExceededError`、队列前进，任务拿到的 `expired` 信号用于跳过晚到副作用 | 连接去重 / 取消 / RPC 排队 |
 | `src/core/SessionManager.ts` | 编排器：`connectToAgent`/`createSession`/`newConversation`/`closeSession`/`disconnectAgent`/`ensureConnected`/`sendPrompt`/`steerPrompt`/`cancelTurn`/`setMode`/`setModel`/`setConfigOption`/`listSessions`/`openExistingSession`/`loadSession`/`resumeSession`；`requestFork` 共用 ACP fork，`forkSession` 走普通重放，`forkSideSession` 只注册不聚焦/不写历史；`getMainLiveSessions` 与 `getSessionIdsForAgent` 默认排除 Side。**订阅 `SessionUpdateHandler`**，把 `available_commands_update` / `config_option_update` / `current_mode_update` 落成状态（`applyAvailableCommands`/`applyConfigOptions`/`applyCurrentMode`，会话未注册时进 `PendingSessionState`） | 会话状态机 / Side fork / 新事件 / 能力协商 |
 | `src/core/SessionStore.ts` | 会话索引与焦点；`add` 拒绝不同 agent/连接占用相同 sessionId；`focus` 拒绝 Side，`mostRecentLiveId` 跳过 Side；`PendingSessionState.remove/clear` 清早到缓冲。纯逻辑，禁 import vscode | 索引隔离 / 焦点后继规则 |
 | `src/core/cwd.ts` | `pickDefaultCwd`：每会话工作目录三级链（配置→工作区→进程），配置非法则拒绝并回退。**纯函数** | 默认目录策略 |
-| `src/core/auth.ts` | `-32000` 判定 + 交互式认证流程（每连接单飞；过滤 `type:'terminal'`；`_meta['api-key']` 标记的方法由客户端提供 key，存 **SecretStorage**、下次静默重试）；`forgetApiKey` | 认证行为 |
-| `src/core/SessionHistoryStore.ts` | `workspaceState` 会话缓存：按 agent 分桶、容量上限（活跃会话豁免）、`reconcileFromAgent`、目录候选、touch 限频落盘 | 会话列表丢失 / 缓存策略 |
+| `src/core/auth.ts` / `authError.ts` | `-32000` 判定（`authError.isAuthRequiredError` 只认 code，不匹配消息文本；纯逻辑）+ 交互式认证流程（每连接单飞；过滤 `type:'terminal'`；`_meta['api-key']` 标记的方法由客户端提供 key，存 **SecretStorage**、下次静默重试）；`forgetApiKey` | 认证行为 |
+| `src/core/SessionHistoryStore.ts` | `workspaceState` 会话缓存：按 agent 分桶、容量上限（活跃会话豁免）、`reconcileFromAgent`、目录候选、touch 限频落盘；`additionalDirectories` 随行持久化（`upsertNew(..., dirs)` / `setAdditionalDirectories`），供历史重开时传给 `session/load` | 会话列表丢失 / 缓存策略 / 多根会话重开丢额外根 |
 | `src/core/AcpClientImpl.ts` | ACP Client 门面；携带 sourceAgentId，更新和 fs/terminal/权限/带 sessionId 的表单请求先验证归属再转发 | 客户端能力 / 跨连接隔离 |
-| `src/handlers/FileSystemHandler.ts` | read 优先编辑器缓冲、支持 line/limit；write 对 dirty 文档明确拒绝，clean 文档 WorkspaceEdit + save 并检查结果，未打开文件写磁盘后展示 | 文件读写一致性 / 草稿保护 |
-| `src/handlers/TerminalHandler.ts` | terminal/*：shell-free launcher、stdout/stderr 独立 StringDecoder、TailBuffer；spawn error 结算退出；release/killAll 清进程与活跃索引但保留显示终端，dispose 最终销毁 | argv / 乱码 / 泄漏 |
-| `src/utils/TerminalCommand.ts` / `ProcessTree.ts` | terminal 默认不经过 shell；Windows batch 受限 argv；公共进程树终止（Windows taskkill / Unix 进程组） | 参数边界 / 子孙进程回收 |
+| `src/handlers/FileSystemHandler.ts` / `FileSlice.ts` | 路径必须绝对；只匹配 `file:` scheme 的打开文档（排除 `git:` 等同 fsPath 的虚拟文档）；read 优先编辑器缓冲、`FileSlice.sliceLines` 处理 line/limit（limit 0 = 空）；write 对 dirty 文档明确拒绝，clean 文档 WorkspaceEdit + save 并检查结果，未打开文件写磁盘后展示 | 文件读写一致性 / 草稿保护 |
+| `src/handlers/TerminalHandler.ts` | terminal/*：shell-free launcher、stdout/stderr 独立 StringDecoder、TailBuffer；spawn error 结算退出；release/killAll 清进程与活跃索引，显示终端进 `RetainedPool`（`RetainedPool.ts`，超上限销毁最旧）；`retire` 拒绝晚到 create；杀 pid 前同时查 exitCode/signalCode | argv / 乱码 / 泄漏 |
+| `src/utils/TerminalCommand.ts` / `ProcessTree.ts` / `LineSplitter.ts` | terminal 默认不经过 shell；`mergeEnv` + `resolveWindowsCommand`（agent 启动与终端共用）；Windows batch 受限 argv（终端 `batchCommandLine` 严格，agent 启动 `cmdShimCommandLine`）；公共进程树终止（Windows taskkill / Unix 进程组）；`LineSplitter` 跨 chunk 行/UTF-8 拼接 | 参数边界 / 子孙进程回收 |
 | `src/utils/Abortable.ts` / `CancellationToken.ts` | fallback 取消 race 与 VS Code UI CancellationToken 适配 | 取消后 FIFO 不被旧弹框阻塞 |
 | `src/utils/BoundedPayload.ts` | 非可信工具 JSON 的深度、节点数、集合大小与文本预算；不修改输入 | 大数据 / 内存上限 |
 | `src/utils/TailBuffer.ts` | 限长尾部缓冲（增量计字节，读取时才拼字符串）。**纯逻辑** | 终端输出裁剪 |
@@ -117,7 +116,6 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `scripts/make-icon.mjs` | **图标的唯一几何源**：一份几何同时产出 `icon.svg` 与 `icon.png`（SDF 光栅化 + zlib 手写 PNG，零依赖）；`npm run icon`，`--preview` 另出多尺寸预览图到系统临时目录 | 改图标外观 |
 
 ---
-
 ## 2. 按「我要做什么」反查代码位置（任务 → 入口）
 
 > 行号会随改动漂移；**优先按「函数名 / 注释锚点」搜索**，行号仅作初始定位。
@@ -131,11 +129,12 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 |---|---|---|
 | 改启动命令 / 环境变量 / cwd | `launch()`、`spawnAgent()` | Windows 与类 Unix 分支不同 |
 | 修「npx/tool 找不到」 | `resolveUnixShell()` | 类 Unix 走 login shell 以加载 nvm/Homebrew |
-| 修进程残留 / 关不干净 | `terminateTree()` | 类 Unix 杀进程组，Windows 用 `taskkill /T /F` |
+| 修进程残留 / 关不干净 | `terminateTree()`；宿主退出兜底 `AgentManager.trackDying` / `killSurvivors` | 类 Unix 杀进程组（`exit` 时同步 SIGKILL 未退出者），Windows 用 `taskkill /T /F` |
 | 改 agent 是否已连接的判定 | `AgentConnector.isConnected` / `agentIdOf` | 以**进程索引**为准，不是「有没有会话」 |
 | 避免一个 agent 被并发拉起两个进程 | `AgentConnector.ensure()` | 单飞（single-flight）合并 |
 | 首次连接慢 / npx 启动开销 | `AgentManager.spawnAgent`（缓存命中走 `node <entry>`）+ `scheduleInstall`/`runInstall`；纯逻辑在 `AgentInstall.ts` | 实测 npx 11–17s vs 直启 0.6s；缓存目录 `globalStorage/agents/`，7 天过期 |
-| 控制面 RPC 排队 | `AgentConnector.enqueue()` | new/load/resume/fork/close/delete 等控制面调用串行，**prompt 不排** |
+| 控制面 RPC 排队 | `AgentConnector.enqueue()` | new/load/resume/fork/close/delete 等控制面调用串行，**prompt 不排**；每任务截止后队列前进；认证弹框在队列外（`withAuthRetry` 包 `enqueue`，不反过来） |
+| 修 Windows 启动参数 / `%` 展开 / PATH 大小写 | `launchCommand()` + `TerminalCommand.resolveWindowsCommand` / `cmdShimCommandLine` / `mergeEnv` | 不再 `shell:true`；含 `%`、`"`、换行的参数对 `.cmd` 垫片直接报错 |
 
 ### 2.2 协议与握手（`src/core/ConnectionManager.ts`；超时/恢复见 [分册](arch/connection-lifecycle.md)）
 
@@ -145,18 +144,19 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 声明 `clientInfo` | 同上，`clientInfo` | 版本取自 `BuildInfo.readPackageVersion()` |
 | 读 agent 扩展能力（steering 等） | `connect()` 里的 `_meta` 解析 | `InitializeResponse._meta.steering.supported` |
 | 抓协议流水 | `tapStream()` | 双向 TransformStream，落 `VAC Traffic` 通道 + 日志文件 |
+| SDK 自己关了连接（进程还活着） | `ConnectionManager.watchClose` / `onConnectionLost` → `SessionManager.handleAgentGone(name, kill=true)` | 与 `agent-closed` 共用恢复/拆除分支；先 detach 的一方生效，另一方 no-op |
 
 ### 2.3 会话生命周期（`src/core/SessionManager.ts`）
 
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
 | 新建会话 / 复用已有会话 | `createSession()` / `connectToAgent()` | `connectToAgent` 有活会话就复用；`session/new` 失败**只抛错、不杀进程**（同进程的其它会话要活着） |
-| 打开历史会话 | `openExistingSession()` | **唯一决策点**：live → focus，否则 load，再否则 resume |
-| 重放历史 / 轻量恢复 | `loadSession()` / `resumeSession()` | load 走 `session-load-start/end`，面板显示覆盖层 |
-| 关闭单个会话 / 断开整个 agent | `closeSession()` / `disconnectAgent()` | close RPC 前先结算权限/表单；有在途轮次时先 `cancelTurn` |
+| 打开历史会话 | `openExistingSession()` | **唯一决策点**：live → focus，否则 load，再否则 resume；同 id 并发打开经 `openings`（`liveOrJoin`/`shareOpen`）共享一次 RPC，后到者得 `'live'` |
+| 重放历史 / 轻量恢复 | `loadSession()` / `resumeSession()`（实体 `loadSessionNow` / `resumeSessionNow`） | load 走 `session-load-start/end`，面板显示覆盖层；`additionalDirectories` 经 `directoriesParam`（能力门控 + 绝对路径）在 new/load/resume/自动恢复统一传（fork 原样沿用源会话已被接受的额外根） |
+| 关闭单个会话 / 断开整个 agent | `closeSession()` / `disconnectAgent()` | 先结算权限/表单；有在途轮次时先 `cancelTurn`；**先本地 `removeSession` 再 best-effort `session/close`**（15s 截止） |
 | 删除会话（真删） | `deleteSession()` | 先 cancel/close 活会话 → best-effort `session/delete`（能力 `delete`）→ 清本地缓存 |
 | 普通分叉 / 临时 Side | `forkSession()` / `forkSideSession()`，共用 `requestFork()` | `session/fork`（能力 `fork`）；普通 fork 可带 `messageId` 并重放，Side 从不带 messageId、不 load/resume/focus/写历史；主会话查询用 `getMainLiveSessions()` |
-| 认证失败（-32000） | `auth.ts`：`isAuthRequiredError` / `runAuthFlow`；`SessionManager.withAuthRetry` | new / list / load / resume / prompt 都经 `withAuthRetry` 认证后重试一次 |
+| 认证失败（-32000） | `authError.ts`：`isAuthRequiredError`；`auth.ts`：`runAuthFlow`；`SessionManager.withAuthRetry` | 只认 code -32000；new / list / load / resume / prompt 都经 `withAuthRetry` 认证后重试一次，认证 UI 不占控制面队列 |
 | API key 认证 / 登出 | `auth.ts`：`takesApiKey` / `setAuthSecrets` / `forgetApiKey`；`SessionManager.logout` + 命令 `vac.logoutAgent` | key 走 `authenticate._meta['api-key'].apiKey`（codex-acp 约定），**流量日志里按键名脱敏**（`LogPrivacy.redactTraffic`，流量日志默认关闭）；`logout` 需能力 `auth.logout` |
 | 焦点切换 | `focusSession()` | `active-session-changed` 的唯一出口 |
 | 每会话工作目录 | `resolveDefaultCwd()` / `sessionCwd()` / `cwd.ts:pickDefaultCwd` | 会话级属性，与进程 cwd 无关 |
@@ -168,7 +168,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
 | 发一轮 prompt | `sendPrompt()` | 有在途轮次则抛错；进出分别 emit `turn-state-changed` |
-| 取消当前轮次 | `cancelTurn()` | **先回答待决权限/表单**，再发 `session/cancel` |
+| 取消当前轮次 | `cancelTurn()` | **先回答待决权限/表单**，再发 `session/cancel`；轮次在途时两桥 `holdCancelled`，cancel 后晚到的请求直接答 cancelled，轮次结束 `releaseCancelHold` 解除 |
 | 轮次中补发消息 | `steerPrompt()` / `supportsSteering()` | 走 `extMethod('_session/steering')`；返回 `'idle'` 表示要回落成普通 prompt |
 | 轮次是否进行中 | `hasRunningTurn()` / `isTurnInFlight()` | UI 的 Stop 按钮与 `vac.turnInProgress` 靠它 |
 | 流式更新分发 | `handlers/SessionUpdateHandler.ts:handleUpdate` | 单订阅者抛错不影响其它 |
@@ -184,7 +184,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `/side` 与选区引用预填 | `composer.ts` 的 `commandList` / `isSideCommand` / `appendQuote` + `contextMenu.ts` 的 `itemsFor` + `boot.ts` 的 `syncSideOrigin` | 本地命令先于 running/steering 早退；右键捕获源 sessionId 与选区，不传 messageId；引用只追加草稿、不自动发送 |
 | 记录区渲染 | `transcript/TranscriptStore.ts`、`content/*`、`html/client/transcriptView.ts`；Read 高亮见 `ChatPanelHost.readLanguageForMarkdown` / `content/readHighlight.ts` / `SafeMarkdown.render` / `toolCallView.readContextKey` | Read 仅宿主可信单路径 + 原文推导无语言代码围栏；行号复原、缓存按路径失效；`styles.ts` 重置 webview 默认 code 背景。mermaid fence → `client/mermaid.ts`（懒加载、图表/原文切换与缩放） |
 | 上下文压缩回放 / 实时压缩 | `ChatPanelHost.onSessionUpdate` 的 `compaction_update` / `compaction_summary_chunk` 分支 + `TranscriptStore.upsertCompact` + `transcript/compaction.ts` + `diskSessions.readTranscriptCompactions` + `html/client/transcriptView.ts` 的 `buildCompact` | 三条来源（update / summary chunk / 旧适配器 user chunk）都落成独立的 compact 记录；完整历史由适配器从原始 JSONL 重建（0.91.0 的 `getSessionMessages` 只有压缩后链，首条会变成 summary） |
-| 进场 / 收尾时 markdown 没渲染 | `ChatPanelHost.prefillReplayMarkdown`（`session-load-end`）/ `prefillSnapshotMarkdown`（`snapshotOf`）/ `armSettlePrefill` → `settlePrefillMarkdown`（会话安静 600ms）+ 客户端 `transcriptView.patch` 的「带 text 的 html 照收」规则 | 宿主自己补渲染，不再依赖客户端那条往返（见 `arch/chat-panel.md` §5.7） |
+| 进场 / 收尾时 markdown 没渲染 | `ChatPanelHost.prefillReplayMarkdown`（`session-load-end`）/ `prefillSnapshotMarkdown`（`snapshotOf`，只同步补最新 30 条）/ `armSettlePrefill` → `settlePrefillMarkdown`（会话安静 600ms）+ 客户端 `transcriptView.patch` 的「带 text 的 html 照收」规则 | 宿主自己补渲染，不再依赖客户端那条往返（见 `arch/chat-panel.md` §5.7） |
 | 权限卡片 / 抽屉 | `html/client/permissionView.ts`、`permissionDrawer.ts` | 与 `PermissionBridge` 配对 |
 | 表单卡片 | `html/client/elicitationView.ts` | 与 `ElicitationBridge` 配对 |
 | 从记录 fork 会话 | `ChatPanelHost` 的 `forkFromMessage` 分支 + `html/client/contextMenu.ts` | 面板只报 entryId，宿主查该条 ACP `messageId` → `SessionManager.forkSession` |
@@ -215,22 +215,22 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
-| 读文件（含未保存内容） | `FileSystemHandler.readTextFile` | 优先 `workspace.textDocuments` |
+| 读文件（含未保存内容） | `FileSystemHandler.readTextFile` / `openDocument` / `FileSlice.sliceLines` | 优先 `workspace.textDocuments` 中 `file:` scheme 的文档；非绝对路径报错；不做工作区边界限制（additionalDirectories 需要） |
 | 写文件 | `FileSystemHandler.writeTextFile` | 写完以 preview 打开 |
-| 终端创建/输出/结束 | `TerminalHandler.createTerminal` / `readOutput` / `waitForTerminalExit` | `readOutput` 不抛异常，供面板调用 |
+| 终端创建/输出/结束 | `TerminalHandler.createTerminal` / `readOutput` / `waitForTerminalExit` | `readOutput` 不抛异常，供面板调用；已释放终端保留在共享 `RetainedPool`（最多 10 个） |
 | 权限自动批准 | `PermissionHandler.requestPermission` | 读 `vac.autoApprovePermissions` |
 | 权限面板/弹框分流 | `PermissionBridge.request` / `canPresent` / `setSessionResolver`；`ElicitationBridge` 同构 | presenter 只对「屏幕上的会话」返回 true；**子会话 id 经 `ChatPanelHost.subagentParents` 解析到父会话**后才判归属，否则请求会落到窗口顶部 QuickPick |
 | 权限/表单归属（子会话） | `PermissionBridge.setSessionResolver` / `ElicitationBridge.setSessionResolver` + `ChatPanelHost` 构造器注册 | `Pending` 同时保留原始 id（撤销/取消用）与 `panelSessionId`（记录锚点）；`cancelSession` / `hasPendingFor` 双匹配 |
 | 面板内确认/输入浮层 | `html/client/popover.ts` 的 `NS.popover.confirm` / `prompt` | 非模态；删除/关闭运行中/重命名/设置破坏性动作共用；`settingAction` 的 `confirm` 文案由宿主 `SettingItem` 提供 |
 | 表单字段扁平化 | `ElicitationBridge.fieldsOf` / `optionOf` | JSON Schema → 五种字段；选项的 description 与 preview 都保留 |
-| sub-agent 子会话 / 取消子会话 | `ChatPanelHost.onSessionUpdate` 的 `subagent_update` 分支 + `subagentParents`（别名回父会话）、`SessionManager.cancelSubagent` | draft 能力；卡片由 `TranscriptStore.upsertSubagent` 建 |
+| sub-agent 子会话 / 取消子会话 | `ChatPanelHost.onSessionUpdate` 的 `subagent_update` 分支 + `subagentParents`（**仅** `SUBAGENT_TRANSCRIPT_KINDS` 内的 tool_call / message / thought / subagent_update 别名回父会话，子会话的 usage/plan/标题/模式/配置一律丢弃）、`SessionManager.cancelSubagent` | draft 能力；卡片由 `TranscriptStore.upsertSubagent` 建；并行子会话的正文字段按 `origin` 隔离合帧 |
 
 ### 2.7 侧边栏树（`src/ui/SessionTreeProvider.ts`）
 
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
 | 树的一级/二级节点 | `agentNodes` / `agentChildren` | 二级来源见下两行 |
-| agent 侧会话列表 | `agentSourced` / `fetchList` / `loadMore` | 需要 `session/list` 能力 |
+| agent 侧会话列表 | `agentSourced` / `fetchList` / `loadMore` | 需要 `session/list` 能力；`error` 态渲染 `errorLeaf`（Retry = `vac.refreshSessions`），**只在 idle/invalidate 时重取** —— 否则 VS Code 反复要 children 会变成对失败 `session/list` 的 ~50ms 重试环 |
 | 本地缓存会话列表 | `localSourced` / `localItem` | 需要 load/resume 能力 |
 | 能力探测 | `probe()` | 探测前会 `ensureConnected` |
 | 刷新节流 | `refresh()` | 50ms 合并，避免风暴 |
@@ -260,7 +260,6 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 视图与消息 | `DashboardViewProvider.ts` | 无 `retainContextWhenHidden` |
 
 ---
-
 ## 3. 重点链路详解（高频改动区 / 容易写错的地方）
 
 ### 3.1 「打开一个已存在的会话」链路
@@ -303,6 +302,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 - SessionUpdateHandler 的 sourceAgentId ownership 覆盖早到更新；releaseAgent 清归属且拒绝旧连接晚到数据。SessionStore、openExisting/load/resume 遇跨 agent 同 sessionId 明确拒绝，不静默覆盖（尚未改复合键）。
 - TranscriptStore 的 onRemove 在条目限长、会话 LRU、drop/dropAgent 时通知 host；host 只回收已经没有可见引用的 toolCallId 及 entry-id 索引，重复引用保留。
 - ToolInvocationStore 的单次消息 JSON 有 128K 字符预算（深度 10、2048 节点、集合 128 项、单字符串 32K）；保留身份字段与显式集合替换语义，contentBlocks 拒绝必需字段缺失的块。活跃会话仍豁免 LRU；agent terminal 的 ID 数量还不是硬上限。
+- 轮次结束（`finalizeTurn`）与 `session-load-end` 都会 `ToolInvocationStore.finalizeOpen` 给没有终态的通告盖上 `endedAt`：被取消/中断的 Task 区间不再一直开到 `now`，因而不会把之后所有工具调用吞进它的嵌套窗口。
+- `session/load` 回放期间（`SessionManager.isLoading`）记录的 `append/appendText/revise/toolUpdate/markdownRendered` **不下发** webview：加载遮罩已覆盖内容，逐条推送只会灌满 webview 的 FIFO，把用户在加载中切换 tab 的 `focus` 回包压到加载结束之后。回放仍完整落进宿主 store；`session-load-end` 只在**该会话仍是焦点**时补一份 `focus` 快照，绝不把焦点抢回到已切走的会话。
 
 ## 4. 数据流 / 接口契约
 
@@ -312,7 +313,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 宿主 ↔ Chat webview / 工具栏偏好 | `postMessage`（协议见 `ui/chat/protocol.ts`）+ `workspaceState` + `ChatPanelHost.projectUiPrefs/commitUiPrefs/postUiPrefs` | CSP + nonce，`localResourceRoots` 限定；`canSurfaceAccess` 限定 session；以来源 surface 判定 `main\|side`，不信任客户端自报 scope | 一个视图只有一个 `onDidReceiveMessage`；`SurfaceKey = view\|editor\|side`，Side 消息与 summary 元数据见 `arch/chat-panel.md` §5.7。`vac.outlinePrefs.v1` = Main scoped + 全局字段 + 主 `tabOrder`；`vac.sideUiPrefs.v1` 只存 Side scoped。Tail/Times/Expand/Outline 四组 `BySession/Default` 与大纲布局分域；主 view/editor 共享，Side 独立，真正的全局字段仍共享。scoped 更新定向投影，全局更新分别投三面；boot 保持 `uiPrefs → boot`，详见 `arch/chat-panel-state.md` §5.55 |
 | 宿主 ↔ Chat 快捷键 | `UiPrefs.shortcuts` → `uiPrefs`；设置面板 `setSetting(panel.shortcut.<action>)`；懒恢复 `trackRestore` → `restoreFinished` | 宿主校验、webview 仅在本面消费键盘事件 | action 为 scrollTop/scrollBottom/focusInput/previousSession/nextSession；值为规范组合键或 `null`（禁用），仅宿主逐项校验写入；Main/Side 共用，恢复结果定向回复来源面 |
 | 宿主 ↔ 自定义模型排序 / Dashboard | Chat：`setModelList` → `SettingItem.modelSync`；Dashboard：`postMessage` | Chat 宿主串行 CAS；Dashboard CSP + 命令白名单 | Chat `requestId` 匹配回执、基线含生效层/目标层/数组签名；Dashboard 见 `dashboard/DashboardModel.ts`，只投 `snapshot` |
-| 会话缓存 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.sessionHistory.v1`，**改名即丢历史** |
+| 会话缓存 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.sessionHistory.v1`，**改名即丢历史**；每条可带 `additionalDirectories`（可选字段，旧记录无需迁移） |
 | 跨 IDE 全局配置 | `VAC_HOME/config.json`（默认 `~/.vac`，`GlobalSettings.ts`） | —— | 白名单键（首期 `vac.customModels`）；原子写（临时文件 + rename）；读取顺序：工作区 > 用户 > 全局 > `package.json` 默认 |
 | 「Recently used」的删除 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.recentCwdDismissed.v1`（路径数组）；同一目录新建会话即自动移除 |
 | 会话恢复快照 | `globalState`（`ChatPanelHost.saveOpenSessions`） | —— | key `vac.openSessions.v1`；每条 `RecoverableSession` 可带 `app`（写入时的 IDE 标签），与当前环境相同的会在下发前剥掉，只用于标注 |
@@ -351,7 +352,6 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `session-info-changed` | (sessionId, { title?, updatedAt? }) | 标题更新 |
 
 ---
-
 ## 5. 样式 / 资源分段地图
 
 聊天面板客户端脚本与样式都在 `src/ui/chat/html/`（手写、无打包）。改布局类问题**先无头截图自己看**：

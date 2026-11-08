@@ -116,6 +116,8 @@ export class PermissionBridge {
   private resolveSession: (sessionId: string) => string = id => id;
   private readonly pending: Map<string, Pending> = new Map();
   private readonly queue: Pending[] = [];
+  /** Sessions whose turn was cancelled but whose prompt has not returned yet. */
+  private readonly held = new Set<string>();
   private draining = false;
   private seq = 0;
 
@@ -164,6 +166,10 @@ export class PermissionBridge {
   request(params: RequestPermissionRequest, fallback: PermissionFallback): Promise<RequestPermissionResponse> {
     const prompt = this.buildPrompt(params);
     const panelSessionId = this.resolveSession(prompt.sessionId);
+    if (this.held.has(prompt.sessionId) || this.held.has(panelSessionId)) {
+      log(`${LOG_PREFIX}: prompt for ${prompt.sessionId} answered as cancelled (its turn is being cancelled)`);
+      return Promise.resolve({ outcome: { outcome: 'cancelled' } });
+    }
     return new Promise<RequestPermissionResponse>(resolve => {
       const item: Pending = {
         prompt, params, fallback, resolve,
@@ -228,6 +234,15 @@ export class PermissionBridge {
     if (cancelled > 0) { log(`${LOG_PREFIX}: cancelled ${cancelled} pending prompt(s) for ${sessionId}`); }
   }
 
+  /**
+   * Between `session/cancel` and the cancelled prompt's response the agent may still ask;
+   * those requests are answered as cancelled instead of being shown. Matches both ids
+   * like `cancelSession`. `releaseCancelled` must follow when the turn ends.
+   */
+  holdCancelled(sessionId: string): void { this.held.add(sessionId); }
+
+  releaseCancelled(sessionId: string): void { this.held.delete(sessionId); }
+
   cancelAll(): void {
     for (const item of Array.from(this.pending.values())) {
       if (!item.resolved) { this.settle(item, undefined); }
@@ -240,6 +255,7 @@ export class PermissionBridge {
     this.lookup = null;
     this.resolveSession = id => id;
     this.queue.length = 0;
+    this.held.clear();
   }
 
   /** Diagnostics: how many prompts are still awaiting an answer. */

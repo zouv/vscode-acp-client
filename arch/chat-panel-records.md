@@ -113,7 +113,7 @@ SDK），回放记录默认全用 `Date.now()`——一个几十条的旧会话�
 - 协议：`renderMarkdown` / `markdownRendered` 的 item 各加可选 `key`；**带 key 的项宿主不做
   `transcripts.patch`**（它不是记录，没有可打补丁的对象），HTML 原样回给请求它的元素。
 - 客户端两份缓存（`mdCache` / `mdPending`），**按会话清空**（`transcriptView.reset()` 里调到）：
-  工具 body 在 `bodySignature` 变化时会**整块重建**，缓存是让已渲染 HTML 挺过重建的关键。
+  工具 body 在 `bodySignature` 的 **layout** 变化时会**整块重建**（只有文本变化时由 `patchBodyContent` 就地重渲那个宿主），缓存是让已渲染 HTML 挺过重建的关键。
 - **防御**：拿不到 `entryId` 时（无唯一 key）**回落纯文本**——key 撞车会把一条记录的 HTML 喂给另一条。
 - **[147] 助手/思考那条往返上的两处守卫**（用户报"最后一条不渲染、重开会话就正常"）：
   ①`boot.requestMarkdown` 里原来有一条"聚焦会话为空就整批不发"的守卫 —— 而 `transcriptView` 的
@@ -653,7 +653,7 @@ applyAction 摘行换标签且不重置过滤）；真 Chromium 的 `#historyrow
 
 | 关注点 | 规则 |
 |---|---|
-| 触发时机 | `transcriptView` 的 `hydrate` / `append` / `patch` 末尾调用 `decorateMermaid`；tool 条目按 `toolView.status` 判定 running。`applyStreamBody` 的稳定块/tail **不触发**（`MarkdownStream` 含 `[` 时整篇 tail 每 120ms 重建，渲染会抖动） |
+| 触发时机 | `transcriptView` 的 `hydrate` / `append` / `patch` 末尾调用 `decorateMermaid`；tool 条目按 `toolView.status` 判定 running。`applyStreamBody` 的稳定块/tail **不触发**（`MarkdownStream` 遇到链接引用定义 `]:` 时整篇 tail 每 120ms 重建，渲染会抖动） |
 | 定稿兜底 | `patch()` 在写 `data-streaming` **之后**再调一次，覆盖 `preserveCompletedStream()` 保留 DOM、没有重新 sanitize 的路径 |
 | 工具输出 | `toolCallView.applyRendered` 在 `decorateScrollables` 后调用；running 中跳过，`updateTool` 结束时补触发 |
 | 安全 | 只有 `mermaid.render()` 的 SVG 直接写 `.mermaid-chart`（唯一绕过 `NS.dom.sanitize` 的位置）；源码取 `code.textContent`，`securityLevel:'strict'`、`flowchart.htmlLabels:false`、不调 `bindFunctions`；错误信息只用 `textContent` |

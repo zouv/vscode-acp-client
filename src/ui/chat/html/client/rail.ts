@@ -94,7 +94,12 @@ export const railClient = `
   }
 
   function firstLine(text) {
-    var s = String(text || '').replace(/\\s+/g, ' ').trim();
+    var raw = String(text || '');
+    // Collapse only a bounded head: the label is 70 chars, the body can be 64KB.
+    // A head that collapses to <= 70 chars (mostly whitespace) falls back to the
+    // whole text, so the result is identical either way.
+    var s = raw.slice(0, 280).replace(/\\s+/g, ' ').trim();
+    if (s.length <= 70 && raw.length > 280) { s = raw.replace(/\\s+/g, ' ').trim(); }
     if (s.length > 70) { s = s.slice(0, 70) + '\\u2026'; }
     return s;
   }
@@ -156,6 +161,23 @@ export const railClient = `
     var parts = [];
     for (var i = 0; i < list.length; i++) {
       parts.push(list[i].id + (list[i].turn ? 'T' : 'S') + list[i].state);
+    }
+    return parts.join('|');
+  }
+
+  /**
+   * [CUSTOM- The same signature, straight from the entries: invalidate() runs on
+   * every streamed chunk and must not build labels (a text regex per entry) only to
+   * compare ids and states. Labels are computed in rebuild() alone.
+   */
+  function currentSignature() {
+    if (!NS.transcriptView.ordered) { return ''; }
+    var ids = NS.transcriptView.ordered();
+    var parts = [];
+    for (var i = 0; i < ids.length; i++) {
+      var entry = NS.transcriptView.entry(ids[i]);
+      if (!entry) { continue; }
+      parts.push(entry.id + (entry.kind === 'user' ? 'T' : 'S') + stateOf(entry));
     }
     return parts.join('|');
   }
@@ -315,7 +337,7 @@ export const railClient = `
    * actually moved, so streaming chunks (same entry, same state) cost nothing.
    */
   function invalidate() {
-    if (signatureOf(collect()) === signature) {
+    if (currentSignature() === signature) {
       NS.dom.schedule(tick);
       return;
     }

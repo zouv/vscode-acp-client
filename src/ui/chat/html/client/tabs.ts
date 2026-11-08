@@ -308,6 +308,21 @@ export const tabsClient = `
   }
 
   /**
+   * [CUSTOM- 关闭当前活动的 tab（Alt+W）：草稿丢弃、待恢复遗忘、运行中二次确认
+   * 全部复用 closeModel —— 快捷键只是"找到活动模型"的另一个入口，不是第二条关闭路径。
+   */
+  function closeActive() {
+    var models = tabModels();
+    for (var i = 0; i < models.length; i++) {
+      if (isActiveModel(models[i])) {
+        closeModel(models[i], activeTabNode(), null);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * [CUSTOM- 2026-10-29：改名改成面板内输入浮层（原来弹宿主 InputBox，抢焦点、
    * 盖住窗口顶部）。tab 右键菜单与历史行共用同一形态；提交后由宿主应用并回
    * 'sessionAction'，tab 名靠 'sessionsChanged' 同步。
@@ -413,6 +428,33 @@ export const tabsClient = `
 
     // [CUSTOM- 拖拽排序的落点监听挂在**条带**上，不挂在每个 tab 上（见 installDrag）。
     installDrag();
+    // [CUSTOM- 竖向滚轮横向翻 tab 条（见 installWheel）。
+    installWheel();
+  }
+
+  /**
+   * [CUSTOM- 会话 tab 溢出时，竖向鼠标滚轮在条带上横向滚动。
+   *
+   * 真正的滚动容器是内层 #tabs（#tabStrip 自己是 overflow: hidden，这样 + / 设置按钮
+   * 永远固定在右边）。只处理"纯竖向"滚轮：横向触控板手势（deltaX）与 Shift/Ctrl/Meta 组合
+   * 保持原生（与 scroll.ts 的门控同一取舍），滚到边界或没有溢出时也不 preventDefault。
+   */
+  function installWheel() {
+    if (!stripEl || !tabsEl || !stripEl.addEventListener) { return; }
+    stripEl.addEventListener('wheel', function (event) {
+      if (!event || event.deltaY === 0 || event.deltaX) { return; }
+      if (event.ctrlKey || event.metaKey || event.shiftKey) { return; }
+      var max = tabsEl.scrollWidth - tabsEl.clientWidth;
+      if (!(max > 1)) { return; }
+      var delta = event.deltaY;
+      if (event.deltaMode === 1) { delta = delta * 16; }
+      else if (event.deltaMode === 2) { delta = delta * tabsEl.clientWidth; }
+      var before = tabsEl.scrollLeft || 0;
+      if ((delta < 0 && before <= 0) || (delta > 0 && before >= max)) { return; }
+      if (event.preventDefault) { event.preventDefault(); }
+      tabsEl.scrollLeft = Math.max(0, Math.min(max, before + delta));
+      hideTip();
+    }, { passive: false });
   }
 
   function tabLabel(summary) {
@@ -1135,6 +1177,8 @@ export const tabsClient = `
     setRestoring: setRestoring,
     // [CUSTOM- 会话 tab 右键菜单的 Close 入口（见 contextMenu.itemsFor）。
     closeTabNode: closeTabNode,
+    // [CUSTOM- 快捷键 Alt+W：关闭当前活动 tab（与 × / 中键 / 右键 Close 同一条 closeModel）。
+    closeActive: closeActive,
     // [CUSTOM- 会话 tab 右键菜单的 Rename 入口（面板内输入浮层）。
     startRename: startRename,
     // [CUSTOM- 前/后一个 tab（-1 / +1，首尾循环），快捷键入口。

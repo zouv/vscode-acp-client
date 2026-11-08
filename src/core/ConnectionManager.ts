@@ -17,7 +17,7 @@ import { FileSystemHandler } from '../handlers/FileSystemHandler';
 import { PermissionHandler } from '../handlers/PermissionHandler';
 import type { PermissionBridge } from '../handlers/PermissionBridge';
 import type { SessionUpdateHandler } from '../handlers/SessionUpdateHandler';
-import { TerminalHandler } from '../handlers/TerminalHandler';
+import { TerminalHandler, newRetainedTerminalPool } from '../handlers/TerminalHandler';
 import { log, logError, logTraffic } from '../utils/Logger';
 import { readPackageVersion } from '../utils/BuildInfo';
 import { AcpClientImpl } from './AcpClientImpl';
@@ -31,6 +31,14 @@ export interface ConnectionInfo {
   /** `_session/steering` is advertised in `initialize._meta.steering.supported`. */
   supportsSteering: boolean;
 }
+
+/**
+ * After the SDK closes a connection we wait this long before declaring it lost, so a
+ * process that is exiting anyway reports through `agent-closed` (with its exit code) first.
+ */
+export const CONNECTION_LOST_GRACE_MS = 500;
+
+export type ConnectionLostListener = (agentId: string, reason: unknown) => void;
 
 function tapStream(stream: Stream): Stream {
   const send = new TransformStream({
@@ -54,8 +62,10 @@ function tapStream(stream: Stream): Stream {
 export class ConnectionManager {
   private disposed = false;
   private readonly pendingTerminals = new Map<string, TerminalHandler>();
-  private readonly retiredTerminals = new Set<TerminalHandler>();
+  /** Released/retired VS Code terminals of every connection, capped (see RETAINED_TERMINAL_CAP). */
+  private readonly retainedTerminals = newRetainedTerminalPool();
   private readonly connections = new Map<string, ConnectionInfo>();
+  private readonly lostListeners = new Set<ConnectionLostListener>();
 
   constructor(
     private readonly sessionUpdates: SessionUpdateHandler,
@@ -77,7 +87,7 @@ export class ConnectionManager {
       Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
     ));
 
-    const terminals = new TerminalHandler();
+    const terminals = new TerminalHandler(this.retainedTerminals);
     this.pendingTerminals.set(agentId, terminals);
     const client = new AcpClientImpl({
       fs: new FileSystemHandler(),
@@ -123,6 +133,7 @@ export class ConnectionManager {
       }
       const info: ConnectionInfo = { agentId, connection, client, initResponse, terminals, supportsSteering };
       this.connections.set(agentId, info);
+      this.watchClose(info);
       return info;
     } catch (error) {
       terminals.dispose();
@@ -131,6 +142,32 @@ export class ConnectionManager {
     } finally {
       if (this.pendingTerminals.get(agentId) === terminals) { this.pendingTerminals.delete(agentId); }
     }
+  }
+
+  /**
+   * Fires when the SDK closed a registered connection by itself (stream error, a message over
+   * its size limit) while nobody removed it: every RPC on it now fails, so the owner has to
+   * treat the agent as gone even though its process may still be alive.
+   */
+  onConnectionLost(listener: ConnectionLostListener): () => void {
+    this.lostListeners.add(listener);
+    return () => this.lostListeners.delete(listener);
+  }
+
+  private watchClose(info: ConnectionInfo): void {
+    const signal = info.connection.signal as AbortSignal | undefined;
+    if (!signal) { return; }
+    const lost = () => {
+      const timer = setTimeout(() => {
+        if (this.disposed || this.connections.get(info.agentId) !== info) { return; }
+        logError(`ConnectionManager: ACP connection to ${info.agentId} closed underneath a live registration`, signal.reason);
+        for (const listener of Array.from(this.lostListeners)) {
+          try { listener(info.agentId, signal.reason); } catch (e) { logError('connection-lost listener failed', e); }
+        }
+      }, CONNECTION_LOST_GRACE_MS);
+      timer.unref?.();
+    };
+    if (signal.aborted) { lost(); } else { signal.addEventListener('abort', lost, { once: true }); }
   }
 
   getConnection(agentId: string): ConnectionInfo | undefined {
@@ -142,10 +179,7 @@ export class ConnectionManager {
     this.pendingTerminals.get(agentId)?.dispose();
     this.pendingTerminals.delete(agentId);
     const terminals = this.connections.get(agentId)?.terminals;
-    if (terminals) {
-      terminals.killAll();
-      this.retiredTerminals.add(terminals);
-    }
+    terminals?.retire();
     this.connections.delete(agentId);
   }
 
@@ -157,12 +191,12 @@ export class ConnectionManager {
       this.sessionUpdates.releaseAgent(agentId);
     }
     this.pendingTerminals.clear();
-    for (const terminals of this.retiredTerminals) { terminals.dispose(); }
-    this.retiredTerminals.clear();
+    this.retainedTerminals.clear();
     for (const info of this.connections.values()) {
       info.terminals.dispose();
       this.sessionUpdates.releaseAgent(info.agentId);
     }
     this.connections.clear();
+    this.lostListeners.clear();
   }
 }

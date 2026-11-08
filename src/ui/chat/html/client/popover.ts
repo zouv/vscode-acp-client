@@ -27,6 +27,12 @@ export const popoverClient = `
 
   function isOpen() { return !!root && !root.hidden; }
 
+  /** IME 合成中的按键交给输入法（Enter 确认候选 / Escape 取消候选），不能当浮层快捷键。 */
+  function composing(event) {
+    return !!(event && (event.isComposing || event.keyCode === 229 || event.key === 'Dead'
+      || (event.getModifierState && event.getModifierState('AltGraph'))));
+  }
+
   function close() {
     if (!root || root.hidden) { return; }
     root.hidden = true;
@@ -153,6 +159,8 @@ export const popoverClient = `
     });
     if (inputEl) {
       inputEl.addEventListener('keydown', function (event) {
+        // 输入法合成中：Enter / Escape 属于输入法（确认/取消候选），不能提交或关闭浮层。
+        if (composing(event)) { return; }
         // 输入框里的按键不冒泡给标签栏（Delete/方向键有会话 tab 的语义）。
         if (event.stopPropagation) { event.stopPropagation(); }
         if (event.key === 'Enter') {
@@ -166,7 +174,7 @@ export const popoverClient = `
     }
     // capture：先于输入卡的 Escape（取消轮次）与标签栏的按键处理。
     document.addEventListener('keydown', function (event) {
-      if (event.key !== 'Escape' || !isOpen()) { return; }
+      if (event.key !== 'Escape' || !isOpen() || composing(event)) { return; }
       if (event.preventDefault) { event.preventDefault(); }
       if (event.stopPropagation) { event.stopPropagation(); }
       close();

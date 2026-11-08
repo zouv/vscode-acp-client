@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { isAbsolute } from 'node:path';
 import type {
   ReadTextFileRequest,
   ReadTextFileResponse,
@@ -7,30 +8,37 @@ import type {
 } from '@agentclientprotocol/sdk';
 
 import { log, logError } from '../utils/Logger';
+import { sliceLines } from './FileSlice';
 
 const sameFile = process.platform === 'win32'
   ? (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
   : (a: string, b: string) => a === b;
+
+/** ACP paths MUST be absolute; a relative one would silently resolve against the host's cwd. */
+function fileUri(path: string): vscode.Uri {
+  if (!isAbsolute(path)) { throw new Error(`Path must be absolute: ${path}`); }
+  return vscode.Uri.file(path);
+}
+
+/**
+ * The open editor buffer of this file on disk. Only `file:` documents: a `git:` (SCM diff)
+ * or other virtual document shares the fsPath but holds different (e.g. HEAD) content.
+ */
+function openDocument(uri: vscode.Uri): vscode.TextDocument | undefined {
+  return vscode.workspace.textDocuments.find(doc => doc.uri.scheme === 'file' && sameFile(doc.uri.fsPath, uri.fsPath));
+}
 
 /** Reads prefer unsaved editor buffers; writes open the result so the user sees the change. */
 export class FileSystemHandler {
   async readTextFile(params: ReadTextFileRequest): Promise<ReadTextFileResponse> {
     log(`readTextFile: ${params.path}`);
     try {
-      const uri = vscode.Uri.file(params.path);
-      const open = vscode.workspace.textDocuments.find(doc => sameFile(doc.uri.fsPath, uri.fsPath));
-      let content = open
+      const uri = fileUri(params.path);
+      const open = openDocument(uri);
+      const content = open
         ? open.getText()
         : Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf-8');
-
-      const hasLine = params.line !== undefined && params.line !== null;
-      const hasLimit = params.limit !== undefined && params.limit !== null;
-      if (hasLine || hasLimit) {
-        const lines = content.split('\n');
-        const start = Math.max(0, (params.line ?? 1) - 1);
-        content = lines.slice(start, params.limit ? start + params.limit : undefined).join('\n');
-      }
-      return { content };
+      return { content: sliceLines(content, params.line, params.limit) };
     } catch (e) {
       logError(`readTextFile failed: ${params.path}`, e);
       throw e;
@@ -40,12 +48,12 @@ export class FileSystemHandler {
   async writeTextFile(params: WriteTextFileRequest): Promise<WriteTextFileResponse> {
     log(`writeTextFile: ${params.path}`);
     try {
-      const uri = vscode.Uri.file(params.path);
-      let doc = vscode.workspace.textDocuments.find(open => sameFile(open.uri.fsPath, uri.fsPath));
+      const uri = fileUri(params.path);
+      let doc = openDocument(uri);
       if (doc) {
         if (doc.isDirty) { throw new Error('File has unsaved editor changes; save or revert before retrying.'); }
         const edit = new vscode.WorkspaceEdit();
-        edit.replace(uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), params.content);
+        edit.replace(doc.uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), params.content);
         if (!await vscode.workspace.applyEdit(edit)) { throw new Error('Editor rejected the file edit.'); }
         if (!await doc.save()) { throw new Error('Could not save the edited document.'); }
       } else {

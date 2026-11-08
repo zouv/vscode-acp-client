@@ -71,6 +71,27 @@ node scripts/capture-acp-replay.mjs --out src/test/fixtures/claude-code-session-
 **INV-I：replay 路径上不许留下 `streaming: true` 的记录**（`ChatPanelHost` 的两处 finalize +
 测试里的 `no entry is left dangling as streaming` 是它的守卫）。
 
+**回放期间不向 webview 逐条推送（2026-11-08）**：`SessionManager.isLoading(sessionId)` 为真时，
+`ChatPanelHost.post` 丢弃该会话的 `append / appendText / revise / toolUpdate / markdownRendered`
+（记录仍全部落进宿主 `TranscriptStore`）。加载遮罩本来盖住内容，而逐条推送会灌满 webview 的
+FIFO 消息队列 —— 用户在加载中切换 tab 时，客户端先本地高亮新 tab 再发 `focusSession`，
+宿主的 `focus` 回包会排在那条洪流后面，看起来就是「消息面板一直停在旧会话的加载态，直到加载结束才切过去」。
+`session-load-end` 现在只在**该会话仍是焦点**时 `pushFocus()` 补一份快照（含已收尾记录与预渲染 html）；
+焦点已被切走 ⇒ 什么都不发，绝不把焦点抢回来。`prefillReplayMarkdown` 也只对当前有主 surface
+显示的会话下发 `revise`（否则静默写入 store，下次 focus 快照带上）。
+**ToolInvocationStore.finalizeOpen** 在 `session-load-end` / `finalizeTurn` 给没有终态的工具盖 `endedAt`：
+回放最后一条工具或一轮被取消时，Task 的区间不能一直开到 `now`，否则它会把之后所有工具调用吞进嵌套窗口。
+
+**历史选择器的「替换」顺序（2026-11-08）**：`handleOpenHistorySession` 先判定要不要替换当前聚焦会话
+（`isSessionRunning` 为真或 `isLoading` 为真 ⇒ **不替换**，新会话作为额外 tab 打开），再用
+`openExistingSession` 打开目标；**只有打开成功之后**才关闭旧会话。开失败（`session/load` 抛错）时旧 tab
+原样保留。多根会话的 `additionalDirectories` 现在随 `SessionHistoryStore` 持久化
+（`setAdditionalDirectories`），重开时从缓存取回并传给 `session/load` / `session/resume`；
+`session/list` 不带这个信息，所以第一次打开前就存在的会话仍由 agent 自己记忆。
+宿主还用 `openingHistorySessions` 丢弃同一会话的并发打开请求：`openExistingSession` 会加入在途的
+open，而 `openedLive` 在它 resolve 之后**强制聚焦**——重复点击（历史行/恢复 tab）会因此变成
+"加载完成后把焦点抢回去"，正是加载中切 tab 时必须避免的形状。
+
 ### 5.14 每会话工作目录（CUSTOM-20260925-056..057）
 
 **为什么需要**：多标签并发会话从 010 起就能用，但**所有会话共用同一个 cwd**——

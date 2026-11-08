@@ -1039,6 +1039,21 @@ suite('chat client logic: conversation outline (stub DOM)', () => {
     assert.strictEqual(sidebar.hidden, false, 'the pinned column comes back with the first message');
   });
 
+  test('invalidate re-renders on the next frame, and only when a row changed', () => {
+    const { NS } = loadClient({}, { syncFrames: true });
+    const drawer = renderOutline(NS, [
+      { id: 'u1', kind: 'user', at: 1000, text: 'question' },
+      { id: 'a1', kind: 'assistant', at: 2000, text: 'x'.repeat(600), streaming: true },
+    ]);
+    const row = drawer.querySelector('.outline-item');
+    NS.transcriptView.patch('a1', { text: 'x'.repeat(700) });
+    NS.outline.invalidate();
+    assert.strictEqual(drawer.querySelector('.outline-item'), row, 'a chunk past the label/title cut keeps the rows (hover/focus survive)');
+    NS.transcriptView.patch('u1', { text: 'edited question' });
+    NS.outline.invalidate();
+    assert.notStrictEqual(drawer.querySelector('.outline-item'), row, 'a visible change rebuilds');
+  });
+
   test('label truncates to 80 chars with an ellipsis', () => {
     const { NS } = loadClient();
     const drawer = renderOutline(NS, [{ id: 'u1', kind: 'user', at: 1000, text: 'x'.repeat(200) }]);
@@ -8793,6 +8808,83 @@ suite('chat client logic: streaming markdown tails and native render windows', (
     assert.strictEqual(NS.transcriptView.node('permission').getAttribute('data-render-window'), null);
     assert.strictEqual(NS.transcriptView.node('form').getAttribute('data-render-window'), null);
     NS.transcriptView.reset();
+  });
+
+  // [CUSTOM- 2026-11-08: host text deltas (appendText) and delta markdown frames.
+  test('appendText grows the text, tolerates overlap and refuses gaps or divergence', () => {
+    const { NS } = fixture();
+    NS.transcriptView.append({ id: 'stream', kind: 'assistant', text: 'hello', streaming: true });
+    assert.strictEqual(NS.transcriptView.appendText('stream', 5, ' world'), true);
+    assert.strictEqual(NS.transcriptView.entry('stream').text, 'hello world');
+    assert.strictEqual(NS.transcriptView.appendText('stream', 6, 'world'), true, 'fully contained overlap');
+    assert.strictEqual(NS.transcriptView.appendText('stream', 9, 'ld!'), true, 'partial overlap');
+    assert.strictEqual(NS.transcriptView.entry('stream').text, 'hello world!');
+    assert.strictEqual(NS.transcriptView.appendText('stream', 20, 'x'), false, 'gap');
+    assert.strictEqual(NS.transcriptView.appendText('stream', 6, 'WORLD'), false, 'divergent overlap');
+    assert.strictEqual(NS.transcriptView.appendText('missing', 0, 'x'), false, 'unknown entry');
+    assert.strictEqual(NS.transcriptView.entry('stream').text, 'hello world!');
+    NS.transcriptView.patch('stream', { streaming: false });
+    NS.transcriptView.appendText('stream', 12, '?');
+    assert.strictEqual(NS.transcriptView.entry('stream').streaming, true, 'a delta implies a streaming record, as the whole append did');
+    NS.transcriptView.reset();
+  });
+
+  test('streaming requests name a length and compose delta frames per generation', () => {
+    const { NS, sanitized } = fixture();
+    NS.transcriptView.append({ id: 'stream', kind: 'assistant', text: 'one\n\ntwo', streaming: true });
+    const first = NS.transcriptView.pendingMarkdown();
+    assert.strictEqual(first.length, 1);
+    assert.strictEqual(first[0].text, '', 'the growing body is not uploaded');
+    assert.strictEqual(first[0].textLength, 'one\n\ntwo'.length);
+    assert.strictEqual(first[0].check, 'one\n\ntwo');
+    assert.strictEqual(first[0].streamGeneration, undefined);
+    NS.transcriptView.queueMarkdown([{ entryId: 'stream', sessionId: 'stream-session', html: '',
+      stream: { sourceLength: 8, generation: 7, start: 0, blocks: ['<p>one</p>'], tailHtml: '<p>two</p>' } }]);
+    NS.transcriptView.appendText('stream', 8, '\n\nthree');
+    const next = NS.transcriptView.pendingMarkdown();
+    assert.strictEqual(next[0].streamGeneration, 7);
+    assert.strictEqual(next[0].streamBlocks, 1);
+    NS.transcriptView.queueMarkdown([{ entryId: 'stream', sessionId: 'stream-session', html: '',
+      stream: { sourceLength: 15, generation: 7, start: 1, blocks: ['<p>two</p>'], tailHtml: '<p>three</p>' } }]);
+    const body = NS.transcriptView.node('stream').querySelector('.bubble-body');
+    assert.strictEqual(sanitized.filter(c => c.html === '<p>one</p>').length, 1, 'held block is not re-sanitized');
+    assert.ok(body.textContent.includes('<p>two</p>') && body.textContent.includes('<p>three</p>'));
+    // A delta built on blocks this client does not hold is dropped, and the next ask wants everything.
+    NS.transcriptView.appendText('stream', 15, ' more');
+    NS.transcriptView.pendingMarkdown();
+    NS.transcriptView.queueMarkdown([{ entryId: 'stream', sessionId: 'stream-session', html: '',
+      stream: { sourceLength: 20, generation: 99, start: 2, blocks: [], tailHtml: '<p>three more</p>' } }]);
+    const retry = NS.transcriptView.pendingMarkdown();
+    assert.strictEqual(retry.length, 1);
+    assert.strictEqual(retry[0].streamGeneration, undefined);
+    NS.transcriptView.reset();
+  });
+
+  test('a growing raw tool output is appended in place instead of rebuilding the body', () => {
+    const { NS } = loadClient({}, { syncFrames: true });
+    const tool = (output: string) => ({ toolCallId: 't', title: 'Run', kind: 'execute', status: 'in_progress',
+      command: 'ls', locations: [], items: [], output });
+    const node = NS.toolCallView.render(tool('line 1\n'), 'e1');
+    const pre = node.querySelector('.tool-raw');
+    NS.toolCallView.update(node, tool('line 1\nline 2\n'), 'e1');
+    assert.strictEqual(node.querySelector('.tool-raw'), pre, 'same node: selection and inner scroll survive');
+    assert.strictEqual(pre.textContent, 'line 1\nline 2\n');
+    NS.toolCallView.update(node, tool('rewritten\n'), 'e1');
+    assert.strictEqual(node.querySelector('.tool-raw').textContent, 'rewritten\n', 'a non-prefix rewrite still shows the new text');
+    NS.toolCallView.update(node, { ...tool('rewritten\n'), command: 'pwd' }, 'e1');
+    assert.notStrictEqual(node.querySelector('.tool-raw'), pre, 'a layout change rebuilds');
+  });
+
+  test('a changed markdown text item is re-rendered in its existing host', () => {
+    const { NS } = loadClient({}, { syncFrames: true });
+    const tool = (text: string) => ({ toolCallId: 't', title: 'Run', kind: 'execute', status: 'in_progress',
+      command: 'ls', locations: [], items: [{ type: 'content', block: { type: 'text', text } }] });
+    const node = NS.toolCallView.render(tool('first'), 'e2');
+    const host = node.querySelector('.tool-text');
+    NS.toolCallView.update(node, tool('first and more'), 'e2');
+    assert.strictEqual(node.querySelector('.tool-text'), host, 'the host is kept');
+    const asks = NS.toolCallView.pendingMarkdownItems('s');
+    assert.ok(asks.some((item: { text: string }) => item.text === 'first and more'), 'the new text is requested');
   });
 });
 

@@ -15,8 +15,12 @@
 // · INV-E 每次 `boot` / `focus` 快照前必须先 `flush()`，否则接收端会先拿到快照、
 // 再收到快照里已经包含的旧 append。
 //
-// 因此本类**只暴露一种合并**（队尾单条 append），其余一律按入队顺序原样发出；
-// 结构性消息走 `flushThenPost`（先冲刷、再立即发）。
+// 合并规则（其余一律按入队顺序原样发出；结构性消息走 `flushThenPost`，先冲刷、再立即发）：
+// · 队尾单条同 id 的 `append` 被新的替换；
+// · `appendText`（流式增量）与队尾同条目、首尾相接的 `appendText` 拼接；队尾那条 `append`
+// 若已含这段文本（它带的是就地修改的活对象）则直接丢弃增量；
+// · `toolUpdate` 同条目**后者胜**：删掉队列里较早的那条、新的排到队尾——只会让旧状态消失，
+// 新状态仍然排在创建它的 `append` 之后（INV-A 不变）。
 import type { ExtToChatMessage } from './protocol';
 
 interface OutboxOptions {
@@ -43,7 +47,10 @@ export class Outbox {
     if (this.canMerge(tail, message)) {
       this.queue[this.queue.length - 1] = message;
       this.merged++;
+    } else if (message.type === 'appendText' && this.mergeText(tail, message)) {
+      this.merged++;
     } else {
+      if (message.type === 'toolUpdate') { this.dropStaleToolUpdate(message); }
       this.queue.push(message);
     }
     if (this.queue.length >= (this.opts.maxQueued ?? 256)) {
@@ -108,6 +115,33 @@ export class Outbox {
     if (tail.sessionId !== message.sessionId) { return false; }
     if (tail.entries.length !== 1 || message.entries.length !== 1) { return false; }
     return tail.entries[0].id === message.entries[0].id;
+  }
+
+  /** Fold a text delta into the queue tail when that loses nothing. */
+  private mergeText(tail: ExtToChatMessage | undefined, message: Extract<ExtToChatMessage, { type: 'appendText' }>): boolean {
+    if (!tail) { return false; }
+    if (tail.type === 'appendText') {
+      if (tail.sessionId !== message.sessionId || tail.entryId !== message.entryId || tail.offset + tail.text.length !== message.offset) { return false; }
+      this.queue[this.queue.length - 1] = { ...tail, text: tail.text + message.text };
+      return true;
+    }
+    if (tail.type !== 'append' || tail.sessionId !== message.sessionId || tail.entries.length !== 1 || tail.entries[0].id !== message.entryId) { return false; }
+    const text = (tail.entries[0] as { text?: unknown }).text;
+    return typeof text === 'string'
+      && text.length >= message.offset + message.text.length
+      && text.startsWith(message.text, message.offset);
+  }
+
+  /** Last-wins for tool view models: an older queued update for the same card is superseded. */
+  private dropStaleToolUpdate(message: Extract<ExtToChatMessage, { type: 'toolUpdate' }>): void {
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      const queued = this.queue[i];
+      if (queued.type === 'toolUpdate' && queued.entryId === message.entryId && queued.sessionId === message.sessionId) {
+        this.queue.splice(i, 1);
+        this.merged++;
+        return;
+      }
+    }
   }
 
   private schedule(): void {

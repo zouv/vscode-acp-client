@@ -365,6 +365,10 @@ export type ExtToChat =
   | { type: 'sessionClosed'; sessionId: string; reason: CloseReason }
   | { type: 'append'; sessionId: string; entries: WireEntry[] }
   | { type: 'revise'; sessionId: string; entryId: string; patch: EntryPatch }
+  // 流式正文的**增量**：只带新追加的后缀，`offset` = 这段后缀之前的正文长度。
+  // 隐含 `streaming: true`（只有仍在流式的记录才会走增量）。客户端发现 offset 对不上
+  // （有缺口/文本分叉）就发 `resyncEntry`，宿主回一条整份的 `append`。
+  | { type: 'appendText'; sessionId: string; entryId: string; offset: number; text: string }
   | { type: 'toolUpdate'; sessionId: string; entryId: string; tool: ToolCallView }
   | { type: 'meta'; sessionId: string; meta: SessionMeta }
   | { type: 'attachments'; sessionId: string; attachments: Attachment[] }
@@ -538,7 +542,10 @@ export type ChatToExt =
   | { type: 'setMode'; sessionId: string; modeId: string }
   | { type: 'setModel'; sessionId: string; modelId: string }
   | { type: 'setConfigOption'; sessionId: string; configId: string; value: string }
-  | { type: 'renderMarkdown'; items: Array<{ entryId: string; sessionId: string; text: string; key?: string; streaming?: boolean }> }
+  // 流式请求可以不带全文：`text` 留空，`textLength` = 客户端当前正文长度，`check` = 正文
+  // 末尾 ≤16 字符（宿主用它核对两边是同一段文本）；`streamGeneration/streamBlocks` = 客户端已持有的
+  // 稳定块，宿主只回之后的块（见 MarkdownStreamFrame）。
+  | { type: 'renderMarkdown'; items: RenderMarkdownItem[] }
   | { type: 'openLink'; href: string }
   // [CUSTOM- 2026-10-29：引用标签的跳转。`endLine` 有值时宿主框选整段行区间；
   // `sessionId` 可选 —— 草稿页还没有会话，点引用标签也要能打开文件（相对路径回退工作区）。
@@ -571,7 +578,21 @@ export type ChatToExt =
   // 只能打补丁、修不了空壳——用户看到的就是"工具调用没有显示"。与其猜数据在哪一侧丢，
   // 不如让客户端主动要一次。
   | { type: 'needToolView'; sessionId: string; entryId: string; toolCallId: string }
+  // `appendText` 对不上时客户端要一份整条记录（宿主定向回 `append`）。会话作用域。
+  | { type: 'resyncEntry'; sessionId: string; entryId: string }
   | { type: 'executeCommand'; command: string };
+
+export interface RenderMarkdownItem {
+  entryId: string;
+  sessionId: string;
+  text: string;
+  key?: string;
+  streaming?: boolean;
+  textLength?: number;
+  check?: string;
+  streamGeneration?: number;
+  streamBlocks?: number;
+}
 
 /** extension → webview reply to `renderMarkdown`. */
 export interface MarkdownRendered {

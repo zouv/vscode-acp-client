@@ -142,6 +142,7 @@ function shortcutItems(values?: Partial<Record<string, string | null>>): any[] {
     { key: 'panel.shortcut.focusInput', group: 'shortcuts', type: 'shortcut', label: 'Focus the input', value: bind('focusInput', 'Alt+KeyI') },
     { key: 'panel.shortcut.previousSession', group: 'shortcuts', type: 'shortcut', label: 'Previous session', value: bind('previousSession', 'Alt+KeyP') },
     { key: 'panel.shortcut.nextSession', group: 'shortcuts', type: 'shortcut', label: 'Next session', value: bind('nextSession', 'Alt+KeyN') },
+    { key: 'panel.shortcut.closeSession', group: 'shortcuts', type: 'shortcut', label: 'Close session', value: bind('closeSession', 'Alt+KeyW') },
   ];
 }
 
@@ -207,12 +208,12 @@ function makePanel(items: any[]) {
 }
 
 describe('settings panel: Shortcuts group', () => {
-  it('renders the group, five record controls, readable bindings and the layout note', () => {
+  it('renders the group, six record controls, readable bindings and the layout note', () => {
     const panel = makePanel(shortcutItems());
     const tabs = panel.elements.settingsNav.querySelectorAll('.settings-tab');
     expect(tabs.map(tab => tab.textContent)).toEqual(['Shortcuts']);
     expect(panel.records().map(button => button.textContent))
-      .toEqual(['Alt+A', 'Alt+E', 'Alt+I', 'Alt+P', 'Alt+N']);
+      .toEqual(['Alt+A', 'Alt+E', 'Alt+I', 'Alt+P', 'Alt+N', 'Alt+W']);
     expect(panel.elements.settingsBody.textContent).toContain('physical key positions');
     expect(panel.elements.settingsBody.textContent)
       .toContain('Option combinations (including the Alt+E/I/N defaults)');
@@ -226,7 +227,7 @@ describe('settings panel: Shortcuts group', () => {
       focusInput: null,
     }));
     expect(panel.records().map(button => button.textContent))
-      .toEqual(['Ctrl+Shift+Up', 'Meta+1', 'Disabled', 'Alt+P', 'Alt+N']);
+      .toEqual(['Ctrl+Shift+Up', 'Meta+1', 'Disabled', 'Alt+P', 'Alt+N', 'Alt+W']);
   });
 });
 

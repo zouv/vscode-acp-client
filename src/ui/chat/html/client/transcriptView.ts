@@ -93,17 +93,46 @@ export const transcriptViewClient = `
     }
   }
 
+  /**
+   * Host frames are deltas: blocks[start..] for one parser generation, and the
+   * source as a LENGTH of the text both sides share. A legacy frame carries the
+   * full source string and every block (start 0).
+   */
+  function streamSourceOf(entry, frame) {
+    var text = String(entry.text || '');
+    if (typeof frame.source === 'string') { return text.indexOf(frame.source) === 0 ? frame.source : null; }
+    if (typeof frame.sourceLength !== 'number' || frame.sourceLength < 0 || frame.sourceLength > text.length) { return null; }
+    return text.slice(0, frame.sourceLength);
+  }
+
   function applyStreamItem(item) {
     var entry = objects[item.entryId];
     var frame = item.stream;
     var sent = inFlight[item.entryId];
+    var length = typeof frame.source === 'string' ? frame.source.length : frame.sourceLength;
     // Never clear a newer settled request when an older streaming reply arrives.
-    if (sent && sent.streaming && sent.text === frame.source) { delete inFlight[item.entryId]; }
-    if (!entry || !entry.streaming || item.sessionId !== sessionId || typeof frame.source !== 'string'
-      || !Array.isArray(frame.blocks) || typeof frame.tailHtml !== 'string'
-      || String(entry.text || '').indexOf(frame.source) !== 0) { return; }
+    if (sent && sent.streaming && String(sent.text || '').length === length) { delete inFlight[item.entryId]; }
+    if (!entry || !entry.streaming || item.sessionId !== sessionId
+      || !Array.isArray(frame.blocks) || typeof frame.tailHtml !== 'string') { return; }
+    var source = streamSourceOf(entry, frame);
+    if (source === null) { return; }
     var old = streamFrames[item.entryId];
-    if (old && old.source.length > frame.source.length && frame.source.indexOf(old.source) !== 0) { return; }
+    if (old && old.source.length > source.length) { return; }
+    var start = typeof frame.start === 'number' ? frame.start : 0;
+    var blocks;
+    if (start <= 0) { blocks = frame.blocks; }
+    else if (old && old.generation === frame.generation && old.blocks.length >= start) {
+      blocks = old.blocks.slice(0, start).concat(frame.blocks);
+    } else {
+      // The blocks this delta builds on are gone (reset / another parser state):
+      // forget the frame so the next request asks for the full list.
+      delete streamFrames[item.entryId];
+      pending[item.entryId] = entry.text;
+      scheduleStreamMarkdown();
+      return;
+    }
+    frame = { source: source, blocks: blocks, tailHtml: frame.tailHtml,
+      generation: typeof frame.generation === 'number' ? frame.generation : null };
     streamFrames[item.entryId] = frame;
     var node = nodes[item.entryId];
     var body = node && node.querySelector(entry.kind === 'thought' ? '.thought-body' : '.bubble-body');
@@ -1615,6 +1644,30 @@ export const transcriptViewClient = `
     NS.scroll.follow();
   }
 
+  /**
+   * [CUSTOM- A streamed text delta (host 'appendText'). 'offset' is the length the
+   * host text had before this suffix. Overlap with what we already hold (the same
+   * range also arrived inside a whole 'append') is fine; a gap or a divergent overlap
+   * returns false and the caller asks the host for the whole entry. Same effect as
+   * the whole-entry append it replaces: text grows and the record is streaming.
+   */
+  function appendText(entryId, offset, text) {
+    var entry = objects[entryId];
+    if (!entry || typeof offset !== 'number' || typeof text !== 'string') { return false; }
+    var current = String(entry.text || '');
+    if (offset > current.length) { return false; }
+    var end = offset + text.length;
+    if (end <= current.length) {
+      if (current.slice(offset, end) !== text) { return false; }
+      if (!entry.streaming) { patch(entryId, { streaming: true }); }
+      return true;
+    }
+    var overlap = current.length - offset;
+    if (overlap > 0 && current.slice(offset) !== text.slice(0, overlap)) { return false; }
+    patch(entryId, { text: current + text.slice(overlap), streaming: true });
+    return true;
+  }
+
   function updateTool(entryId, tool) {
     var node = nodes[entryId];
     var entry = objects[entryId];
@@ -1659,6 +1712,21 @@ export const transcriptViewClient = `
       var isStreaming = !!(objects[id] && objects[id].streaming);
       if (sent && sent.sessionId === sessionId && (sent.text === pending[id] || (isStreaming && sent.streaming))) { continue; }
       inFlight[id] = { sessionId: sessionId, text: pending[id], streaming: isStreaming };
+      if (isStreaming) {
+        // [CUSTOM- The host holds the same text (it is the source of every delta), so a
+        // streaming request names a LENGTH plus a short tail check instead of uploading
+        // the whole growing body, and says which stable blocks it already has.
+        var asking = String(pending[id] || '');
+        var item = { entryId: id, sessionId: sessionId, text: '', streaming: true,
+          textLength: asking.length, check: asking.slice(-16) };
+        var held = streamFrames[id];
+        if (held && typeof held.generation === 'number') {
+          item.streamGeneration = held.generation;
+          item.streamBlocks = held.blocks.length;
+        }
+        out.push(item);
+        continue;
+      }
       out.push({ entryId: id, sessionId: sessionId, text: pending[id], streaming: isStreaming });
     }
     return out;
@@ -1717,7 +1785,11 @@ export const transcriptViewClient = `
     } else if (entry.kind === 'assistant') {
       label = entry.text || 'Assistant message';
     }
-    label = String(label || '').replace(/\\s+/g, ' ').trim();
+    // Collapse a bounded head only (the outline asks for up to 200 of these per
+    // render); a head that collapses to <= 160 chars falls back to the whole text.
+    var rawLabel = String(label || '');
+    label = rawLabel.slice(0, 640).replace(/\\s+/g, ' ').trim();
+    if (label.length <= 160 && rawLabel.length > 640) { label = rawLabel.replace(/\\s+/g, ' ').trim(); }
     if (label.length > 160) { label = label.slice(0, 160) + '\\u2026'; }
     return {
       id: entry.id,
@@ -1758,6 +1830,8 @@ export const transcriptViewClient = `
     hydrate: hydrate,
     append: append,
     patch: patch,
+    // [CUSTOM- host 'appendText' (streamed text delta); false = ask for a resync.
+    appendText: appendText,
     updateTool: updateTool,
     pendingMarkdown: pendingMarkdown,
     // [CUSTOM- 收到一批回填（host 的 markdownRendered）—— 唯一的生产调用点在 boot。

@@ -105,6 +105,7 @@ function createClient() {
   const NS: any = {
     bridge,
     composer,
+    popover: { confirm: vi.fn(() => false) },
     dom: {
       qs: (id: string) => elements[id] ?? null,
       el: (tag: string, className?: string, text?: string) => {
@@ -556,8 +557,7 @@ describe('chat tabs: shortcut focus preservation', () => {
   });
 });
 
-describe('chat tabs: restore tab keyboard lookup', () => {
-  it('modelIndexOf recognizes data-restore-id so arrow keys work from a lazy tab', () => {
+describe('chat tabs: restore tab keyboard lookup', () => {  it('modelIndexOf recognizes data-restore-id so arrow keys work from a lazy tab', () => {
     const { tabs, elements, bridge } = createClient();
     tabs.setSessions([session('a'), session('b')]);
     tabs.setRestoring([restore('r1')]);
@@ -595,5 +595,145 @@ describe('chat tabs: restore tab keyboard lookup', () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(bridge.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('chat tabs: closeActive (Alt+W)', () => {
+  it('closes the focused live session through the shared closeModel path', () => {
+    const { tabs, bridge } = createClient();
+    tabs.setSessions([session('a'), session('b')]);
+    tabs.setFocus(session('a'));
+
+    expect(tabs.closeActive()).toBe(true);
+    expect(bridge.post).toHaveBeenCalledWith({ type: 'closeSession', sessionId: 'a' });
+  });
+
+  it('uses sideClose for a focused Side tab', () => {
+    const { tabs, bridge } = createClient();
+    const side = session('side-1', { sideChat: { parentSessionId: 'main', forkedAt: 1 } });
+    tabs.setSessions([side]);
+    tabs.setFocus(side);
+
+    expect(tabs.closeActive()).toBe(true);
+    expect(bridge.post).toHaveBeenCalledWith({ type: 'sideClose', sessionId: 'side-1' });
+  });
+
+  it('discards a focused draft instead of posting a session close', () => {
+    const { tabs, bridge, draft } = createClient();
+    tabs.setSessions([]);
+    tabs.setDrafts([{ draftId: 'd1', cwd: null }], 'd1');
+
+    expect(tabs.closeActive()).toBe(true);
+    expect(draft.drop).toHaveBeenCalledWith('d1');
+    expect(bridge.post).not.toHaveBeenCalled();
+  });
+
+  it('forgets a lazy-restore tab instead of trying to close it', () => {
+    const { tabs, bridge, elements } = createClient();
+    tabs.setSessions([]);
+    tabs.setRestoring([restore('r1')]);
+
+    tabs.closeTabNode(tabNode(elements, 'data-restore-id', 'r1'), {});
+    expect(bridge.post).toHaveBeenCalledWith({ type: 'forgetRestorable', sessionId: 'r1' });
+  });
+
+  it('asks before closing a running session and only posts after confirmation', () => {
+    const { tabs, bridge, NS } = createClient();
+    tabs.setSessions([session('a', { running: true })]);
+    tabs.setFocus(session('a'));
+    NS.popover.confirm.mockReturnValue(true);
+
+    expect(tabs.closeActive()).toBe(true);
+    expect(NS.popover.confirm).toHaveBeenCalledTimes(1);
+    expect(bridge.post).not.toHaveBeenCalledWith({ type: 'closeSession', sessionId: 'a' });
+  });
+
+  it('is a no-op when nothing is focused', () => {
+    const { tabs, bridge } = createClient();
+    tabs.setSessions([]);
+    expect(tabs.closeActive()).toBe(false);
+    expect(bridge.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('chat tabs: vertical wheel scrolls the strip horizontally', () => {
+  function wheel(overrides: Record<string, unknown> = {}) {
+    return {
+      deltaX: 0, deltaY: 0, deltaMode: 0,
+      ctrlKey: false, metaKey: false, shiftKey: false,
+      preventDefault: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  function overflowingStrip() {
+    const client = createClient();
+    const scroller = client.elements.tabs as any;
+    scroller.scrollWidth = 400;
+    scroller.clientWidth = 100;
+    scroller.scrollLeft = 0;
+    return { ...client, scroller };
+  }
+
+  it('converts a vertical wheel into scrollLeft when the tabs overflow', () => {
+    const { elements, scroller } = overflowingStrip();
+    const event = wheel({ deltaY: 50 });
+
+    elements.tabStrip.fire('wheel', event);
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(scroller.scrollLeft).toBe(50);
+  });
+
+  it('leaves native horizontal trackpad gestures alone', () => {
+    const { elements, scroller } = overflowingStrip();
+    const event = wheel({ deltaX: 30 });
+
+    elements.tabStrip.fire('wheel', event);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(scroller.scrollLeft).toBe(0);
+  });
+
+  it('does not preventDefault when there is nothing to scroll', () => {
+    const { elements, scroller } = overflowingStrip();
+    scroller.scrollWidth = 100;
+
+    const event = wheel({ deltaY: 50 });
+    elements.tabStrip.fire('wheel', event);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(scroller.scrollLeft).toBe(0);
+  });
+
+  it('stops at the edges without consuming the wheel', () => {
+    const { elements, scroller } = overflowingStrip();
+    scroller.scrollLeft = 300; // max = 400 - 100
+
+    const event = wheel({ deltaY: 50 });
+    elements.tabStrip.fire('wheel', event);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(scroller.scrollLeft).toBe(300);
+  });
+
+  it('respects deltaMode line and page units', () => {
+    const line = overflowingStrip();
+    line.elements.tabStrip.fire('wheel', wheel({ deltaY: 2, deltaMode: 1 }));
+    expect(line.scroller.scrollLeft).toBe(32);
+
+    const page = overflowingStrip();
+    page.elements.tabStrip.fire('wheel', wheel({ deltaY: 1, deltaMode: 2 }));
+    expect(page.scroller.scrollLeft).toBe(100);
+  });
+
+  it('keeps Shift/Ctrl/Meta combinations native', () => {
+    const { elements, scroller } = overflowingStrip();
+    for (const modifier of ['shiftKey', 'ctrlKey', 'metaKey']) {
+      const event = wheel({ deltaY: 50, [modifier]: true });
+      elements.tabStrip.fire('wheel', event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(scroller.scrollLeft).toBe(0);
   });
 });

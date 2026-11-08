@@ -19,10 +19,61 @@ export const permissionViewClient = `
 (function (NS) {
   'use strict';
 
-  // [CUSTOM- 发送中守卫（原先只有表单有，权限卡点两下会发两条 —— 桥虽然幂等，
-  // 但界面看起来像没反应）。sentFor 记着是哪条 prompt 在发，抽屉重建时据此保持禁用。
-  var sending = false;
-  var sentFor = null;
+  // [CUSTOM- 发送中守卫按 **promptId** 记（原先是一个模块级布尔）：在 A 会话点完立刻
+  // 切到 B，A 的回包会被 boot 丢掉（未聚焦会话的更新不落盘），而全局布尔没有任何人再清它
+  // ⇒ 之后每个会话的权限按钮都看起来可点、点下去却永远没反应。现在每个 prompt 自己一条
+  // 记录（带时间戳），切会话 / 抽屉对账会清，另有超时兜底。
+  var sentFor = {};
+  var SEND_TIMEOUT_MS = 20000;
+
+  function isSending(promptId) {
+    var entry = promptId ? sentFor[promptId] : null;
+    if (!entry) { return false; }
+    if (Date.now() - entry.at >= SEND_TIMEOUT_MS) {
+      clearSending(promptId);
+      return false;
+    }
+    return true;
+  }
+
+  function clearSending(promptId) {
+    var entry = promptId ? sentFor[promptId] : null;
+    if (!entry) { return; }
+    if (entry.timer && window.clearTimeout) { window.clearTimeout(entry.timer); }
+    delete sentFor[promptId];
+    setButtonsDisabled(promptId, false);
+  }
+
+  function clearAllSending() {
+    var ids = [];
+    for (var id in sentFor) {
+      if (Object.prototype.hasOwnProperty.call(sentFor, id)) { ids.push(id); }
+    }
+    for (var i = 0; i < ids.length; i++) { clearSending(ids[i]); }
+  }
+
+  /** 抽屉对账时只保留仍 pending 的 prompt：已结算 / 不属于当前会话的一律清掉。 */
+  function pruneSending(promptIds) {
+    var keep = {};
+    var list = promptIds || [];
+    for (var i = 0; i < list.length; i++) { keep[list[i]] = true; }
+    var ids = [];
+    for (var id in sentFor) {
+      if (Object.prototype.hasOwnProperty.call(sentFor, id) && !keep[id]) { ids.push(id); }
+    }
+    for (var j = 0; j < ids.length; j++) { clearSending(ids[j]); }
+  }
+
+  function markSending(promptId) {
+    clearSending(promptId);
+    sentFor[promptId] = {
+      at: Date.now(),
+      // 超时兜底：即使宿主回包丢了，也不许把按钮永久钉成禁用。
+      timer: window.setTimeout
+        ? window.setTimeout(function () { clearSending(promptId); }, SEND_TIMEOUT_MS)
+        : null
+    };
+  }
 
   function isAllow(kind) {
     return String(kind || '').indexOf('allow') === 0;
@@ -74,7 +125,7 @@ export const permissionViewClient = `
       // walking up to '.perm' / '.perm-drawer', and this module sends the answer.
       btn.setAttribute('data-perm-id', state.promptId);
       btn.setAttribute('data-perm-option', option.optionId);
-      if (sending && sentFor === state.promptId) { btn.disabled = true; }
+      if (isSending(state.promptId)) { btn.disabled = true; }
       actions.appendChild(btn);
     }
     return actions;
@@ -129,6 +180,8 @@ export const permissionViewClient = `
   function applyState(card, state) {
     if (!card) { return; }
     var status = state.status || 'pending';
+    // 结算（或退回弹框）后这条 prompt 不再"发送中"——按 promptId 清，绝不牵连同会话的其它请求。
+    if (status !== 'pending') { clearSending(state.promptId); }
     if (card.getAttribute('data-perm-status') === 'pending' && status === 'pending') {
       // Same pending prompt: nothing to rebuild (and the buttons, wherever they are,
       // must keep the state the send guard gave them).
@@ -137,10 +190,6 @@ export const permissionViewClient = `
     // [CUSTOM- The shape CHANGES across status (row ⇄ card), so this is a
     // rebuild rather than a patch — unlike the form card there is no half-filled state
     // to preserve: a click sends immediately.
-    if (sending && sentFor === state.promptId && status !== 'pending') {
-      sending = false;
-      sentFor = null;
-    }
     fill(card, state);
   }
 
@@ -149,12 +198,11 @@ export const permissionViewClient = `
    * the panel — the record row's Review button only opens the drawer, never answers.
    */
   function answer(host, promptId, optionId) {
-    if (!promptId || !optionId || sending) { return; }
+    if (!promptId || !optionId || isSending(promptId)) { return; }
     // Only a PENDING prompt may be answered: a settled one is history, and a deferred
     // one belongs to the VS Code dialog (a second answer path would race it).
     if (host && host.getAttribute && host.getAttribute('data-perm-status') !== 'pending') { return; }
-    sending = true;
-    sentFor = promptId;
+    markSending(promptId);
     setButtonsDisabled(promptId, true);
     NS.bridge.postForSession({ type: 'permissionAnswer', promptId: promptId, optionId: optionId });
   }
@@ -165,7 +213,11 @@ export const permissionViewClient = `
     answer: answer,
     buildActions: buildActions,
     buildHead: buildHead,
-    isSending: function (promptId) { return sending && sentFor === promptId; }
+    isSending: isSending,
+    // 切会话 / 抽屉对账（permissionDrawer.sync）清掉已失效的发送中记录。
+    clearSending: clearSending,
+    clearAllSending: clearAllSending,
+    pruneSending: pruneSending
   };
 })(window.__vac = window.__vac || {});
 `;

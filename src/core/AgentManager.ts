@@ -6,6 +6,8 @@ import { join } from 'node:path';
 
 import type { AgentConfigEntry } from '../config/AgentConfig';
 import { log, logError } from '../utils/Logger';
+import { LineSplitter } from '../utils/LineSplitter';
+import { cmdShimCommandLine, isBatchFile, mergeEnv, resolveWindowsCommand } from '../utils/TerminalCommand';
 import {
   entryFromInstall,
   installDirFor,
@@ -30,9 +32,8 @@ function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
-/** `shell: true` 在 Windows 上只做字符串拼接 —— 带空格的路径（如 `Code - Insiders`）必须自己加引号。 */
-function quoteWindowsArg(arg: string): string {
-  return /[\s"&|<>^()]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
+function isAlive(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
 }
 
 /**
@@ -61,9 +62,16 @@ function launchCommand(
   stdio: StdioOptions = ['pipe', 'pipe', 'pipe'],
 ): ChildProcess {
   if (process.platform === 'win32') {
-    // npx & friends are .cmd shims that only resolve through cmd.exe
-    const line = [command, ...args].map(quoteWindowsArg).join(' ');
-    return spawn(line, { stdio, env, cwd, shell: true, windowsHide: true });
+    // No `shell: true`: cmd expands %VAR% even inside quotes. Executables start directly;
+    // .cmd shims (npx & friends) go through cmd with every argument quoted and checked.
+    const executable = resolveWindowsCommand(command, cwd, env);
+    if (isBatchFile(executable)) {
+      const line = cmdShimCommandLine(executable, args);
+      return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/v:off', '/c', `"${line}"`], {
+        stdio, env, cwd, windowsHide: true, windowsVerbatimArguments: true,
+      });
+    }
+    return spawn(executable, args, { stdio, env, cwd, windowsHide: true });
   }
 
   const { shell, login } = resolveUnixShell();
@@ -81,7 +89,7 @@ function launch(config: AgentConfigEntry, cwd: string | undefined): ChildProcess
   return launchCommand(
     config.command,
     config.args ?? [],
-    { ...process.env, ...(config.env ?? {}) },
+    mergeEnv(process.env, config.env),
     cwd || undefined,
   );
 }
@@ -92,6 +100,7 @@ export class AgentManager extends EventEmitter {
   private readonly agents = new Map<string, AgentInstance>();
   private readonly installs = new Map<string, ChildProcess>();
   private readonly installTimers = new Set<NodeJS.Timeout>();
+  private readonly dying = new Set<ChildProcess>();
   private nextId = 1;
 
   /** `installRoot` 是扩展的 globalStorage：给了它，npx 启动的 agent 会缓存成 node 直启。 */
@@ -106,7 +115,7 @@ export class AgentManager extends EventEmitter {
     const cached = spec && this.installRoot
       ? readInstalled(installDirFor(this.installRoot, name), spec.spec)
       : null;
-    const env = { ...process.env, ...(config.env ?? {}) };
+    const env = mergeEnv(process.env, config.env);
     const child = cached && spec
       // [CUSTOM- 本地缓存命中：直接 `node <entry>`，跳过 `npm exec` 的每次 reify
       // （真机实测 npx 11–17s，直启 ~0.6s）。
@@ -119,14 +128,18 @@ export class AgentManager extends EventEmitter {
     this.agents.set(id, instance);
 
     child.stdin?.on('error', () => { /* agent died; the stream layer reports it */ });
-    child.stderr?.on('data', (data: Buffer) => {
-      for (const raw of data.toString().split(/\r?\n/)) {
+    // Chunk boundaries split lines and UTF-8 characters; the splitter reassembles both.
+    const stderrLines = new LineSplitter();
+    const emitStderr = (lines: string[]): void => {
+      for (const raw of lines) {
         const line = raw.trim();
         if (!line) { continue; }
         log(`[${name} stderr] ${line}`);
         this.emit('agent-stderr', { agentId: id, line });
       }
-    });
+    };
+    child.stderr?.on('data', (data: Buffer) => emitStderr(stderrLines.push(data)));
+    child.stderr?.on('end', () => emitStderr(stderrLines.end()));
     child.on('error', err => {
       logError(`Agent "${name}" process error`, err);
       this.emit('agent-error', { agentId: id, name, error: err });
@@ -180,13 +193,19 @@ export class AgentManager extends EventEmitter {
 
     const started = Date.now();
     log(`Caching agent runtime for "${agentName}" (${spec}) in ${dir}`);
-    const child = launchCommand(
-      'npm',
-      ['install', '--prefix', dir, '--no-audit', '--no-fund', '--loglevel=error', spec],
-      process.env,
-      dir,
-      ['ignore', 'ignore', 'pipe'],
-    );
+    let child: ChildProcess;
+    try {
+      child = launchCommand(
+        'npm',
+        ['install', '--prefix', dir, '--no-audit', '--no-fund', '--loglevel=error', spec],
+        process.env,
+        dir,
+        ['ignore', 'ignore', 'pipe'],
+      );
+    } catch (e) {
+      log(`Agent runtime cache for "${agentName}": could not start npm: ${(e as Error)?.message ?? String(e)}`);
+      return;
+    }
     this.installs.set(key, child);
     let stderr = '';
     let settled = false;
@@ -224,8 +243,9 @@ export class AgentManager extends EventEmitter {
     this.agents.delete(agentId);
     try {
       terminateTree(child, 'SIGTERM');
+      this.trackDying(child);
       const timer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) { terminateTree(child, 'SIGKILL'); }
+        if (isAlive(child)) { terminateTree(child, 'SIGKILL'); }
       }, FORCE_KILL_AFTER_MS);
       timer.unref?.();
       child.once('close', () => clearTimeout(timer));
@@ -234,6 +254,29 @@ export class AgentManager extends EventEmitter {
     }
     return true;
   }
+
+  /**
+   * The SIGKILL fallback timer is unref'd, so an extension host exiting within
+   * FORCE_KILL_AFTER_MS would leave a detached agent that ignores SIGTERM running.
+   * `process.on('exit')` only allows synchronous work: `process.kill` of the group is.
+   */
+  private trackDying(child: ChildProcess): void {
+    if (process.platform === 'win32' || !isAlive(child)) { return; } // taskkill /T /F is already forceful
+    this.dying.add(child);
+    if (this.dying.size === 1) { process.on('exit', this.killSurvivors); }
+    child.once('close', () => {
+      this.dying.delete(child);
+      if (this.dying.size === 0) { process.removeListener('exit', this.killSurvivors); }
+    });
+  }
+
+  private readonly killSurvivors = (): void => {
+    for (const child of this.dying) {
+      if (!isAlive(child) || child.pid === undefined) { continue; }
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
+    }
+    this.dying.clear();
+  };
 
   getAgent(agentId: string): AgentInstance | undefined {
     return this.agents.get(agentId);
@@ -250,7 +293,7 @@ export class AgentManager extends EventEmitter {
   dispose(): void {
     for (const timer of this.installTimers) { clearTimeout(timer); }
     this.installTimers.clear();
-    for (const child of this.installs.values()) { terminateTree(child, 'SIGTERM'); }
+    for (const child of this.installs.values()) { terminateTree(child, 'SIGTERM'); this.trackDying(child); }
     this.installs.clear();
     this.killAll();
     this.removeAllListeners();

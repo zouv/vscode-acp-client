@@ -20,7 +20,7 @@ import type { PermissionBridge } from '../handlers/PermissionBridge';
 import { log, logError } from '../utils/Logger';
 import { DeadlineExceededError, withDeadline } from '../utils/AsyncDeadline';
 import { RecoveryBudget, recoveryDelay, type RecoveryOptions } from './AgentRecovery';
-import { AgentConnector } from './AgentConnector';
+import { AgentConnector, SESSION_CLOSE_TIMEOUT_MS, SESSION_LOAD_TIMEOUT_MS } from './AgentConnector';
 import type { AgentManager } from './AgentManager';
 import { forgetApiKey, isAuthRequiredError, runAuthFlow } from './auth';
 import type { ConnectionInfo, ConnectionManager } from './ConnectionManager';
@@ -74,10 +74,13 @@ export class SessionManager extends EventEmitter {
   private readonly recoveries = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private readonly recoveryBudgets = new Map<string, RecoveryBudget>();
   private readonly retainedResumes = new Map<SessionInfo, { conn: ConnectionInfo; promise: Promise<void> }>();
+  /** load/resume in flight per session id: concurrent opens share one RPC instead of replaying twice. */
+  private readonly openings = new Map<string, { agentName: string; promise: Promise<SessionInfo> }>();
   private readonly store = new SessionStore();
   private readonly pending = new PendingSessionState();
   private readonly connector: AgentConnector;
   private readonly inFlightTurns = new Set<string>();
+  private readonly cancelHolds = new Set<string>();
   private readonly loadingSessionIds = new Set<string>();
   private readonly updateListener?: SessionUpdateListener;
   private historyStore: SessionHistoryStore | null = null;
@@ -117,16 +120,27 @@ export class SessionManager extends EventEmitter {
       const agentName = this.connector.nameOf(evt.agentId) ?? evt.name;
       log(`Agent ${agentName ?? evt.agentId} closed with code ${evt.code}`);
       // disconnectAgent() deregisters before killing, so a deliberate kill does not tear down twice
-      if (agentName && this.connector.agentIdOf(agentName) === evt.agentId) {
-        if (this.recoveries.has(agentName)) {
-          this.suspendAgent(agentName);
-        } else if (this.canRecover(agentName)) {
-          this.suspendAgent(agentName);
-          this.startRecovery(agentName);
-        } else { this.teardownAgent(agentName, false); }
-      }
+      if (agentName && this.connector.agentIdOf(agentName) === evt.agentId) { this.handleAgentGone(agentName, false); }
       this.emit('agent-closed', evt.agentId, evt.code, agentName);
     });
+    // The SDK can close the connection while the process lives on (stream error, oversized
+    // message): stop the process and recover exactly as if it had exited. Whichever of this and
+    // `agent-closed` runs first detaches the agent, so the other one is a no-op.
+    connectionManager.onConnectionLost(agentId => {
+      const agentName = this.connector.nameOf(agentId);
+      if (!agentName || this.connector.agentIdOf(agentName) !== agentId) { return; }
+      log(`Agent ${agentName} lost its ACP connection while still running; stopping the process`);
+      this.handleAgentGone(agentName, true);
+    });
+  }
+
+  private handleAgentGone(agentName: string, kill: boolean): void {
+    if (this.recoveries.has(agentName)) {
+      this.suspendAgent(agentName, kill);
+    } else if (this.canRecover(agentName)) {
+      this.suspendAgent(agentName, kill);
+      this.startRecovery(agentName);
+    } else { this.teardownAgent(agentName, kill); }
   }
 
   setHistoryStore(store: SessionHistoryStore): void { this.historyStore = store; }
@@ -186,6 +200,7 @@ export class SessionManager extends EventEmitter {
     this.elicitationBridge?.cancelSession(sessionId);
     const session = this.store.remove(sessionId);
     if (!session) { return; }
+    this.releaseCancelHold(sessionId);
     if (this.inFlightTurns.delete(sessionId)) { this.emit('turn-state-changed', sessionId, false); }
     this.loadingSessionIds.delete(sessionId);
     this.syncLiveSessions(session.agentName);
@@ -220,6 +235,7 @@ export class SessionManager extends EventEmitter {
     for (const id of this.store.idsForAgent(agentName)) {
       this.permissionBridge?.cancelSession(id);
       this.elicitationBridge?.cancelSession(id);
+      this.releaseCancelHold(id);
       if (this.inFlightTurns.delete(id)) { this.emit('turn-state-changed', id, false); }
     }
     this.emit('agent-disconnected', agentName);
@@ -288,12 +304,16 @@ export class SessionManager extends EventEmitter {
   private async resumeRetainedSessionOnce(session: SessionInfo, conn: ConnectionInfo, signal?: AbortSignal): Promise<void> {
     if (!this.connector.capabilities(session.agentName)?.resume) { throw new Error('Agent no longer supports session/resume.'); }
     const request = () => conn.connection.resumeSession({
-      sessionId: session.sessionId, cwd: session.cwd, mcpServers: [], ...this.metaFor(session.agentName),
+      sessionId: session.sessionId, cwd: session.cwd, mcpServers: [],
+      ...this.directoriesParam(session.agentName, session.additionalDirectories),
+      ...this.metaFor(session.agentName),
     });
+    const timed = () => withDeadline(() => this.connector.enqueue(conn.agentId, request, { label: 'ACP session/resume' }),
+      this.recoveryOptions.resumeTimeoutMs ?? 30_000, 'ACP session/resume', signal);
     let response: unknown;
     try {
-      response = await withDeadline(() => this.connector.enqueue(conn.agentId, () => signal ? request() : this.withAuthRetry(session.agentName, conn, request)),
-        this.recoveryOptions.resumeTimeoutMs ?? 30_000, 'ACP session/resume', signal);
+      // Auth UI runs outside the queue slot and the deadline; unattended recovery never authenticates.
+      response = await (signal ? timed() : this.withAuthRetry(session.agentName, conn, timed));
     } catch (error) {
       // A timed-out queued/manual RPC must not execute later on a still-live connection.
       if (error instanceof DeadlineExceededError && !signal) { this.suspendAgent(session.agentName, true); }
@@ -342,10 +362,12 @@ export class SessionManager extends EventEmitter {
 
     const conn = await this.ensureConnected(agentName, cwd);
     const agentId = this.agentIdFor(conn, agentName);
-    const session = await this.connector.enqueue(
+    // Auth dialogs run between queue slots, never while holding one.
+    const session = await this.withAuthRetry(agentName, conn, () => this.connector.enqueue(
       agentId,
-      () => this.newAcpSession(agentName, agentId, conn, cwd, additionalDirectories),
-    );
+      expired => this.newAcpSession(agentName, agentId, conn, cwd, additionalDirectories, expired),
+      { label: 'ACP session/new' },
+    ));
 
     this.emit('session-created', session.sessionId, agentName, 'new' satisfies SessionOrigin);
     if (focus) { this.focusSession(session.sessionId); }
@@ -376,19 +398,17 @@ export class SessionManager extends EventEmitter {
       this.elicitationBridge?.cancelSession(sessionId);
     }
 
-    if (this.getCachedCapabilities(agentName)?.close) {
-      const conn = this.connectionManager.getConnection(session.agentId);
-      if (conn) {
-        try {
-          await this.connector.enqueue(session.agentId, () => conn.connection.closeSession({ sessionId }));
-        } catch (e) {
-          logError(`session/close failed for ${sessionId} (continuing with local teardown)`, e);
-        }
-      }
-    }
-
+    const conn = this.getCachedCapabilities(agentName)?.close ? this.connectionManager.getConnection(session.agentId) : undefined;
     log(`Closing session ${sessionId} of agent ${agentName}`);
+    // Local teardown first: session/close is best-effort and must not hold the tab open.
     this.removeSession(sessionId, 'user');
+    if (!conn) { return; }
+    try {
+      await this.connector.enqueue(session.agentId, () => conn.connection.closeSession({ sessionId }),
+        { timeoutMs: SESSION_CLOSE_TIMEOUT_MS, label: 'ACP session/close' });
+    } catch (e) {
+      logError(`session/close failed for ${sessionId} (already removed locally)`, e);
+    }
   }
 
   /**
@@ -407,7 +427,7 @@ export class SessionManager extends EventEmitter {
     const conn = agentId ? this.connectionManager.getConnection(agentId) : undefined;
     if (agentId && conn && this.getCachedCapabilities(agentName)?.delete) {
       try {
-        await this.connector.enqueue(agentId, () => conn.connection.deleteSession({ sessionId }));
+        await this.connector.enqueue(agentId, () => conn.connection.deleteSession({ sessionId }), { label: 'ACP session/delete' });
         log(`Deleted session ${sessionId} on agent ${agentName}`);
       } catch (e) {
         logError(`session/delete failed for ${sessionId} (continuing with local removal)`, e);
@@ -488,6 +508,7 @@ export class SessionManager extends EventEmitter {
     } finally {
       // A late response from a dead connection must not end a new recovered turn.
       if (this.connectionManager.getConnection(session.agentId) === conn && this.inFlightTurns.delete(sessionId)) {
+        this.releaseCancelHold(sessionId);
         this.emit('turn-state-changed', sessionId, false);
       }
     }
@@ -542,6 +563,13 @@ export class SessionManager extends EventEmitter {
   async cancelTurn(sessionId: string): Promise<void> {
     const session = this.store.get(sessionId);
     if (!session) { return; }
+    // Requests the agent still sends before the cancelled prompt returns are answered
+    // `cancelled` without being shown; the hold ends with the turn (releaseCancelHold).
+    if (this.inFlightTurns.has(sessionId)) {
+      this.cancelHolds.add(sessionId);
+      this.permissionBridge?.holdCancelled(sessionId);
+      this.elicitationBridge?.holdCancelled(sessionId);
+    }
     // ACP: pending permission/form requests of a cancelled session must be answered or the agent hangs
     this.permissionBridge?.cancelSession(sessionId);
     this.elicitationBridge?.cancelSession(sessionId);
@@ -750,50 +778,89 @@ export class SessionManager extends EventEmitter {
    * The single decision point for "open a session that already exists": live ->
    * focus, else `session/load` (replays history) when supported, else resume.
    * Connects on demand because capabilities only exist after `initialize`.
+   * Concurrent opens of one id share a single load/resume (`openings`); later callers get 'live'.
    */
   async openExistingSession(
     agentName: string,
     sessionId: string,
-    opts: { cwd?: string; title?: string } = {},
+    opts: { cwd?: string; title?: string; additionalDirectories?: string[] } = {},
   ): Promise<'live' | 'load' | 'resume'> {
-    const existing = this.store.get(sessionId);
-    if (existing) {
-      if (existing.agentName !== agentName) { throw new Error('Session id is already open for another agent.'); }
-      if (!this.getConnectionForSession(sessionId)) { await this.ensureConnected(agentName, opts.cwd); }
-      if (opts.title && !existing.title) { existing.title = opts.title; }
-      this.focusSession(sessionId, { force: true });
-      return 'live';
-    }
+    const existing = this.liveOrJoin(agentName, sessionId);
+    if (existing) { return this.openedLive(agentName, sessionId, await existing, opts); }
     await this.ensureConnected(agentName, opts.cwd);
+    // Another caller may have started while we connected; loadSession/resumeSession register
+    // their `openings` entry synchronously, so nothing can slip in after this re-check.
+    const started = this.liveOrJoin(agentName, sessionId);
+    if (started) { return this.openedLive(agentName, sessionId, await started, opts); }
     const caps = this.getCachedCapabilities(agentName);
     if (caps?.load) {
-      await this.loadSession(agentName, sessionId, opts.cwd, opts.title);
+      await this.loadSession(agentName, sessionId, opts.cwd, opts.title, opts.additionalDirectories);
       return 'load';
     }
     if (caps?.resume) {
-      await this.resumeSession(agentName, sessionId, opts.cwd, opts.title);
+      await this.resumeSession(agentName, sessionId, opts.cwd, opts.title, opts.additionalDirectories);
       return 'resume';
     }
     throw new Error(`Agent "${agentName}" does not support loading or resuming sessions.`);
   }
 
-  async loadSession(agentName: string, sessionId: string, requestedCwd?: string, title?: string): Promise<SessionInfo> {
+  private async openedLive(agentName: string, sessionId: string, session: SessionInfo, opts: { cwd?: string; title?: string }): Promise<'live'> {
+    if (!this.getConnectionForSession(sessionId)) { await this.ensureConnected(agentName, opts.cwd); }
+    if (opts.title && !session.title) { session.title = opts.title; }
+    this.focusSession(sessionId, { force: true });
+    return 'live';
+  }
+
+  async loadSession(agentName: string, sessionId: string, requestedCwd?: string, title?: string, additionalDirectories?: string[]): Promise<SessionInfo> {
+    const existing = this.liveOrJoin(agentName, sessionId);
+    if (existing) { return this.refocus(agentName, sessionId, await existing, requestedCwd); }
+    return this.shareOpen(agentName, sessionId, () => this.loadSessionNow(agentName, sessionId, requestedCwd, title, additionalDirectories));
+  }
+
+  /** Light path: no history replay. */
+  async resumeSession(agentName: string, sessionId: string, requestedCwd?: string, title?: string, additionalDirectories?: string[]): Promise<SessionInfo> {
+    const existing = this.liveOrJoin(agentName, sessionId);
+    if (existing) { return this.refocus(agentName, sessionId, await existing, requestedCwd); }
+    return this.shareOpen(agentName, sessionId, () => this.resumeSessionNow(agentName, sessionId, requestedCwd, title, additionalDirectories));
+  }
+
+  /** The live session, or the open already in flight for it; undefined when the caller must open it. */
+  private liveOrJoin(agentName: string, sessionId: string): Promise<SessionInfo> | undefined {
     const existing = this.store.get(sessionId);
     if (existing) {
       if (existing.agentName !== agentName) { throw new Error('Session id is already open for another agent.'); }
-      if (!this.getConnectionForSession(sessionId)) { await this.ensureConnected(agentName, requestedCwd); }
-      this.focusSession(sessionId, { force: true });
-      return existing;
+      return Promise.resolve(existing);
     }
+    const opening = this.openings.get(sessionId);
+    if (!opening) { return undefined; }
+    if (opening.agentName !== agentName) { throw new Error('Session id is already being opened for another agent.'); }
+    return opening.promise;
+  }
+
+  private shareOpen(agentName: string, sessionId: string, run: () => Promise<SessionInfo>): Promise<SessionInfo> {
+    const job = { agentName, promise: undefined as unknown as Promise<SessionInfo> };
+    this.openings.set(sessionId, job);
+    job.promise = run().finally(() => { if (this.openings.get(sessionId) === job) { this.openings.delete(sessionId); } });
+    return job.promise;
+  }
+
+  private async refocus(agentName: string, sessionId: string, session: SessionInfo, cwd?: string): Promise<SessionInfo> {
+    if (!this.getConnectionForSession(sessionId)) { await this.ensureConnected(agentName, cwd); }
+    this.focusSession(sessionId, { force: true });
+    return session;
+  }
+
+  private async loadSessionNow(agentName: string, sessionId: string, requestedCwd?: string, title?: string, additionalDirectories?: string[]): Promise<SessionInfo> {
     const conn = await this.ensureConnected(agentName);
     if (!this.getCachedCapabilities(agentName)?.load) {
       throw new Error(`Agent "${agentName}" does not support session/load.`);
     }
     const cwd = this.sessionCwd(agentName, sessionId, requestedCwd);
     const agentId = this.agentIdFor(conn, agentName);
+    const directories = this.directoriesParam(agentName, additionalDirectories);
 
     // Registered before the RPC so replayed notifications have a session to land on
-    const placeholder = this.buildSession(conn, agentName, agentId, sessionId, cwd, null, { title });
+    const placeholder = this.buildSession(conn, agentName, agentId, sessionId, cwd, null, { title, ...directories });
     this.registerSession(placeholder);
     this.loadingSessionIds.add(sessionId);
     this.emit('session-created', sessionId, agentName, 'load' satisfies SessionOrigin);
@@ -802,12 +869,13 @@ export class SessionManager extends EventEmitter {
     this.emit('session-load-start', sessionId, agentName);
 
     try {
-      const response = await this.connector.enqueue(agentId, () => this.withAuthRetry(agentName, conn, () => conn.connection.loadSession({
+      const response = await this.withAuthRetry(agentName, conn, () => this.connector.enqueue(agentId, () => conn.connection.loadSession({
         sessionId,
         cwd,
         mcpServers: [],
+        ...directories,
         ...this.metaFor(agentName),
-      })));
+      }), { timeoutMs: SESSION_LOAD_TIMEOUT_MS, label: 'ACP session/load' }));
       if (this.disposed || this.store.get(sessionId) !== placeholder) {
         throw new Error('Session was closed while loading.');
       }
@@ -828,30 +896,24 @@ export class SessionManager extends EventEmitter {
     return placeholder;
   }
 
-  /** Light path: no history replay. */
-  async resumeSession(agentName: string, sessionId: string, requestedCwd?: string, title?: string): Promise<SessionInfo> {
-    const existing = this.store.get(sessionId);
-    if (existing) {
-      if (existing.agentName !== agentName) { throw new Error('Session id is already open for another agent.'); }
-      if (!this.getConnectionForSession(sessionId)) { await this.ensureConnected(agentName, requestedCwd); }
-      this.focusSession(sessionId, { force: true });
-      return existing;
-    }
+  private async resumeSessionNow(agentName: string, sessionId: string, requestedCwd?: string, title?: string, additionalDirectories?: string[]): Promise<SessionInfo> {
     const conn = await this.ensureConnected(agentName);
     if (!this.getCachedCapabilities(agentName)?.resume) {
       throw new Error(`Agent "${agentName}" does not support session/resume.`);
     }
     const cwd = this.sessionCwd(agentName, sessionId, requestedCwd);
     const agentId = this.agentIdFor(conn, agentName);
+    const directories = this.directoriesParam(agentName, additionalDirectories);
 
     let response: unknown;
     try {
-      response = await this.connector.enqueue(agentId, () => this.withAuthRetry(agentName, conn, () => conn.connection.resumeSession({
+      response = await this.withAuthRetry(agentName, conn, () => this.connector.enqueue(agentId, () => conn.connection.resumeSession({
         sessionId,
         cwd,
         mcpServers: [],
+        ...directories,
         ...this.metaFor(agentName),
-      })));
+      }), { label: 'ACP session/resume' }));
     } catch (e) {
       if (NOT_FOUND.test(String((e as Error | undefined)?.message || ''))) {
         this.historyStore?.forget(agentName, sessionId);
@@ -859,7 +921,7 @@ export class SessionManager extends EventEmitter {
       throw e;
     }
 
-    const session = this.buildSession(conn, agentName, agentId, sessionId, cwd, response, { title });
+    const session = this.buildSession(conn, agentName, agentId, sessionId, cwd, response, { title, ...directories });
     this.registerSession(session);
     this.emit('session-created', sessionId, agentName, 'resume' satisfies SessionOrigin);
     this.focusSession(sessionId, { force: true });
@@ -883,7 +945,9 @@ export class SessionManager extends EventEmitter {
     const { source, response } = await this.requestFork(agentName, sessionId, opts.messageId);
     log(`forkSession: ${sessionId} -> ${response.sessionId}${opts.messageId ? ` @ ${opts.messageId}` : ''}`);
 
-    await this.openExistingSession(agentName, response.sessionId, { cwd: source.cwd, title: source.title });
+    await this.openExistingSession(agentName, response.sessionId, {
+      cwd: source.cwd, title: source.title, additionalDirectories: source.additionalDirectories,
+    });
     const forked = this.store.get(response.sessionId);
     if (!forked) { throw new Error('The forked session could not be opened.'); }
     return forked;
@@ -931,9 +995,10 @@ export class SessionManager extends EventEmitter {
     const response = await this.connector.enqueue(agentId, () => conn.connection.unstable_forkSession({
       sessionId,
       cwd: source.cwd,
+      // The source's roots were already accepted by this agent, so no capability re-check.
       ...(source.additionalDirectories?.length ? { additionalDirectories: source.additionalDirectories } : {}),
       ...(messageId ? { _meta: forkPointMeta(messageId) } : {}),
-    }));
+    }), { label: 'ACP session/fork' });
     return { source, conn, agentId, response };
   }
 
@@ -988,6 +1053,8 @@ export class SessionManager extends EventEmitter {
     this.pending.clear();
     if (this.sessionUpdateHandler) { this.sessionUpdateHandler.onRelease = undefined; }
     this.inFlightTurns.clear();
+    this.cancelHolds.clear();
+    this.openings.clear();
     this.loadingSessionIds.clear();
   }
 
@@ -1072,36 +1139,50 @@ export class SessionManager extends EventEmitter {
     session.configOptions = r?.configOptions ?? null;
   }
 
+  /**
+   * Only explicitly requested, absolute directories, and only if the agent advertises
+   * support — the same rule for session/new, load, resume and fork.
+   */
+  private directoriesParam(agentName: string, directories: readonly string[] | undefined): { additionalDirectories?: string[] } {
+    if (!this.getCachedCapabilities(agentName)?.additionalDirectories) { return {}; }
+    const extra = (directories ?? []).map(p => p?.trim()).filter((p): p is string => !!p && isAbsolute(p));
+    return extra.length ? { additionalDirectories: extra } : {};
+  }
+
+  private releaseCancelHold(sessionId: string): void {
+    if (!this.cancelHolds.delete(sessionId)) { return; }
+    this.permissionBridge?.releaseCancelled(sessionId);
+    this.elicitationBridge?.releaseCancelled(sessionId);
+  }
+
   private async newAcpSession(
     agentName: string,
     agentId: string,
     conn: ConnectionInfo,
     cwd: string,
     additionalDirectories: string[],
+    expired: AbortSignal,
   ): Promise<SessionInfo> {
-    // Only explicitly requested, absolute directories, and only if the agent advertises support
-    const extra = this.getCachedCapabilities(agentName)?.additionalDirectories
-      ? additionalDirectories.map(p => p?.trim()).filter(p => !!p && isAbsolute(p))
-      : [];
+    const directories = this.directoriesParam(agentName, additionalDirectories);
     const request = {
       cwd,
       mcpServers: [],
-      ...(extra.length ? { additionalDirectories: extra } : {}),
+      ...directories,
       ...this.metaFor(agentName),
     };
 
     // A failed session/new must not reap the process: sibling sessions live on it.
     let response: NewSessionResponse;
     try {
-      response = await this.withAuthRetry(agentName, conn, () => conn.connection.newSession(request));
+      response = await conn.connection.newSession(request);
     } catch (e) {
       logError('Failed to create session', e);
       throw e;
     }
+    // The caller already got a timeout: an answer this late must not register a tab nobody opened.
+    if (expired.aborted) { throw new Error('session/new answered after its deadline.'); }
 
-    const session = this.buildSession(conn, agentName, agentId, response.sessionId, cwd, response, {
-      additionalDirectories: extra,
-    });
+    const session = this.buildSession(conn, agentName, agentId, response.sessionId, cwd, response, directories);
     // Registered synchronously with the response so notifications racing the caller's
     // continuation are persisted instead of dropped
     this.registerSession(session);

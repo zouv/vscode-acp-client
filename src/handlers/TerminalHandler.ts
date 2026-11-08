@@ -17,9 +17,18 @@ import type {
 import { log, logError } from '../utils/Logger';
 import { TailBuffer } from '../utils/TailBuffer';
 import { terminateTree } from '../utils/ProcessTree';
-import { spawnTerminalCommand } from '../utils/TerminalCommand';
+import { mergeEnv, spawnTerminalCommand } from '../utils/TerminalCommand';
+import { RetainedPool } from './RetainedPool';
 
 const DEFAULT_OUTPUT_LIMIT = 1024 * 1024;
+/** Released terminals kept on screen (across all connections when the pool is shared). */
+export const RETAINED_TERMINAL_CAP = 10;
+
+export function newRetainedTerminalPool(): RetainedPool<vscode.Terminal> {
+  return new RetainedPool<vscode.Terminal>(RETAINED_TERMINAL_CAP, terminal => {
+    try { terminal.dispose(); } catch { /* best effort */ }
+  });
+}
 
 export interface TerminalSnapshot {
   output: string;
@@ -45,7 +54,14 @@ export class TerminalHandler {
   private disposed = false;
   private readonly terminals = new Map<string, ManagedTerminal>();
   private nextId = 1;
-  private readonly retained = new Set<vscode.Terminal>();
+  private readonly ownsRetained: boolean;
+  private readonly retained: RetainedPool<vscode.Terminal>;
+
+  /** `retained` is shared by the ConnectionManager so the cap holds across reconnects. */
+  constructor(retained?: RetainedPool<vscode.Terminal>) {
+    this.ownsRetained = !retained;
+    this.retained = retained ?? newRetainedTerminalPool();
+  }
 
   async createTerminal(params: CreateTerminalRequest): Promise<CreateTerminalResponse> {
     if (this.disposed) { throw new Error('Terminal handler is disposed.'); }
@@ -53,8 +69,7 @@ export class TerminalHandler {
     const args = params.args ?? [];
     log(`createTerminal: ${params.command} (id=${terminalId})`);
 
-    const env: Record<string, string> = { ...process.env } as Record<string, string>;
-    for (const v of params.env ?? []) { env[v.name] = v.value; }
+    const env = mergeEnv(process.env, Object.fromEntries((params.env ?? []).map(v => [v.name, v.value])));
 
     const child = spawnTerminalCommand(params.command, args, params.cwd || undefined, env);
 
@@ -66,7 +81,8 @@ export class TerminalHandler {
         open: () => writer.fire(`$ ${params.command} ${args.join(' ')}\r\n`),
         close: () => {
           this.retained.delete(vsTerminal);
-          if (child.exitCode === null) { terminateTree(child, 'SIGKILL'); }
+          // A reaped pid may already belong to another process.
+          if (child.exitCode === null && child.signalCode === null) { terminateTree(child, 'SIGKILL'); }
           writer.dispose();
         },
       },
@@ -142,6 +158,7 @@ export class TerminalHandler {
 
   async killTerminal(params: KillTerminalRequest): Promise<KillTerminalResponse> {
     const t = this.require(params.terminalId);
+    if (t.exited) { return {}; }
     try {
       terminateTree(t.process, 'SIGKILL');
     } catch (e) {
@@ -162,7 +179,7 @@ export class TerminalHandler {
     return {};
   }
 
-  /** Stops running commands but leaves their VS Code terminals (and output) in place. */
+  /** Stops running commands but leaves their VS Code terminals (and output) in place, up to the retention cap. */
   killAll(): void {
     for (const t of this.terminals.values()) {
       if (!t.exited) { try { terminateTree(t.process, 'SIGKILL'); } catch { /* already gone */ } }
@@ -172,19 +189,21 @@ export class TerminalHandler {
     this.terminals.clear();
   }
 
+  /** The connection is gone: stop its commands and refuse late `terminal/create` calls. */
+  retire(): void {
+    this.disposed = true;
+    this.killAll();
+  }
+
   dispose(): void {
-    if (this.disposed) { return; }
     this.disposed = true;
     for (const t of this.terminals.values()) {
       if (!t.exited) { try { terminateTree(t.process, 'SIGKILL'); } catch { /* best effort */ } }
       try { t.vsTerminal.dispose(); } catch { /* best effort */ }
       t.writer.dispose();
     }
-    for (const terminal of this.retained) {
-      try { terminal.dispose(); } catch { /* best effort */ }
-    }
     this.terminals.clear();
-    this.retained.clear();
+    if (this.ownsRetained) { this.retained.clear(); }
   }
 
   private require(terminalId: string): ManagedTerminal {
