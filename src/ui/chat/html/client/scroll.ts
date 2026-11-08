@@ -28,6 +28,11 @@ export const scrollClient = `
   var restoreEpoch = 0;
   var anchorPending = false;
 
+  // [CUSTOM- Tail 的**根本保证**（见 init 里的说明）：记录节点高度一变就把视口压回底部。
+  // 观察的是 #messages 的直系子节点，因为它们是高度变化的发生地。
+  var recordObserver = null;
+  var observedRecords = null;
+
   // [CUSTOM- 内层滚动卡片：焦点门控 + 自动追尾（2026-10-28）。
   //
   // 问题：卡片内部自带纵向滚动条（.diff-body / .tool-seg-out / .thought-body /
@@ -543,7 +548,17 @@ export const scrollClient = `
           if (changed && changed.nodeType === 3) { changed = changed.parentNode; }
           if (changed && mutatedNodes.indexOf(changed) < 0) { mutatedNodes.push(changed); }
           var added = records[i].addedNodes;
-          if (added && added.length > 0) { addedLists.push(Array.prototype.slice.call(added)); }
+          if (added && added.length > 0) {
+            addedLists.push(Array.prototype.slice.call(added));
+            // [CUSTOM- 新记录节点同时纳入 Tail 的高度观察（只认 #messages 的直系子节点）。
+            for (var a = 0; a < added.length; a++) {
+              if (added[a] && added[a].nodeType === 1 && added[a].parentNode === container) { watchRecord(added[a]); }
+            }
+          }
+          var removed = records[i].removedNodes;
+          if (removed && removed.length > 0) {
+            for (var r = 0; r < removed.length; r++) { unwatchRecord(removed[r]); }
+          }
         }
         reclaimActive();
         if ((mutatedNodes.length === 0 && addedLists.length === 0 && tailQueue.length === 0) || tailPending) { return; }
@@ -551,6 +566,24 @@ export const scrollClient = `
         if (NS.dom && NS.dom.schedule) { NS.dom.schedule(flushTails); } else { flushTails(); }
       });
       tailObserver.observe(container, { childList: true, subtree: true, characterData: true });
+    }
+    // [CUSTOM- Tail 贴底的**最后一道保证**：内容高度一变，同一帧内把视口压回底部。
+    //
+    // 为什么只靠 follow() 不够：它只覆盖"写入者主动喊我们"的那些长高（append / markdown
+    // 回填 / 工具输出），而真实的长高来源里还有一批是异步、且不经过任何写入者的：
+    // markdown 分片回填的后续片、图片解码完成、Mermaid 渲染、字体替换、<details> 展开动画……
+    // 任何一次落在 follow 那一帧**之后**的长高，都会让视口停在半空，直到下一条消息再次触发
+    // follow —— 流式刷得越快，"没贴底"的窗口就越多。这就是"开了 Tail 还是贴不住"的机械成因。
+    //
+    // ResizeObserver 的回调在**布局之后、绘制之前**投递：此时读 scrollHeight 不会再触发重排，
+    // 写 scrollTop 也不会画出一帧"差一截"的中间态。观察记录节点（#messages 的直系子节点）而不是
+    // 容器本身 —— 容器尺寸不变，变的是里面的记录；留白（输入卡 / 抽屉）仍由 reflowNow 那条链负责。
+    if (typeof window.ResizeObserver === 'function') {
+      recordObserver = new window.ResizeObserver(onRecordResize);
+      observedRecords = typeof Set === 'function' ? new Set() : null;
+      watchAllRecords();
+    } else {
+      console.warn('[vac] ResizeObserver unavailable: Tail may fall short while content grows asynchronously');
     }
     // [CUSTOM- 「我拖了滚动条，但它没动」——2026-10-05 那次真机日志里，面板停在
     // st=43 而 max=19604，**没有任何一次程序写接近过 43**（80 次程序写全在贴底跟到底），
@@ -1017,6 +1050,39 @@ export const scrollClient = `
       // 面板却不在底部"最可能的机械成因。读的是刚写过的那个值，不额外触发重排。
       if (container.scrollTop < max - 1) { logScrollState('clamped-short', true); }
     });
+  }
+
+  // --- Tail 的高度观察（见 init 里的 rationale） ------------------------------
+
+  function watchRecord(node) {
+    if (!recordObserver || !observedRecords || !node || node.nodeType !== 1) { return; }
+    if (observedRecords.has(node)) { return; }
+    observedRecords.add(node);
+    recordObserver.observe(node);
+  }
+
+  function unwatchRecord(node) {
+    if (!recordObserver || !observedRecords || !node) { return; }
+    if (!observedRecords.delete(node)) { return; }
+    try { recordObserver.unobserve(node); } catch (e) { /* already detached */ }
+  }
+
+  function watchAllRecords() {
+    if (!container || !container.children) { return; }
+    for (var i = 0; i < container.children.length; i++) { watchRecord(container.children[i]); }
+  }
+
+  /**
+   * 任何一条记录长高/缩矮都会到这里。Tail 开着时把视口压回底部；其余情况什么都不做
+   * （pinned / Jump 的判定仍由 follow() 与 scroll 事件负责，这里不抢）。
+   */
+  function onRecordResize() {
+    if (!container || !tail || gestureHeld() || restoreTarget !== null) { return; }
+    // 关着的抽屉/卡片重建也会触发它；只关心"还没到底"这一种情况。
+    var max = container.scrollHeight - container.clientHeight;
+    if (max <= 0) { return; }
+    if (container.scrollTop >= max - 1) { return; }
+    writeTop(max);
   }
 
   /** Unconditional jump — used when switching sessions or after a replay. */

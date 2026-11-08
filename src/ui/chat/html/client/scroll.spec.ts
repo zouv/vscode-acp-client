@@ -9,6 +9,7 @@ interface ScrollHarness {
   jumpBtn: any;
   flush(): void;
   clickJump(): void;
+  triggerResize(): void;
 }
 
 function createClient(ui: Record<string, unknown> = {}): ScrollHarness {
@@ -49,7 +50,16 @@ function createClient(ui: Record<string, unknown> = {}): ScrollHarness {
     addEventListener: vi.fn(),
     elementsFromPoint: () => [],
   };
+  const resizeObservers: Array<{ callback: (entries: unknown[]) => void }> = [];
+  class FakeResizeObserver {
+    callback: (entries: unknown[]) => void;
+    constructor(callback: (entries: unknown[]) => void) { this.callback = callback; resizeObservers.push(this); }
+    observe(_target?: unknown) { /* no layout in the harness */ }
+    unobserve(_target?: unknown) { /* no layout in the harness */ }
+    disconnect() { /* no layout in the harness */ }
+  }
   const window: any = {
+    ResizeObserver: FakeResizeObserver,
     getComputedStyle: () => ({
       paddingBottom: '0px',
       overflowX: 'visible',
@@ -88,6 +98,9 @@ function createClient(ui: Record<string, unknown> = {}): ScrollHarness {
       for (const frame of frames.splice(0)) { frame(); }
     },
     clickJump() { jumpListeners.click({}); },
+    triggerResize() {
+      for (const observer of resizeObservers) { observer.callback([{ target: {} }]); }
+    },
   };
 }
 
@@ -171,5 +184,47 @@ describe('chat scroll: jumpToTop', () => {
     expect(container.scrollTop).toBe(0);
     expect(scroll.isPinned()).toBe(true);
     expect(jumpBtn.hidden).toBe(true);
+  });
+});
+
+
+describe('chat scroll: Tail re-pins on asynchronous growth', () => {
+  // [CUSTOM- follow() only covers growth announced by a writer (append / markdown
+  // patch / tool output). Growth that lands AFTER that frame — markdown slices, image
+  // decode, mermaid, font swap — used to leave the viewport short of the bottom until
+  // the next message triggered another follow. The record ResizeObserver is what
+  // makes "Tail on" mean "always at the bottom"; these tests pin that behaviour.
+  it('writes the new bottom when a record grew after the follow frame', () => {
+    const { container, scroll, triggerResize } = createClient();
+    scroll.setTail(true, true);
+    expect(container.scrollTop).toBe(3000);
+
+    container.scrollTop = 1500;      // the viewport is now above the bottom…
+    container.scrollHeight = 4000;   // …because a record grew underneath it.
+    triggerResize();
+
+    expect(container.scrollTop).toBe(3500); // scrollHeight 4000 - clientHeight 500
+  });
+
+  it('does not move the viewport while Tail is off', () => {
+    const { container, scroll, triggerResize } = createClient();
+    scroll.setTail(false, false);
+    container.scrollTop = 1500;
+    container.scrollHeight = 4000;
+
+    triggerResize();
+
+    expect(container.scrollTop).toBe(1500); // a reader parked in history is never dragged back
+  });
+
+  it('is a no-op when the viewport is already at the bottom', () => {
+    const { container, scroll, triggerResize } = createClient();
+    scroll.setTail(true, true);
+    container.scrollTop = 3500;
+    container.scrollHeight = 4000;
+
+    triggerResize();
+
+    expect(container.scrollTop).toBe(3500);
   });
 });

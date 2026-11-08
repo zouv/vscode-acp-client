@@ -412,6 +412,19 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * here keeps one opener (which already focuses early) and avoids a second load.
    */
   private readonly openingHistorySessions = new Set<string>();
+  /**
+   * [CUSTOM- Alt+T ("reopen the last closed session") undo stack, most recent last.
+   *
+   * Entries are captured from the live `SessionInfo` just before the close, because
+   * `session-closed` fires after the store already dropped it. Bounded so a long
+   * session never keeps stale descriptors alive.
+   */
+  private readonly recentlyClosed: Array<{
+    agentName: string; sessionId: string; cwd: string; title?: string; additionalDirectories?: string[];
+  }> = [];
+  private static readonly RECENTLY_CLOSED_LIMIT = 20;
+  /** Sessions with a rewind in flight (one fork per session at a time). */
+  private readonly rewinding = new Set<string>();
   /** sessionId → entry id of the single plan card (ACP replaces the list). */
   private readonly planEntryIds: Map<string, string> = new Map();
   // [CUSTOM- Sessions that produced output while they were NOT the
@@ -1437,6 +1450,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         return;
       // [CUSTOM-20261029] 引用标签在草稿页也能点（还没有会话），所以放在守卫之前。
       // 带 sessionId 的消息仍按旧语义校验：会话已不存在就丢弃，避免按错目录解析相对路径。
+      // [CUSTOM- Alt+T：还原上一个关闭的会话。面板级动作（不绑定会话），
+      // 因此必须放在下面"必须有活会话"的那张表之前。
+      case 'restoreLastClosed':
+        this.restoreLastClosed();
+        return;
       case 'openFile': {
         const requested = (msg as { sessionId?: unknown }).sessionId;
         const requestedSession = typeof requested === 'string' && requested ? requested : undefined;
@@ -1524,6 +1542,14 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         void this.sessionManager.forkSession(agentName, sessionId, messageId ? { messageId } : {})
           .then(() => this.refreshSessions())
           .catch(e => this.reportError(sessionId, e));
+        return;
+      }
+      // [CUSTOM- Rewind：把会话截断到这条**用户**记录之前，并把它的正文交回面板。
+      // ACP 没有"回退"原语，但可以用 fork 表达同一件事：在**上一条助手回复**处 fork
+      // （适配器的 fork 点是含该消息的），新会话的历史就停在用户这条之前。
+      // 文件改动不会回退（适配器未通过 ACP 暴露 rewindFiles）。
+      case 'rewindTo': {
+        void this.rewindTo(sessionId, (msg as { entryId?: string }).entryId ?? '');
         return;
       }
       // [CUSTOM- 会话 tab 右键：在同一个目录里再开一个新会话（目录取源会话的，
@@ -3167,11 +3193,124 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * 它在 `session/close` 之前先 `cancelTurn`，并保证待决的权限/表单请求被回答（ACP 契约）。
    */
   private async closeSession(agentName: string, sessionId: string): Promise<void> {
+    // [CUSTOM- Alt+T 的撤销栈：关掉之后 store 里就没有这条会话了，所以描述符必须
+    // 在关闭**之前**取下来（side chat 不参与还原 —— 它不是一个可单独重开的普通会话）。
+    const closing = this.sessionManager.getSession(sessionId);
+    const undo = closing && !closing.sideChat ? {
+      agentName,
+      sessionId,
+      cwd: closing.cwd,
+      title: closing.title,
+      additionalDirectories: closing.additionalDirectories,
+    } : undefined;
     try {
       await this.sessionManager.closeSession(agentName, sessionId);
+      if (undo) { this.rememberClosed(undo); }
     } catch (e) {
       this.reportError(sessionId, e);
     }
+  }
+
+  private rememberClosed(entry: {
+    agentName: string; sessionId: string; cwd: string; title?: string; additionalDirectories?: string[];
+  }): void {
+    // Re-closing the same id (close → reopen → close) must not leave two entries.
+    for (let i = this.recentlyClosed.length - 1; i >= 0; i--) {
+      if (this.recentlyClosed[i].sessionId === entry.sessionId) { this.recentlyClosed.splice(i, 1); }
+    }
+    this.recentlyClosed.push(entry);
+    while (this.recentlyClosed.length > ChatPanelHost.RECENTLY_CLOSED_LIMIT) { this.recentlyClosed.shift(); }
+  }
+
+  /**
+   * [CUSTOM- Alt+T: reopen the most recently closed session (a panel-level action,
+   * not bound to the focused session). Reuses the history-open path, so a session
+   * is replayed/resumed exactly as picking it from history would; already-live or
+   * no-longer-configured entries are skipped.
+   */
+  /**
+   * [CUSTOM- Rewind to a user message: keep the conversation up to the reply just
+   * before it, retire the old tab, and hand the message text back to the composer.
+   *
+   * ACP has no rewind primitive, but a fork expresses the same thing: the adapter's
+   * fork point is the assistant message id and the fork keeps everything up to it,
+   * so forking at the previous reply ends the new session exactly before this user
+   * message. File changes are NOT reverted (the adapter does not expose
+   * `rewindFiles` over ACP). Rewinding before the first question is a fresh session
+   * in the same place.
+   */
+  private async rewindTo(sessionId: string, entryId: string): Promise<void> {
+    const session = sessionOf(this.sessionManager, sessionId);
+    const entry = entryId ? this.transcripts.getEntry(sessionId, entryId) : undefined;
+    if (!session || !entry || entry.kind !== 'user') { return; }
+    if (this.isSessionRunning(sessionId) || this.sessionManager.isLoading(sessionId)) {
+      this.reportError(sessionId, new Error('Stop the current turn before rewinding.'));
+      return;
+    }
+    if (this.rewinding.has(sessionId)) { return; }
+    this.rewinding.add(sessionId);
+    const text = entry.text ?? '';
+    const agentName = session.agentName;
+    try {
+      const entries = this.transcripts.peekEntries(sessionId);
+      const index = entries.findIndex(e => e.id === entryId);
+      let forkAt: string | undefined;
+      // The nearest reply BEFORE this user message is the fork point.
+      for (let i = index - 1; i >= 0; i--) {
+        const candidate = entries[i];
+        if (candidate.kind === 'assistant') { forkAt = candidate.messageId; break; }
+      }
+      log(`${LOG_PREFIX}: rewind ${sessionId} to entry ${entryId} (forkAt=${forkAt ?? 'new session'})`);
+      let nextId: string;
+      if (forkAt) {
+        const forked = await this.sessionManager.forkSession(agentName, sessionId, { messageId: forkAt });
+        nextId = forked.sessionId;
+      } else {
+        const created = await this.sessionManager.createSession(agentName, {
+          cwd: session.cwd,
+          additionalDirectories: session.additionalDirectories,
+          focus: true,
+        });
+        nextId = created.sessionId;
+      }
+      // The new tab takes the old one's place (before the old one is closed).
+      this.placeSessionAfterInTabOrder(sessionId, nextId);
+      // The fork is live and focused; retire the old tab. It stays undoable via Alt+T.
+      await this.closeSession(agentName, sessionId);
+      this.post({ type: 'rewindReady', sessionId: nextId, text });
+      this.refreshSessions();
+    } catch (e) {
+      this.reportError(sessionId, e);
+    } finally {
+      this.rewinding.delete(sessionId);
+    }
+  }
+
+  private restoreLastClosed(): void {
+    while (this.recentlyClosed.length > 0) {
+      const rec = this.recentlyClosed.pop()!;
+      if (this.sessionManager.getSession(rec.sessionId)) { continue; }
+      if (!this.panelAgent(rec.agentName)) {
+        log(`${LOG_PREFIX}: cannot reopen ${rec.sessionId}: agent "${rec.agentName}" is not configured`);
+        continue;
+      }
+      log(`${LOG_PREFIX}: reopening last closed session ${rec.sessionId} (Alt+T)`);
+      if (rec.additionalDirectories?.length) {
+        // The history path reads the extra roots from the cache; make sure the ones the
+        // live session had are there (agent-side lists never carried them).
+        this.sessionManager.getHistoryStore()?.setAdditionalDirectories(
+          rec.agentName, rec.sessionId, rec.additionalDirectories);
+      }
+      void this.handleOpenHistorySession(rec.agentName, rec.sessionId, rec.cwd, rec.title, false, true)
+        .then(opened => {
+          if (!opened) {
+            this.reportError(rec.sessionId, new Error('Could not reopen the last closed session.'));
+          }
+        })
+        .catch(e => this.reportError(rec.sessionId, e));
+      return;
+    }
+    this.reportError(null, new Error('No recently closed session to reopen.'));
   }
 
   /**

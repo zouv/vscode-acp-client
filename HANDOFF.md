@@ -14,9 +14,9 @@
 ## 状态快照
 
 - **最近更新**：2026-11-09
-- **整体状态**：v1.13.0 已发布为 GitHub Latest（tag `v1.13.0`）。本轮为「长会话性能优化 + ACP 接入层修复 + 聊天面板缺陷修复与新功能（Alt+W 关闭会话、页签栏滚轮横向滚动、加载中切换页签）」；代码与自动验证全部完成，待真机验收。
+- **整体状态**：v1.13.1 已发布为 GitHub Latest（tag `v1.13.1`）。本次为「Tail 贴底根治（ResizeObserver + 关闭滚动锚定）、Alt+T 还原关闭的会话、用户消息 Rewind to here」；代码与自动验证全部完成，待真机验收。
 - **当前分支（必填）**：`main`；发布提交已推送至 `origin/main`。
-- **最后验证状态**（2026-11-09）：typecheck / lint / webview 语法 / 生产构建 ✅；unit **378 / 47 文件**、真实宿主 **775 passing** ✅；VSIX 已打包并上传至 GitHub Release（见发布记录）。
+- **最后验证状态**（2026-11-09）：typecheck / lint / webview 语法 / 生产构建 ✅；unit **381 / 47 文件**、真实宿主 **781 passing** ✅；VSIX 已打包并上传至 GitHub Release（见发布记录）。
 
 ## 当前任务（In Progress）
 

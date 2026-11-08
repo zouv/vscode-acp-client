@@ -1608,6 +1608,23 @@ export const composerClient = `
   }
 
   function focusInput() { input.focus(); }
+
+  /**
+   * [CUSTOM- 用一段正文**替换**输入框内容（Rewind 把被回退的提问放回来）。
+   * 与 appendQuote 同一组收尾：记为当前会话的草稿、重算高度与发送可用性、聚焦并把光标放到末尾。
+   */
+  function setInputText(text) {
+    var value = String(text == null ? '' : text).replace(/\\r\\n?/g, '\\n');
+    input.value = value;
+    stashDraft();
+    persistDraftsSoon();
+    hideSlash();
+    autoGrow();
+    refreshSendState();
+    refreshSteerHint();
+    if (input.setSelectionRange) { input.setSelectionRange(value.length, value.length); }
+    input.focus();
+  }
   // [CUSTOM- Lets boot.ts decide whether it is appropriate to move
   // the caret into the composer (no session / still loading = it is not).
   function isComposable() { return canCompose(); }
@@ -1644,6 +1661,7 @@ export const composerClient = `
     rememberImage: rememberImage,
     setLoading: setLoading,
     appendQuote: appendQuote,
+    setInputText: setInputText,
     focusInput: focusInput,
     isComposable: isComposable,
     forgetDraft: forgetDraft,

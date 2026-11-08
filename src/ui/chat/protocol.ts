@@ -369,6 +369,8 @@ export type ExtToChat =
   // 隐含 `streaming: true`（只有仍在流式的记录才会走增量）。客户端发现 offset 对不上
   // （有缺口/文本分叉）就发 `resyncEntry`，宿主回一条整份的 `append`。
   | { type: 'appendText'; sessionId: string; entryId: string; offset: number; text: string }
+  // Rewind 完成：把被回退的那条用户消息正文交回面板，由它填进输入框。
+  | { type: 'rewindReady'; sessionId: string; text: string }
   | { type: 'toolUpdate'; sessionId: string; entryId: string; tool: ToolCallView }
   | { type: 'meta'; sessionId: string; meta: SessionMeta }
   | { type: 'attachments'; sessionId: string; attachments: Attachment[] }
@@ -580,6 +582,10 @@ export type ChatToExt =
   | { type: 'needToolView'; sessionId: string; entryId: string; toolCallId: string }
   // `appendText` 对不上时客户端要一份整条记录（宿主定向回 `append`）。会话作用域。
   | { type: 'resyncEntry'; sessionId: string; entryId: string }
+  // Rewind：把会话截断到这条**用户**记录之前（fork 到上一条助手回复），原文回填输入框。
+  | { type: 'rewindTo'; sessionId: string; entryId: string }
+  // Alt+T：还原上一个关闭的会话。面板级动作，不带 sessionId（下面那张表要求活会话）。
+  | { type: 'restoreLastClosed' }
   | { type: 'executeCommand'; command: string };
 
 export interface RenderMarkdownItem {

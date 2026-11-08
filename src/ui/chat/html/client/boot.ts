@@ -687,6 +687,14 @@ export const bootClient = `
         syncDrawers();
         break;
 
+      // [CUSTOM- Rewind 完成：宿主已把会话截断到这条提问之前，把原文交回输入框。
+      // 只认当前会话 —— 焦点已经被新（fork 出来的）会话接走时才会命中。
+      case 'rewindReady':
+        if (message.sessionId === currentSessionId && NS.composer && NS.composer.setInputText) {
+          NS.composer.setInputText(message.text);
+        }
+        break;
+
       case 'sideQuote':
         if (message.sessionId === currentSessionId
           && NS.composer && NS.composer.appendQuote) {

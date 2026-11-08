@@ -66,6 +66,7 @@ describe('shortcut map normalization', () => {
       previousSession: null,
       nextSession: DEFAULT_SHORTCUTS.nextSession,
       closeSession: DEFAULT_SHORTCUTS.closeSession,
+      restoreClosed: DEFAULT_SHORTCUTS.restoreClosed,
     });
     expect(new Set(Object.values(normalized).filter(Boolean)).size)
       .toBe(Object.values(normalized).filter(Boolean).length);
@@ -79,6 +80,7 @@ describe('shortcut map normalization', () => {
       previousSession: DEFAULT_SHORTCUTS.previousSession,
       nextSession: DEFAULT_SHORTCUTS.nextSession,
       closeSession: DEFAULT_SHORTCUTS.closeSession,
+      restoreClosed: DEFAULT_SHORTCUTS.restoreClosed,
     });
   });
 });

@@ -8,7 +8,8 @@ export const shortcutsClient = `
     focusInput: 'Alt+KeyI',
     previousSession: 'Alt+KeyP',
     nextSession: 'Alt+KeyN',
-    closeSession: 'Alt+KeyW'
+    closeSession: 'Alt+KeyW',
+    restoreClosed: 'Alt+KeyT'
   };
   var installed = false;
   var navigationKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'];
@@ -78,6 +79,8 @@ export const shortcutsClient = `
     // 与 tab 上的 × / 中键 / 右键 Close 共用 closeModel 那条路（草稿丢弃、待恢复遗忘、
     // 运行中二次确认都在那里，不另写一份）。
     else if (action === 'closeSession' && NS.tabs && NS.tabs.closeActive) { NS.tabs.closeActive(); }
+    // 还原上一个关闭的会话：宿主持有撤销栈（关会话的地方只有它），这里只需发一个面板级请求。
+    else if (action === 'restoreClosed' && NS.bridge && NS.bridge.post) { NS.bridge.post({ type: 'restoreLastClosed' }); }
   }
 
   function onKeyDown(event) {

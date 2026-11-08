@@ -799,6 +799,13 @@ export function styles(): string {
      对照：.tab-strip 同样是 flex + overflow，但它的子项早就写了 flex: 0 0 auto，所以从没出过这个问题。 */
   .messages > * { flex: 0 0 auto; }
 
+  /* [CUSTOM- Tail 开着时关掉浏览器的「滚动锚定」。
+     锚定会在「视口上方的元素变高」时替我们改 scrollTop（例如上方某条 markdown 回填变高、
+     或一张图片解码完成）。Tail 的语义是**永远贴住最后一行**，任何第三方替我们改动 scrollTop
+     都只会和 scroll.ts 的贴底写入互相拉扯，表现为抖动或差一截。Tail 一关（用户往上翻、
+     或切到记着中间位置的会话）就恢复默认的锚定行为。 */
+  body[data-tail="on"] .messages { overflow-anchor: none; }
+
   /* [CUSTOM- 内层滚动卡片的「焦点」指示（2026-10-28）：滚轮默认滚整个面板，
      只有用户**点进**某张卡片之后，这张卡片内部的滚动区才吃滚轮（见 client/scroll.ts
      的 setActive）。没有这个环，用户就无从知道"我现在的滚轮会滚谁"。

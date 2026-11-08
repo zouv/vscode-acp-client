@@ -1,7 +1,7 @@
 // 面板快捷键的纯逻辑：规范串、默认值、脏值消解与重复冲突判定。
 
 export const SHORTCUT_ACTIONS = [
-  'scrollTop', 'scrollBottom', 'focusInput', 'previousSession', 'nextSession', 'closeSession',
+  'scrollTop', 'scrollBottom', 'focusInput', 'previousSession', 'nextSession', 'closeSession', 'restoreClosed',
 ] as const;
 
 export type ShortcutAction = typeof SHORTCUT_ACTIONS[number];
@@ -16,6 +16,7 @@ export const DEFAULT_SHORTCUTS: Readonly<Record<ShortcutAction, string>> = Objec
   previousSession: 'Alt+KeyP',
   nextSession: 'Alt+KeyN',
   closeSession: 'Alt+KeyW',
+  restoreClosed: 'Alt+KeyT',
 });
 
 export const SHORTCUT_ACTION_LABELS: Readonly<Record<ShortcutAction, string>> = Object.freeze({
@@ -25,6 +26,7 @@ export const SHORTCUT_ACTION_LABELS: Readonly<Record<ShortcutAction, string>> = 
   previousSession: 'Previous session',
   nextSession: 'Next session',
   closeSession: 'Close session',
+  restoreClosed: 'Reopen closed session',
 });
 
 export function defaultShortcutMap(): ShortcutMap {

@@ -268,6 +268,31 @@ export const contextMenuClient = `
       });
     }
 
+    // [CUSTOM- Rewind：把会话截断到这条**用户**消息之前，并把正文放回输入框。
+    // 宿主用 fork 实现（在它上一条助手回复处截断），因此这里只发 entryId。
+    // 文件改动不会回退 —— 适配器没有通过 ACP 暴露 rewindFiles，确认框里如实说明。
+    if (!sideSurface && forkEntry && forkEntry.kind === 'user') {
+      items.push({
+        label: 'Rewind to here',
+        run: function (event) {
+          var rewind = function () {
+            NS.bridge.postForSession({ type: 'rewindTo', entryId: forkId });
+          };
+          if (NS.popover && NS.popover.confirm && NS.popover.confirm({
+            title: 'Rewind to here',
+            message: 'This removes this message and everything after it from the conversation, '
+              + 'and puts the message back in the input box. File changes are not reverted.',
+            confirmLabel: 'Rewind',
+            cancelLabel: 'Cancel',
+            danger: true,
+            event: event,
+            onConfirm: rewind
+          })) { return; }
+          rewind();
+        }
+      });
+    }
+
     var code = codeTextOf(target);
     if (code) {
       items.push({ label: 'Copy code', run: function () { copy(code); } });

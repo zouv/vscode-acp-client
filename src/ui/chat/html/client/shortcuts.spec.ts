@@ -17,6 +17,7 @@ function createClient() {
       closeActive: () => calls.push('close'),
     },
     composer: { isComposable: () => true, focusInput: () => calls.push('input') },
+    bridge: { post: (message: any) => calls.push('restore:' + message.type) },
   } };
   new Function('window', 'document', shortcutsClient)(window, document);
   const shortcuts = (window.__vac as any).shortcuts;
@@ -37,10 +38,10 @@ function createClient() {
 describe('chat shortcuts', () => {
   it('dispatches defaults and stops their propagation', () => {
     const { calls, key } = createClient();
-    for (const code of ['KeyA', 'KeyE', 'KeyI', 'KeyP', 'KeyN', 'KeyW']) {
+    for (const code of ['KeyA', 'KeyE', 'KeyI', 'KeyP', 'KeyN', 'KeyW', 'KeyT']) {
       expect(key(code)).toMatchObject({ defaultPrevented: true, stopped: true });
     }
-    expect(calls).toEqual(['top', 'bottom', 'input', '-1', '1', 'close']);
+    expect(calls).toEqual(['top', 'bottom', 'input', '-1', '1', 'close', 'restore:restoreLastClosed']);
     expect(key('KeyZ').defaultPrevented).toBe(false);
   });
 

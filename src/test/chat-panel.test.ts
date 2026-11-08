@@ -4101,6 +4101,7 @@ suite('chat panel: ui prefs merge ()', () => {
       previousSession: null,
       nextSession: DEFAULT_SHORTCUTS.nextSession,
       closeSession: DEFAULT_SHORTCUTS.closeSession,
+      restoreClosed: DEFAULT_SHORTCUTS.restoreClosed,
     };
     for (const surface of [harness.surface, editor, side]) {
       surface.sent.length = 0;
@@ -7303,5 +7304,143 @@ suite('chat panel: additionalDirectories ride along on a history reopen', () => 
     const reloaded = new SessionHistoryStore(memento as unknown as vscode.Memento);
     assert.deepStrictEqual(reloaded.get('Claude Code', 'old-session')?.additionalDirectories,
       ['D:\\other-root']);
+  });
+});
+
+suite('chat panel: Alt+T reopens the last closed session', () => {
+  class RecordingManager extends SessionManager {
+    readonly opened: Array<{ sessionId: string; cwd?: string; title?: string }> = [];
+    override async openExistingSession(
+      _agentName: string,
+      sessionId: string,
+      opts: { cwd?: string; title?: string } = {},
+    ): Promise<'live' | 'load' | 'resume'> {
+      this.opened.push({ sessionId, cwd: opts.cwd, ...(opts.title ? { title: opts.title } : {}) });
+      return 'live';
+    }
+  }
+
+  async function until(check: () => boolean): Promise<void> {
+    for (let i = 0; i < 100 && !check(); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  }
+
+  function harnessWithRecorder(): { harness: Harness; manager: RecordingManager } {
+    let manager!: RecordingManager;
+    const harness = makeHarness('dummy-session', 'Claude Code', handler => {
+      manager = new RecordingManager(new AgentManager(), new ConnectionManager(handler), handler);
+      return manager;
+    });
+    return { harness, manager };
+  }
+
+  test('a closed session is reopened with the descriptor it had when it closed', async () => {
+    const { harness, manager } = harnessWithRecorder();
+    const closed = manager.getSession('dummy-session');
+    assert.ok(closed, 'the harness registered the session');
+    harness.host.onMessage({ type: 'closeSession', sessionId: 'dummy-session' });
+    await until(() => !manager.getSession('dummy-session'));
+    assert.strictEqual(manager.getSession('dummy-session'), undefined);
+
+    harness.host.onMessage({ type: 'restoreLastClosed' });
+    await until(() => manager.opened.length > 0);
+    assert.strictEqual(manager.opened.length, 1);
+    assert.strictEqual(manager.opened[0].sessionId, 'dummy-session');
+    assert.strictEqual(manager.opened[0].cwd, closed!.cwd,
+      'the closed session was reopened in its own directory, not the workspace default');
+  });
+
+  test('it is a LIFO stack: the most recent close comes back first', async () => {
+    const { harness, manager } = harnessWithRecorder();
+    harness.host.onMessage({ type: 'closeSession', sessionId: 'dummy-session' });
+    await until(() => !manager.getSession('dummy-session'));
+
+    // Restore it, then close it again: the same id must not be listed twice.
+    harness.host.onMessage({ type: 'restoreLastClosed' });
+    await until(() => manager.opened.length === 1);
+    harness.host.onMessage({ type: 'restoreLastClosed' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.strictEqual(manager.opened.length, 1, 'the stack was empty after one entry was consumed');
+  });
+
+  test('an empty stack reports the failure to the panel instead of doing nothing', async () => {
+    const harness = makeHarness('dummy-session', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'restoreLastClosed' });
+    await until(() => harness.surface.sent.some(m => m.type === 'error'));
+    const error = harness.surface.sent.find(m => m.type === 'error') as { message?: string };
+    assert.match(String(error?.message), /No recently closed session/);
+  });
+});
+
+suite('chat panel: Rewind to a user message', () => {
+  class RewindManager extends SessionManager {
+    readonly forks: Array<{ sessionId: string; messageId?: string }> = [];
+    override async forkSession(
+      _agentName: string,
+      sessionId: string,
+      opts: { messageId?: string } = {},
+    ): Promise<SessionInfo> {
+      this.forks.push({ sessionId, messageId: opts.messageId });
+      const source = this.getSession(sessionId)!;
+      return { ...source, sessionId: 'fork-rewound' } as SessionInfo;
+    }
+  }
+
+  async function until(check: () => boolean): Promise<void> {
+    for (let i = 0; i < 100 && !check(); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  }
+
+  function userEntryId(harness: Harness, sessionId = 'dummy-session'): string {
+    const entries = (harness.host as any).transcripts.peekEntries(sessionId) as Array<{ id: string; kind: string }>;
+    const user = entries.find(e => e.kind === 'user');
+    return user ? user.id : '';
+  }
+
+  test('forks at the reply before the message, closes the old tab and returns the text', async () => {
+    const handler = new SessionUpdateHandler();
+    const manager = new RewindManager(new AgentManager(), new ConnectionManager(handler), handler);
+    const harness = makeHarness('dummy-session', 'Claude Code', () => manager);
+    // A reply, then the user message being rewound to (seeded straight into the record,
+    // which is what the replay path would produce).
+    (harness.host as any).transcripts.ensureSession('dummy-session', 'Claude Code');
+    (harness.host as any).transcripts.appendAssistantChunk('dummy-session', 'first reply', 'msg-a');
+    (harness.host as any).transcripts.appendUser('dummy-session', 'my question');
+    const entryId = userEntryId(harness);
+    assert.ok(entryId, 'the user bubble is in the transcript');
+
+    harness.host.onMessage({ type: 'rewindTo', sessionId: 'dummy-session', entryId });
+    await until(() => manager.forks.length > 0);
+    await until(() => !manager.getSession('dummy-session'));
+    await until(() => harness.surface.sent.some(m => m.type === 'rewindReady'));
+
+    assert.deepStrictEqual(manager.forks, [{ sessionId: 'dummy-session', messageId: 'msg-a' }],
+      'the fork point is the assistant message id, so the new history ends before this question');
+    assert.strictEqual(manager.getSession('dummy-session'), undefined, 'the old tab retires');
+    const ready = harness.surface.sent.find(m => m.type === 'rewindReady') as { text?: string } | undefined;
+    assert.strictEqual(ready?.text, 'my question', 'the question goes back to the composer');
+  });
+
+  test('a running turn refuses to rewind instead of cancelling it under the user', async () => {
+    class BusyManager extends RewindManager {
+      override isTurnInFlight(): boolean { return true; }
+    }
+    const handler = new SessionUpdateHandler();
+    const manager = new BusyManager(new AgentManager(), new ConnectionManager(handler), handler);
+    const harness = makeHarness('dummy-session', 'Claude Code', () => manager);
+    (harness.host as any).transcripts.ensureSession('dummy-session', 'Claude Code');
+    (harness.host as any).transcripts.appendUser('dummy-session', 'my question');
+    const entryId = userEntryId(harness);
+    assert.ok(entryId);
+    harness.host.onMessage({ type: 'rewindTo', sessionId: 'dummy-session', entryId });
+    // Session-scoped failures land as an error notice in the transcript, not `type: 'error'`.
+    const errored = () => harness.surface.sent.some(m => m.type === 'append'
+      && JSON.stringify(m).includes('Stop the current turn before rewinding'));
+    await until(errored);
+    assert.deepStrictEqual(manager.forks, []);
+    assert.ok(errored());
   });
 });

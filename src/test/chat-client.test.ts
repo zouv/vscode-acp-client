@@ -7398,6 +7398,31 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     assert.ok(!userItems.some(i => i.label === 'Fork from here'), 'a user record is not a fork point');
   });
 
+  test('a user record offers Rewind to here, and only posts after confirming', () => {
+    const { NS, posted, pop } = withEntry();
+    NS.bridge.postForSession = (message: Record<string, unknown>) => { posted.push(message); };
+    const user = new StubNode('div');
+    user.setAttribute('data-entry-id', 'u1');
+    const items = NS.contextMenu.itemsFor(user) as Array<{ label: string; run: (event?: unknown) => void }>;
+    assert.ok(!items.some(i => i.label === 'Fork from here'), 'a user record is not a fork point');
+    const rewind = items.find(i => i.label === 'Rewind to here');
+    assert.ok(rewind, `expected Rewind to here, got: ${labels(items)}`);
+
+    rewind.run();
+    assert.deepStrictEqual(posted, [], 'the rewind waits for the confirmation');
+    popoverButton(pop.root, 'cancel')!.dispatch('click', {
+      preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted, [], 'Cancel sends nothing');
+
+    rewind.run();
+    popoverButton(pop.root, 'confirm')!.dispatch('click', {
+      preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.deepStrictEqual(posted, [{ type: 'rewindTo', entryId: 'u1' }],
+      'the host looks up the text and the fork point from the record');
+  });
+
   test('Side Chat with Selection captures the source session and selection when the menu opens', () => {
     const { NS, posted, messages, win } = withEntry();
     let current = 'main-1';
