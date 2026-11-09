@@ -642,8 +642,67 @@ export function styles(): string {
     flex: 1; font-size: 0.8em; color: var(--vscode-descriptionForeground);
     text-transform: uppercase; letter-spacing: .04em;
   }
+  /* [CUSTOM- Details：大纲 / 详情两模式的分段控件。等宽两格，窄栏（320px）
+     也放得下；✕ 仍是独立的固定宽按钮。 */
+  .outline-mode-tabs {
+    flex: 1; min-width: 0; display: flex; gap: 2px;
+    padding: 1px; border-radius: 4px;
+    background: var(--vscode-input-background, transparent);
+  }
+  .outline-mode-tab {
+    flex: 1; min-width: 0; padding: 2px 4px; border: 1px solid transparent; border-radius: 3px;
+    background: transparent; color: var(--vscode-descriptionForeground);
+    cursor: pointer; font: inherit; font-size: 0.78em; line-height: 1.4;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .outline-mode-tab:hover { background: var(--vscode-list-hoverBackground); }
+  .outline-mode-tab.active {
+    color: var(--vscode-foreground); border-color: var(--vscode-panel-border);
+    background: var(--vscode-list-activeSelectionBackground);
+  }
   /* 列表独立滚动，不跟着 #messages 走。 */
   .outline-sidebar .outline-list { flex: 1; overflow-y: auto; scrollbar-width: thin; }
+  /* [CUSTOM- 详情栏：头部固定、正文独立滚动。卡片样式全部来自全局 .tool 规则；
+     这里只补两件 #messages 之外拿不到的事：外层不限宽溢出、父卡缩进。 */
+  .detail-pane {
+    flex: 1; min-height: 0; min-width: 0;
+    display: flex; flex-direction: column;
+  }
+  .detail-pane-head {
+    flex: none; display: flex; align-items: center; gap: 6px;
+    padding: 5px 8px; border-bottom: 1px solid var(--vscode-panel-border);
+    min-width: 0;
+  }
+  .detail-pane-title {
+    flex: 1; font-size: 0.8em; color: var(--vscode-descriptionForeground);
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .detail-pane-kind {
+    flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 0.78em; padding: 0 4px; border-radius: 3px;
+    border: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-descriptionForeground);
+  }
+  .detail-pane-body {
+    flex: 1; min-height: 0; min-width: 0; overflow: auto;
+    padding: 6px 8px 10px; scrollbar-width: thin;
+  }
+  .detail-pane-body .tool { margin: 0 0 6px; }
+  /* [CUSTOM- 详情副本不在 .messages 里，父卡缩进这条规则在那里是按 .messages
+     前缀写的；这里给详情容器补等价的一条，而不是去改 #messages 的规则。 */
+  .detail-pane-body .tool[data-parent-id] {
+    margin-left: 18px;
+    border-left: 2px solid var(--vscode-focusBorder, var(--vscode-panel-border));
+  }
+  /* 详情栏自己就是滚动视口：卡片内部不再叠第二个纵向滚动条。 */
+  .detail-pane-body .tool-body,
+  .detail-pane-body .tool-seg-out,
+  .detail-pane-body .diff-body { max-height: none; }
+  .detail-empty {
+    padding: 20px 12px; text-align: center;
+    color: var(--vscode-descriptionForeground); font-size: 0.9em;
+    overflow-wrap: anywhere;
+  }
   /* 调宽手柄：钉在侧栏左缘（跨过 1px 边框各留 3px 命中区）。 */
   .outline-resize {
     position: absolute; left: -3px; top: 0; bottom: 0; width: 6px;
@@ -2375,6 +2434,21 @@ export function styles(): string {
     background: var(--vscode-editorWidget-background);
     overflow: hidden;
   }
+  /* [CUSTOM- 卡片头 + 「在详情栏打开」按钮。按钮必须在 head 的**外面**：
+     head 本身是 <button>，嵌套按钮是非法 HTML。 */
+  .tool-head-row { display: flex; align-items: stretch; min-width: 0; }
+  .tool-head-row > .tool-head { flex: 1 1 auto; min-width: 0; width: auto; }
+  .tool-open-detail {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; padding: 0; cursor: pointer;
+    background: transparent; color: var(--vscode-icon-foreground, currentColor);
+    border: none; border-left: 1px solid var(--vscode-panel-border);
+    font-family: inherit; font-size: 0.95em; line-height: 1; opacity: 0.7;
+  }
+  .tool-open-detail:hover { background: var(--vscode-list-hoverBackground); opacity: 1; }
+  .tool-open-detail:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px;
+  }
   .tool-head {
     display: flex; align-items: center; gap: 6px;
     padding: 3px 7px; cursor: pointer; user-select: none;
@@ -2821,6 +2895,70 @@ export function styles(): string {
   /* [CUSTOM- 置底栏的上下文用量：**圆环 + 圆心数字**（取代 096 的细条 + 百分比）。
      选圆环的理由是按钮栏里横向空间稀缺；顺带它多挂得下一个"正在跑"的外圈。
      数据与阈值都没变，仍然是 meta.usage 与 0.7 / 0.9 两档。 */
+  /* --- Agent map（2026-11-09）--------------------------------------------
+     底栏徽标 + 输入卡上方的子 agent 树浮层。面板关闭时不渲染（脚本层面），
+     所以这里的 max-height/overflow 只服务打开态。 */
+  .agent-map-btn {
+    display: inline-flex; align-items: center; flex: 0 0 auto;
+    background: transparent; color: var(--vscode-descriptionForeground);
+    border: 1px solid transparent; border-radius: 3px; padding: 1px 6px;
+    font-family: inherit; font-size: 0.88em; cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .agent-map-btn:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-foreground); }
+  .agent-map-btn.open { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+  .agent-map-panel {
+    position: absolute; bottom: 100%; left: 0; right: 0; z-index: 31;
+    display: flex; flex-direction: column; max-height: 360px;
+    margin-bottom: 4px;
+    background: var(--vscode-editorSuggestWidget-background, var(--vscode-dropdown-background));
+    border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-dropdown-border));
+    border-radius: 4px; box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0,0,0,0.3));
+  }
+  .agent-map-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px 0; }
+  .agent-map-title { flex: 1 1 auto; font-weight: 600; }
+  .agent-map-close {
+    background: transparent; color: var(--vscode-descriptionForeground);
+    border: 0; cursor: pointer; font-size: 1.1em; line-height: 1; padding: 0 4px;
+  }
+  .agent-map-close:hover { color: var(--vscode-foreground); }
+  .agent-map-sub { padding: 0 10px 6px; color: var(--vscode-descriptionForeground); font-size: 0.88em; }
+  .agent-map-list { overflow-y: auto; padding: 0 0 4px; min-height: 0; }
+  .agent-map-row {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    padding: 3px 10px; font-size: 0.92em;
+  }
+  .agent-map-row:hover { background: var(--vscode-list-hoverBackground); }
+  .agent-map-row.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+  .agent-map-dot {
+    flex: none; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--vscode-descriptionForeground);
+  }
+  .agent-map-row.state-running .agent-map-dot { background: #3fb950; animation: agent-map-pulse 1.4s ease-in-out infinite; }
+  .agent-map-row.state-requires_action .agent-map-dot { background: #e8912d; }
+  .agent-map-row.state-failed .agent-map-dot,
+  .agent-map-row.state-cancelled .agent-map-dot { background: var(--vscode-errorForeground); }
+  @keyframes agent-map-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  .agent-map-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-map-time, .agent-map-tokens {
+    flex: none; color: var(--vscode-descriptionForeground);
+    font-size: 0.88em; font-variant-numeric: tabular-nums;
+  }
+  .agent-map-tokens { min-width: 58px; text-align: right; }
+  .agent-map-detail {
+    border-top: 1px solid var(--vscode-panel-border);
+    padding: 6px 10px; max-height: 180px; overflow-y: auto;
+  }
+  .agent-map-field { display: flex; gap: 8px; padding: 1px 0; font-size: 0.9em; }
+  .agent-map-field-label { flex: 0 0 84px; color: var(--vscode-descriptionForeground); }
+  .agent-map-field-value { flex: 1 1 auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .agent-map-stop {
+    margin-top: 6px; background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 0; border-radius: 3px; padding: 2px 10px; cursor: pointer; font-family: inherit;
+  }
+  .agent-map-stop:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
   .context-meter {
     position: relative; flex: 0 0 auto;
     display: inline-flex; align-items: center; justify-content: center;

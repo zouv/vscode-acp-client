@@ -99,6 +99,15 @@ export const linksClient = `
   function toggleBody(header, bodySelector) {
     var card = header.parentNode;
     var body = card ? card.querySelector(bodySelector) : null;
+    // [CUSTOM- A tool head sits inside '.tool-head-row' (the ⤢ button must be a
+    // SIBLING of the head button, not nested in it), so the body is not inside the
+    // head's parent. Fall back to the row's parent ('.tool'), which also keeps the
+    // parent/child collapse below working.
+    if (!body && header.parentNode && header.parentNode.parentNode) {
+      var wrap = header.parentNode.parentNode;
+      body = wrap.querySelector ? wrap.querySelector(bodySelector) : null;
+      if (body) { card = wrap; }
+    }
     if (!body) { return; }
     body.hidden = !body.hidden;
     // [CUSTOM- The header is a <button> now, so the expanded state

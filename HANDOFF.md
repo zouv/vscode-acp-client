@@ -14,9 +14,9 @@
 ## 状态快照
 
 - **最近更新**：2026-11-09
-- **整体状态**：v1.13.1 已发布为 GitHub Latest（tag `v1.13.1`）。本次为「Tail 贴底根治（ResizeObserver + 关闭滚动锚定）、Alt+T 还原关闭的会话、用户消息 Rewind to here」；代码与自动验证全部完成，待真机验收。
+- **整体状态**：v1.14.0 已发布为 GitHub Latest（tag `v1.14.0`）。本次为「Agent map（子代理地图）与右侧栏 Details（工具卡详情）」，并把内置 Claude 适配器基线同步到上游 v0.101.0（适配器侧新增 agent-map 元数据扩展）；代码与自动验证全部完成，待真机验收。
 - **当前分支（必填）**：`main`；发布提交已推送至 `origin/main`。
-- **最后验证状态**（2026-11-09）：typecheck / lint / webview 语法 / 生产构建 ✅；unit **381 / 47 文件**、真实宿主 **781 passing** ✅；VSIX 已打包并上传至 GitHub Release（见发布记录）。
+- **最后验证状态**（2026-11-09）：typecheck / lint / webview 语法 / 生产构建 ✅；unit **393 / 48 文件**、真实宿主 **799 passing** ✅；VSIX 已打包并上传至 GitHub Release（见发布记录）。
 
 ## 当前任务（In Progress）
 

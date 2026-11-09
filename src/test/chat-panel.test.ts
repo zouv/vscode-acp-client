@@ -6327,6 +6327,96 @@ suite('chat panel: sub-agent child sessions', () => {
     assert.deepStrictEqual(manager.cancels, [{ parent: 'parent', child: 'child-1' }],
       '取消打在子会话 id 上，父会话与兄弟子会话不受影响');
   });
+
+  test('subagent_update _meta["vac/agentMap"] reaches the client', async () => {
+    const { harness } = harnessWithManager();
+    assert.ok(harness.surface.html.includes('agentMapBtn'), 'the badge lives in the panel markup');
+    announce(harness, 'child-1', {
+      description: 'edits the story',
+      _meta: {
+        'vac/agentMap': {
+          version: 1,
+          startedAt: 1_000,
+          durationMs: 2_500,
+          totalTokens: 1_234,
+          toolUses: 3,
+          summary: 'editing the story',
+          lastToolName: 'Read',
+        },
+      },
+    });
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'requestAgentMap', sessionId: 'parent' });
+
+    const message = harness.surface.sent.find(m => m.type === 'agentMap') as
+      Extract<ExtToChatMessage, { type: 'agentMap' }> | undefined;
+    assert.ok(message, 'the map snapshot is sent on demand');
+    assert.strictEqual(message!.running, 1);
+    const node = message!.agents[0];
+    assert.strictEqual(node.agentId, 'child-1');
+    assert.strictEqual(node.parentId, 'parent');
+    assert.strictEqual(node.title, 'story_editor');
+    assert.strictEqual(node.description, 'edits the story');
+    assert.strictEqual(node.state, 'running');
+    assert.strictEqual(node.canCancel, true);
+    assert.strictEqual(node.startedAt, 1_000);
+    assert.strictEqual(node.durationMs, 2_500);
+    assert.strictEqual(node.totalTokens, 1_234);
+    assert.strictEqual(node.toolUses, 3);
+    assert.strictEqual(node.summary, 'editing the story');
+    assert.strictEqual(node.lastToolName, 'Read');
+  });
+
+  test("a child usage_update feeds the agent's tokens and model", () => {
+    const { harness } = harnessWithManager();
+    announce(harness, 'child-1');
+    harness.handler.handleUpdate({
+      sessionId: 'child-1',
+      update: {
+        sessionUpdate: 'usage_update', used: 5_000, size: 200_000,
+        cost: { amount: 0.12, currency: 'USD' },
+        _meta: { '_claude/model': 'claude-opus-5.5' },
+      },
+    } as never);
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'requestAgentMap', sessionId: 'parent' });
+
+    const message = harness.surface.sent.find(m => m.type === 'agentMap') as
+      Extract<ExtToChatMessage, { type: 'agentMap' }> | undefined;
+    assert.ok(message, 'the snapshot is sent');
+    const node = message!.agents[0];
+    assert.strictEqual(node.contextUsed, 5_000);
+    assert.strictEqual(node.contextSize, 200_000);
+    assert.strictEqual(node.costUsd, 0.12);
+    assert.strictEqual(node.model, 'claude-opus-5.5');
+  });
+
+  test('stopAgent cancels that child only while it is cancellable and running', async () => {
+    const { harness, manager } = harnessWithManager();
+    announce(harness, 'child-1');
+    harness.host.onMessage({ type: 'stopAgent', sessionId: 'parent', agentId: 'child-1' });
+    await waitFor(() => manager.cancels.length === 1, 'the stop to reach cancelSubagent');
+    assert.deepStrictEqual(manager.cancels, [{ parent: 'parent', child: 'child-1' }]);
+
+    harness.host.onMessage({ type: 'stopAgent', sessionId: 'parent', agentId: 'unknown' });
+    await Promise.resolve();
+    assert.strictEqual(manager.cancels.length, 1, 'an unknown agent id is ignored');
+  });
+
+  test('closing the session clears its agent map', async () => {
+    const { harness, manager } = harnessWithManager();
+    announce(harness, 'child-1');
+    await manager.closeSession('Claude Code', 'parent');
+    registerFakeSession(manager, 'parent', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({ type: 'requestAgentMap', sessionId: 'parent' });
+
+    const message = harness.surface.sent.find(m => m.type === 'agentMap') as
+      Extract<ExtToChatMessage, { type: 'agentMap' }> | undefined;
+    assert.ok(message, 'a re-registered session can still be asked');
+    assert.strictEqual(message!.running, 0);
+    assert.deepStrictEqual(message!.agents, []);
+  });
 });
 
 suite('chat panel: Side Chat surface isolation', () => {

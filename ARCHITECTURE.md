@@ -40,7 +40,6 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 `@vscode/test-electron` + Mocha API 跑真实宿主（`src/**/*.test.ts`）；全局标识符命名空间 `vac.*`。
 ---
 ## 0.5 任务作用域路由（先定范围，避免污染上下文）
-
 > **怎么用**：动手前先在下表找到你的任务类型，**只读「该读」列的文件/小节，明确不碰「忽略」列**。
 
 | 任务类型 | 该读（仅限） | 可忽略 | 入口小节 |
@@ -49,7 +48,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | ACP 握手 / 协议抓包 / SDK 升级 / 能力协商 | `core/ConnectionManager.ts` + `core/AcpClientImpl.ts` + `utils/Logger.ts(logTraffic)` | tree、webview | §2.2 |
 | 会话生命周期（新建/恢复/切换/关闭、认证 -32000） | `core/SessionManager.ts` + `core/AgentRecovery.ts` + `core/auth.ts` + `core/SessionStore.ts` | handlers、webview | §2.3；`arch/connection-lifecycle.md` |
 | 发消息 / 取消 / 轮次中补发 / 轮次状态 | `core/SessionManager.ts`(sendPrompt/cancelTurn/steerPrompt) + `handlers/SessionUpdateHandler.ts` | tree | §2.4 |
-| 聊天 UI（面板行为 / 记录 / 标签页 / 快捷键设置） | `src/ui/chat/**`（入口 `index.ts`；**先读 `arch/chat-panel.md` 顶部的分册导航表**，再按主题只读那一份分册；快捷键见 §2.5） | core、dashboard | §2.5 |
+| 聊天 UI（面板行为 / 记录 / 标签页 / 快捷键设置） | `src/ui/chat/**`（入口 `index.ts`；**先读 `arch/chat-panel.md` 顶部的分册导航表**，再按主题只读那一份分册；快捷键见 §2.5；Agent map 见 §5.57；右栏 Details 见 §5.58） | core、dashboard | §2.5 |
 | 编辑区面 / 主双面同步 / 焦点 | `ui/chat/ChatViewProvider.ts` + `ChatEditorPanel.ts` + `ChatSurface.ts` | Side、core 内部 | §2.5 |
 | Side Chat 入口 / fork / 临时生命周期 / 来源标题 / Main-Side 工具栏偏好 | `ui/chat/SideChatPanel.ts` + `ChatPanelHost.ts`(openSide/canSurfaceAccess/projectUiPrefs/commitUiPrefs/postUiPrefs) + `core/SessionManager.ts`(forkSideSession/requestFork) + `html/client/{composer,contextMenu,boot,times,tail,autoExpand,outline}.ts` | 普通历史恢复、Dashboard、Core 会话存储 | §2.3、§2.5、§4；`arch/chat-panel.md` §5.7、`arch/chat-panel-state.md` §5.55、`arch/connection-lifecycle.md` |
 | 权限弹窗 / 表单（AskUserQuestion） | `handlers/PermissionBridge.ts`、`ElicitationBridge.ts` + 客户端 `html/client/{permissionView,permissionDrawer,elicitationView}.ts` | core 编排 | §2.6 |
@@ -97,7 +96,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/handlers/ElicitationBridge.ts` | 表单请求（AskUserQuestion）的唯一出口，与权限桥同构；`submit` 校验 expected session；`fieldsOf()` 把 JSON Schema 扁平化成五种字段，`optionOf()` 保留选项的 description 与 preview；结算时写回 `summary` + **结构化的 `answers`**（回执卡据此标出所选） | 表单行为 / schema 形状 |
 | `src/handlers/ElicitationHandler.ts` | 表单策略层 + 逐字段弹框兜底 | 弹框兜底行为 |
 | `src/handlers/SessionUpdateHandler.ts` | `session/update` 通知扇出（单订阅者异常隔离） | 流式更新丢事件 |
-| `src/ui/chat/` | Chat 面板子系统（host/surface/transcript + webview）；`markdown.ts` / `content/readHighlight.ts` 管安全渲染与 Read 文件语言推断（后者纯逻辑） | 聊天 UI / 渲染 |
+| `src/ui/chat/` | Chat 面板子系统（host/surface/transcript + webview）；`markdown.ts` / `content/readHighlight.ts` 管安全渲染与 Read 文件语言推断（后者纯逻辑）；`agentmap/AgentMapStore.ts` 是子 agent 注册表（纯逻辑，禁 import vscode）；webview 右栏 Details 由 `html/client/detailPane.ts` 驱动（§5.58） | 聊天 UI / 渲染 / Agent map / 右栏 Details |
 | `src/ui/chat/shortcuts.ts` | Chat 快捷键默认值、物理键规范化、旧值修复与重复绑定校验；纯逻辑 | 改快捷键格式 / 默认值 / 冲突规则 |
 | `src/ui/chat/ChatPanelHost.ts` | 面板核心（**本仓库最大的文件，用 grep 定位、勿整读**）：记录、协议、标签、权限/表单呈现 | 面板行为 |
 | `src/ui/chat/ChatViewProvider.ts` | 侧边栏 `vac-chat`、编辑区主面板与单面板多标签 Side 的装配/销毁及主双面焦点同步（视图上唯一的消息监听器） | 视图注册 / surface 归属 |
@@ -189,11 +188,12 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 表单卡片 | `html/client/elicitationView.ts` | 与 `ElicitationBridge` 配对 |
 | 从记录 fork / Rewind | `ChatPanelHost` 的 `forkFromMessage` / `rewindTo` + `html/client/contextMenu.ts` + `boot.ts` 的 `rewindReady` | fork：面板只报 entryId，宿主查 ACP `messageId` → `forkSession`。Rewind：只对**用户**记录，取它之前最近一条助手记录的 `messageId` 截断（无则新建同目录会话），关闭旧 tab（可 Alt+T 撤销），原文经 `composer.setInputText` 回填；文件改动不回退 |
 | sub-agent 子会话卡 | `html/client/transcriptView.ts` 的 `buildSubagent` / `patchSubagent`（记录类型 `subagent`） | 状态/标题走 `revise` 就地补丁；Cancel 发 `cancelSubagent` |
+| Agent map（底栏 `N Agents` / 子 agent 树） | `agentmap/AgentMapStore.ts`（`upsert` / `noteUsage` / `noteTool` / `snapshot` / `signature`）+ `ChatPanelHost` 的 `subagent_update`、`agentMapSoon`、`pushAgentMap`、`requestAgentMap` / `stopAgent` + 客户端 `html/client/agentMap.ts` | 声明 `clientCapabilities._meta["vac/agentMap"]`；子会话 usage/tool **只喂注册表**、不并回父转录；Stop 走 `SessionManager.cancelSubagent`；详见 `arch/chat-panel.md` §5.57 |
 | 编辑区标签栏右侧入口 | `package.json(menus.editor/title)` → `vac.openChatFromEditorTab`（动作同 `vac.openChatInEditor`） | 图标用 `resources/icon-editor-color.svg`（全彩徽标）—— 路径图标按**图片**渲染，颜色按 SVG 自己的来；Chat 面板已在编辑区激活时隐藏 |
 | 历史列表筛选与显示上限 | `html/client/sessionMenu.ts` 的 `visibleRows` / `limitRows` / `applyPrefs` / `buildRowActions` / `applyAction` + `ChatPanelHost.clampHistoryDisplayLimit` | 目录与搜索先过滤、再截取已加载行；0 不限，不删数据；Archive / Rename / Delete 沿用宿主回执，详见 `arch/chat-panel-sessions.md` §5.24 |
 | 会话 tab 右键菜单 | `html/client/contextMenu.ts` 的 `itemsFor`（`.tab` 分支） | 顺序（2026-10-29）：**Rename** / **Mark as unread**（发 `markUnread`，与后台输出同一条 attention 状态；聚焦到该会话时清掉）/ **New Session in This Folder**（沿用该会话 cwd + 额外根目录，`newSessionInDirectory`；**新 tab 插到被右键 tab 右侧** —— 宿主 `insertSessionAfter` / `placeSessionAfterInTabOrder` 展开 live 顺序后写回 `uiPrefs.tabOrder`）/ **Duplicate**（`session/fork` 不带 messageId，保留上下文与消息记录）/ **Copy working directory**（读 tab 的 `data-cwd`，没有则置灰）/ **Copy Session ID** / **Close**（永远最后）。草稿与待恢复 tab 没有 `data-session-id`，只有 Close。Close / Rename 都转到 `tabs.ts` 的 `closeModel` / `startRename`（运行中会话先弹面板内确认） |
 | 会话 tab 状态点 | `html/client/tabs.ts` 的 `directoryAbbrev` / `dotClass` / `dotStatusText` + `styles.ts` 的 `.tab-dot` | 16px 方块里写目录缩写（最多 4 个字母，按 `data-len` 分档）；**固定五色**：橙 `#e8912d` 等回答 / 蓝 `#3b82f6` 在跑 / 蓝灰 `#7d8fa8` 载入 / 浅绿 `#7bc96f` 未读 / 浅灰 `#b8c0cc` 空闲；字母固定深色（running 白字）；`busy`（running/loading）外加 `tab-ring` 扩散圈 |
-| 大纲 Messages / Cards tab | `html/client/outline.ts`（`setTab` / `noteToolUpdate` / `cardAnchors`）+ `transcriptView.cardInfo` / `cardCount` / `reveal` + `UiPrefs.outlineTab` | Messages = user/assistant；Cards = `ordered()` 全部记录（含消息），每行显示类型徽标 + 工具名/标题；点击 `reveal` 先展开被折叠的父工具卡；`toolUpdate` 仅 Cards tab 用 rAF 合并刷新；tab 按 Main/Side scoped 持久化，缺省 messages |
+| 大纲 Messages / Cards tab；右栏 Details 模式 | `html/client/outline.ts`（`setTab` / `noteToolUpdate` / `cardAnchors` / `setPane` / `openRail` / `setDetailWidth`）+ `html/client/detailPane.ts`（`open` / `onEntryUpdated` / `setFocus` / `handleEscape`）+ `transcriptView.cardInfo` / `cardCount` / `reveal` + `toolCallView.render/update` 的 `slotPrefix` + `UiPrefs.outlineTab` | Messages = user/assistant；Cards = `ordered()` 全部记录（含消息），每行显示类型徽标 + 工具名/标题；点击 `reveal` 先展开被折叠的父工具卡；`toolUpdate` 仅 Cards tab 用 rAF 合并刷新；tab 按 Main/Side scoped 持久化，缺省 messages。**Details = 只检视一张工具卡**（同一视图模型再渲染一份、按会话记 entryId、详情宽度客户端本地持久化）；入口是卡头 `.tool-open-detail` 与右键 "Open in details"；详见 `arch/chat-panel.md` §5.58 |
 | **面板内通用浮层**（确认 / 输入） | `html/client/popover.ts` 的 `NS.popover.confirm` / `prompt` + `body.ts` 的 `#popover` + `styles.ts` 的 `.popover` | **非模态**（不铺遮罩、不挡其它会话），z-index 95 高于设置面板与图片浮层；危险操作默认焦点在 Cancel；点外面 / Esc 取消。删除会话、关闭运行中会话、会话重命名、设置破坏性动作共用 |
 | 会话 tab 中键关闭 | `html/client/tabs.ts` `renderTabs`（`mousedown` button==1 + `auxclick`） | 与 × / Delete / 右键 Close 汇入 `closeModel`；运行中会话的确认在宿主 `closeSessionWithConfirm`（原生模态） |
 | 自定义模型排序 / 设置面板 | `settingsPanel.modelRow` / `installModelDrag` / `queueModelCommit` + `ChatPanelHost.handleSetModelList` + `ModelListSync` + `client/modelOrder.orderOption` | 模型列表支持拖拽、键盘和作用域+值 CAS 冲突处理；只重排 agent 已给的 model 候选；设置层优先级与子面板见 `arch/chat-panel-state.md` §5.52 |

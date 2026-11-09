@@ -168,13 +168,29 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
          .outline-head（计数行）与 .outline-list（列表）与下拉共用同一套渲染逻辑。 -->
     <div id="outlineSidebar" class="outline-sidebar" hidden>
       <div class="outline-sidebar-head">
-        <span class="outline-sidebar-title">Outline</span>
+        <!-- [CUSTOM- Details：右栏两种模式的分段控件（大纲 / 详情）。
+             详情栏是同一根栏的第二种内容，不是第二个侧栏。 -->
+        <div class="outline-mode-tabs" role="tablist" aria-label="Sidebar mode">
+          <button type="button" class="outline-mode-tab active" data-rail-pane="outline"
+                  role="tab" aria-selected="true">Outline</button>
+          <button type="button" class="outline-mode-tab" data-rail-pane="details"
+                  role="tab" aria-selected="false">Details</button>
+        </div>
         <button id="outlineUnpin" class="outline-btn"
                 title="Close outline" aria-label="Close outline">✕</button>
       </div>
       <div class="outline-tabs" data-outline-tabs role="tablist" aria-label="Outline mode"></div>
       <div class="outline-head"></div>
       <div class="outline-list"></div>
+      <!-- [CUSTOM- 详情副本容器：内容由 client/detailPane.ts + toolCallView 渲染，
+           不在 #messages 里，所以卡片样式必须继续靠全局 .tool 规则。 -->
+      <div id="detailPane" class="detail-pane" hidden>
+        <div class="detail-pane-head">
+          <span class="detail-pane-title">Details</span>
+          <span class="detail-pane-kind" hidden></span>
+        </div>
+        <div class="detail-pane-body"></div>
+      </div>
       <div id="outlineResize" class="outline-resize" aria-hidden="true"></div>
     </div>
     <!-- 状态卡（取代 090 的「两段静态提示 + 按钮」）。
@@ -255,6 +271,17 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
         <div id="attachments" class="attachments" hidden></div>
         <!-- [CUSTOM- 额外根目录（additionalDirectories）的 chips 行，形态同附件行。 -->
         <div id="additionalDirectories" class="attachments" hidden></div>
+        <!-- [CUSTOM- Agent map（2026-11-09）：锚在输入卡上方，与 #slashPopup 同一位置家族。
+             内容是焦点会话的子 agent 树；打开时才渲染，关闭时保持空壳。 -->
+        <div id="agentMapPanel" class="agent-map-panel" hidden role="dialog" aria-label="Agent map">
+          <div class="agent-map-head">
+            <span class="agent-map-title">Agent map</span>
+            <button id="agentMapClose" class="agent-map-close" type="button" title="Close">×</button>
+          </div>
+          <div id="agentMapSubtitle" class="agent-map-sub"></div>
+          <div id="agentMapList" class="agent-map-list"></div>
+          <div id="agentMapDetail" class="agent-map-detail" hidden></div>
+        </div>
         <!-- 一体式输入卡：textarea 与按钮栏合进同一个描边
              容器（原来是"带边框的 textarea + 卡外一行按钮"，中间隔一条缝，看着像两个孤立的
              控件）。焦点环也从 textarea 移到卡片上（:focus-within），见 styles.ts。
@@ -281,6 +308,9 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
               <span class="picker-icon">/</span>
             </button>
             <div id="configPickers" class="config-pickers"></div>
+            <!-- [CUSTOM- Agent map 徽标（2026-11-09）：只有焦点会话有子 agent 时才出现，
+                 文案是正在跑的数量（历史 agent 也能打开面板查看）。 -->
+            <button id="agentMapBtn" class="agent-map-btn" type="button" title="Agent map" hidden>0 Agents</button>
             <div id="contextMeter" class="context-meter" hidden title="Context usage"></div>
             <button id="sendStopBtn" class="send-stop send" disabled title="Send" aria-label="Send"></button>
           </div>

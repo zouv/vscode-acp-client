@@ -42,6 +42,8 @@ import { perfClient } from '../ui/chat/html/client/perf';
 import { toolCallViewClient } from '../ui/chat/html/client/toolCallView';
 import { transcriptViewClient } from '../ui/chat/html/client/transcriptView';
 import { outlineClient } from '../ui/chat/html/client/outline';
+// [CUSTOM- Details 栏（右栏第二模式）。
+import { detailPaneClient } from '../ui/chat/html/client/detailPane';
 import { stickyUserClient } from '../ui/chat/html/client/stickyUser';
 // [CUSTOM- The start card (connect phases + the auto-connect switch).
 import { stateCardClient } from '../ui/chat/html/client/stateCard';
@@ -58,6 +60,8 @@ import { contextMenuClient } from '../ui/chat/html/client/contextMenu';
 import { popoverClient } from '../ui/chat/html/client/popover';
 // [CUSTOM- 圆点量测的读写分离。
 import { railClient } from '../ui/chat/html/client/rail';
+// [CUSTOM- Agent map 的徽标 + 树面板（按需渲染）。
+import { agentMapClient } from '../ui/chat/html/client/agentMap';
 // [CUSTOM- 宿主侧构建指纹。
 import { buildStamp } from '../utils/BuildInfo';
 
@@ -400,7 +404,7 @@ function loadClient(
   // [CUSTOM- `sessionMenu` joined the list for its own suite: unlike
   // boot, its IIFE runs nothing at load time (init() is called by boot, and here by
   // the test), so loading it costs the record-layer tests nothing.
-  for (const source of [domClient, iconsClient, mermaidClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, shortcutsClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient]) {
+  for (const source of [domClient, iconsClient, mermaidClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, detailPaneClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, shortcutsClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient, agentMapClient]) {
     new Function('window', 'document', source)(win, doc);
   }
   return { NS, metrics, doc, docListeners, jumps, timers, win };
@@ -2670,6 +2674,279 @@ suite('chat client logic: tool-card markdown round trip (stub DOM)', () => {
       .find((item: { text: string }) => item.text === text);
     assert.ok(second, 'a kind change must rebuild the body and re-ask');
     assert.notStrictEqual(second.key, first.key);
+  });
+});
+
+suite('chat client logic: details pane in the right rail (stub DOM)', () => {
+  // [CUSTOM- Details 是右栏的第二种内容：再渲染一份同视图模型的卡片，
+  // 不搬 DOM。这些测试只断言逻辑（模式、容器、同一段 markdown 的两个宿主）。
+  function railElements() {
+    const mk = (cls: string) => { const n = new StubNode('div'); n.className = cls; return n; };
+    const messages = new StubNode('div');
+    const sidebar = mk('outline-sidebar');
+    sidebar.hidden = true;
+    const head = mk('outline-sidebar-head');
+    const modes = mk('outline-mode-tabs');
+    const outlineMode = new StubNode('button');
+    outlineMode.className = 'outline-mode-tab';
+    outlineMode.setAttribute('data-rail-pane', 'outline');
+    const detailsMode = new StubNode('button');
+    detailsMode.className = 'outline-mode-tab';
+    detailsMode.setAttribute('data-rail-pane', 'details');
+    modes.appendChild(outlineMode);
+    modes.appendChild(detailsMode);
+    head.appendChild(modes);
+    const tabs = mk('outline-tabs');
+    tabs.setAttribute('data-outline-tabs', '');
+    const sideHead = mk('outline-head');
+    const sideList = mk('outline-list');
+    const detail = mk('detail-pane');
+    detail.hidden = true;
+    const detailHead = mk('detail-pane-head');
+    const title = new StubNode('span');
+    title.className = 'detail-pane-title';
+    title.textContent = 'Details';
+    const kind = new StubNode('span');
+    kind.className = 'detail-pane-kind';
+    kind.hidden = true;
+    detailHead.appendChild(title);
+    detailHead.appendChild(kind);
+    const detailBody = mk('detail-pane-body');
+    detail.appendChild(detailHead);
+    detail.appendChild(detailBody);
+    sidebar.appendChild(head);
+    sidebar.appendChild(tabs);
+    sidebar.appendChild(sideHead);
+    sidebar.appendChild(sideList);
+    sidebar.appendChild(detail);
+    const drawer = new StubNode('div');
+    const drawerHead = mk('outline-head');
+    const info = new StubNode('span');
+    info.className = 'outline-head-info';
+    drawerHead.appendChild(info);
+    const drawerList = mk('outline-list');
+    drawer.appendChild(drawerHead);
+    drawer.appendChild(drawerList);
+    const resize = mk('outline-resize');
+    return { messages, sidebar, sideHead, sideList, drawer, detail, detailBody, kind, outlineMode, detailsMode, resize };
+  }
+
+  function setup(): Record<string, any> {
+    const rail = railElements();
+    const elements: Record<string, StubNode> = {
+      messages: rail.messages,
+      outlineSidebar: rail.sidebar,
+      detailPane: rail.detail,
+      outlineResize: rail.resize,
+    };
+    const h = loadClient(elements);
+    h.NS.transcriptView.init(rail.messages);
+    h.NS.outline.init(rail.messages, rail.drawer, new StubNode('button'));
+    h.NS.detailPane.init();
+    return { ...rail, ...h };
+  }
+
+  function toolView(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      toolCallId: 'tc1', title: 'npm test', kind: 'execute', status: 'completed',
+      command: 'npm test', toolName: 'Bash',
+      items: [{ type: 'content', block: { type: 'text', text: 'OUT' } }],
+      ...over,
+    };
+  }
+
+  function addTool(NS: Record<string, any>, view: Record<string, unknown> = toolView()): void {
+    NS.transcriptView.append({
+      id: 't1', kind: 'tool', at: 1, toolCallId: 'tc1', toolView: view,
+    }, view);
+  }
+
+  function openDetails(h: ReturnType<typeof setup>): void {
+    addTool(h.NS);
+    h.NS.detailPane.setFocus('s1');
+    h.NS.detailPane.open('t1');
+  }
+
+  test('the context menu offers "Open in details" for tool records only', () => {
+    const h = setup();
+    addTool(h.NS);
+    h.NS.transcriptView.append({ id: 'u1', kind: 'user', at: 2, text: 'hi' }, undefined);
+    // A tool record whose view model has not arrived is an empty shell: nothing to show.
+    h.NS.transcriptView.append({ id: 't2', kind: 'tool', at: 3, toolCallId: 'tc2' }, undefined);
+
+    const nodeOf = (id: string) => {
+      const node = new StubNode('div');
+      node.setAttribute('data-entry-id', id);
+      return node;
+    };
+    const toolItems = h.NS.contextMenu.itemsFor(nodeOf('t1')) as Array<{ label: string }>;
+    assert.ok(toolItems.some(i => i.label === 'Open in details'), 'the tool record offers it');
+    const userItems = h.NS.contextMenu.itemsFor(nodeOf('u1')) as Array<{ label: string }>;
+    assert.ok(!userItems.some(i => i.label === 'Open in details'), 'a user message does not');
+    const shellItems = h.NS.contextMenu.itemsFor(nodeOf('t2')) as Array<{ label: string }>;
+    assert.ok(!shellItems.some(i => i.label === 'Open in details'),
+      'without a view model there is no card to copy');
+  });
+
+  test('opening from the menu switches the rail to Details and renders the card', () => {
+    const h = setup();
+    addTool(h.NS);
+    h.NS.detailPane.setFocus('s1');
+
+    const node = new StubNode('div');
+    node.setAttribute('data-entry-id', 't1');
+    const items = h.NS.contextMenu.itemsFor(node) as Array<{ label: string; run: () => void }>;
+    items.find(i => i.label === 'Open in details')!.run();
+
+    assert.strictEqual(h.NS.outline.pane(), 'details');
+    assert.strictEqual(h.sidebar.hidden, false, 'the rail is open');
+    assert.strictEqual(h.detail.hidden, false, 'the detail pane is the visible section');
+    assert.strictEqual(h.sideList.hidden, true, 'the outline list is hidden in Details mode');
+    const card = h.detailBody.querySelector('.tool') as StubNode;
+    assert.ok(card, 'the full card (head included) is rendered into the rail');
+    assert.ok(card.querySelector('.tool-head'), 'card head included');
+    assert.strictEqual(card.querySelector('.tool-head')!.getAttribute('aria-expanded'), 'true',
+      'the detail copy opens its body (its own expansion state)');
+    // The inline card is untouched: the detail copy is a second render.
+    const inline = h.NS.transcriptView.node('t1') as StubNode;
+    assert.ok(inline && inline.parentNode === h.messages, 'the inline record stays in #messages');
+  });
+
+  test('the card-head button opens the same controller without toggling the card', () => {
+    const h = setup();
+    addTool(h.NS);
+    h.NS.detailPane.setFocus('s1');
+    const inline = h.NS.transcriptView.node('t1') as StubNode;
+    const btn = inline.querySelector('.tool-open-detail') as StubNode;
+    assert.ok(btn, 'every tool card head has the entry point');
+    assert.strictEqual(btn.tagName, 'BUTTON', 'it is a real, keyboard-focusable button');
+    assert.strictEqual(btn.getAttribute('aria-label'), 'Open details in the sidebar');
+
+    const body = inline.querySelector('.tool-body') as StubNode;
+    h.NS.links.installDelegatedHandlers(h.messages);
+    dispatchClick(btn, h.docListeners);
+    assert.strictEqual(h.NS.outline.pane(), 'details');
+    assert.strictEqual(body.hidden, true, 'the inline copy stays collapsed');
+  });
+
+  test('the head-row wrapper keeps the card toggle working', () => {
+    // [CUSTOM- The ⤢ button had to become a SIBLING of .tool-head (nested buttons
+    // are invalid), so the body is no longer inside the head's parent. The delegated
+    // toggle must still find it.
+    const h = setup();
+    addTool(h.NS);
+    h.NS.links.installDelegatedHandlers(h.messages);
+    const inline = h.NS.transcriptView.node('t1') as StubNode;
+    const head = inline.querySelector('.tool-head') as StubNode;
+    const body = inline.querySelector('.tool-body') as StubNode;
+    assert.strictEqual(body.hidden, true);
+    dispatchClick(head, h.docListeners);
+    assert.strictEqual(body.hidden, false, 'clicking the head opens the body');
+    dispatchClick(head, h.docListeners);
+    assert.strictEqual(body.hidden, true, 'and closes it again');
+  });
+
+  test('a later toolUpdate updates the detail copy from the same view model', () => {
+    const h = setup();
+    openDetails(h);
+    const updated = toolView({ description: 'ran the test suite', status: 'failed' });
+    h.NS.transcriptView.updateTool('t1', updated);
+    h.NS.detailPane.onEntryUpdated('t1');
+    assert.strictEqual(h.detailBody.querySelector('.tool-title')!.textContent, 'ran the test suite');
+    assert.ok(h.detailBody.querySelector('.tool-status')!.className.includes('tc-failed'),
+      'the status patch reached the copy too');
+  });
+
+  test('Esc closes Details and returns to Outline (IME / inputs are not hijacked)', () => {
+    const h = setup();
+    openDetails(h);
+    const fire = (event: Record<string, unknown>) => {
+      let prevented = false;
+      let stopped = false;
+      const payload = { preventDefault: () => { prevented = true; }, stopPropagation: () => { stopped = true; }, ...event };
+      for (const fn of h.docListeners.keydown ?? []) { fn(payload); }
+      return { prevented, stopped };
+    };
+
+    // IME composition: the Escape belongs to the input method.
+    fire({ key: 'Escape', isComposing: true });
+    assert.strictEqual(h.NS.outline.pane(), 'details', 'composing Escape is ignored');
+    (h.doc as unknown as Record<string, unknown>).activeElement = new StubNode('input');
+    fire({ key: 'Escape' });
+    assert.strictEqual(h.NS.outline.pane(), 'details', 'Escape inside an input is not hijacked');
+    (h.doc as unknown as Record<string, unknown>).activeElement = new StubNode('body');
+
+    const result = fire({ key: 'Escape' });
+    assert.strictEqual(result.prevented, true);
+    assert.strictEqual(result.stopped, true);
+    assert.strictEqual(h.NS.outline.pane(), 'outline', 'back to Outline mode');
+    assert.strictEqual(h.detail.hidden, true);
+    assert.strictEqual(h.sideList.hidden, false, 'the outline list is visible again');
+  });
+
+  test('focus change restores the remembered entry, and clears when it is gone', () => {
+    const h = setup();
+    openDetails(h);
+    assert.ok(h.detailBody.querySelector('.tool'));
+
+    h.NS.transcriptView.hydrate({ sessionId: 's2', entries: [] });
+    h.NS.detailPane.setFocus('s2');
+    assert.strictEqual(h.detailBody.querySelector('.tool'), null, 'a session without that entry shows no card');
+    assert.ok(h.detailBody.querySelector('.detail-empty'), 'and shows the calm empty state');
+
+    const view = toolView();
+    h.NS.transcriptView.hydrate({
+      sessionId: 's1',
+      entries: [{ id: 't1', kind: 'tool', at: 1, toolCallId: 'tc1', toolView: view }],
+    });
+    h.NS.detailPane.setFocus('s1');
+    assert.ok(h.detailBody.querySelector('.tool'), 'returning to the session restores the detail');
+    assert.strictEqual(h.NS.outline.pane(), 'details');
+  });
+
+  test('Details keeps its own width; the outline width is restored untouched', () => {
+    const h = setup();
+    h.NS.outline.applyPrefs({ outlineMode: 'sidebar', outlineWidth: 240 });
+    assert.strictEqual(h.sidebar.style.width, '240px');
+
+    h.NS.outline.setPane('details');
+    assert.strictEqual(h.sidebar.style.width, '420px', 'default max(outline width, 420px)');
+
+    // Drag the shared handle while Details owns the width.
+    h.resize.dispatch('pointerdown', { clientX: 500, pointerId: 1, preventDefault: () => {} });
+    h.resize.dispatch('pointermove', { clientX: 450 });
+    h.resize.dispatch('pointerup', { clientX: 450, pointerId: 1 });
+    assert.strictEqual(h.sidebar.style.width, '470px', 'the drag widened the Details pane');
+
+    h.NS.outline.setPane('outline');
+    assert.strictEqual(h.sidebar.style.width, '240px',
+      'the outline keeps the width it had before Details; the drag did not overwrite it');
+
+    h.NS.outline.setPane('details');
+    assert.strictEqual(h.sidebar.style.width, '470px', 'Details remembers its own width');
+  });
+
+  test('the same tool text is one markdown request and renders into both hosts', () => {
+    const h = setup();
+    const applied: Array<{ node: StubNode; html: string }> = [];
+    h.NS.dom.setSanitizedHtml = (node: StubNode, html: string) => {
+      applied.push({ node, html });
+      node.textContent = html;
+    };
+    openDetails(h);
+
+    const requests = h.NS.toolCallView.pendingMarkdownItems('s1') as Array<{ key: string; text: string }>;
+    assert.strictEqual(requests.length, 1, 'one request per text, even with two hosts');
+    assert.strictEqual(requests[0].text, 'OUT');
+    h.NS.toolCallView.applyMarkdown(requests[0].key, '<p>BOTH</p>');
+
+    const inlineText = h.messages.querySelector('.tool-text') as StubNode;
+    const detailText = h.detailBody.querySelector('.tool-text') as StubNode;
+    assert.ok(inlineText && detailText, 'both copies have a text host');
+    assert.strictEqual(inlineText.textContent, '<p>BOTH</p>', 'the inline host received it');
+    assert.strictEqual(detailText.textContent, '<p>BOTH</p>', 'so did the detail host');
+    assert.strictEqual(applied.filter(a => a.html === '<p>BOTH</p>').length, 2,
+      'the rendered HTML was applied to both still-connected hosts');
   });
 });
 
@@ -8253,6 +8530,152 @@ suite('chat client logic: sub-agent card (stub DOM, )', () => {
     assert.strictEqual(node.querySelector('.subagent-state')!.textContent, 'Needs input');
     assert.strictEqual(node.querySelector('.subagent-state')!.getAttribute('data-state'), 'requires_action');
     assert.strictEqual(node.querySelector('.subagent-cancel')!.hidden, false, '需要用户介入时仍可取消');
+  });
+});
+
+// [CUSTOM- Agent map（2026-11-09）：底栏徽标 "N Agents" + 树面板 + 详情/Stop。
+// 只驱动客户端逻辑：快照由宿主给，点击由桩 DOM 的 dispatch 模拟。
+suite('chat client logic: agent map (stub DOM)', () => {
+  function harness() {
+    const btn = new StubNode('button');
+    const panel = new StubNode('div');
+    panel.hidden = true;
+    const close = new StubNode('button');
+    const subtitle = new StubNode('div');
+    const list = new StubNode('div');
+    const detail = new StubNode('div');
+    detail.hidden = true;
+    panel.appendChild(close);
+    panel.appendChild(subtitle);
+    panel.appendChild(list);
+    panel.appendChild(detail);
+    const loaded = loadClient({
+      agentMapBtn: btn, agentMapPanel: panel, agentMapClose: close,
+      agentMapSubtitle: subtitle, agentMapList: list, agentMapDetail: detail,
+    });
+    const posted: Array<Record<string, unknown>> = [];
+    loaded.NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    loaded.NS.agentMap.init();
+    return {
+      NS: loaded.NS, doc: loaded.doc, docListeners: loaded.docListeners,
+      btn, panel, subtitle, list, detail, posted,
+    };
+  }
+
+  function snapshot(agents: Array<Record<string, unknown>>, running = 1) {
+    return { type: 'agentMap', sessionId: 's1', running, agents };
+  }
+
+  test('the badge shows the running count and opens the tree', () => {
+    const h = harness();
+    h.NS.agentMap.setFocus('s1');
+    assert.deepStrictEqual(h.posted, [{ type: 'requestAgentMap', sessionId: 's1' }],
+      '切到会话时按需拉取');
+    assert.strictEqual(h.btn.hidden, true, '还没快照 ⇒ 徽标不出现');
+
+    h.NS.agentMap.setSnapshot(snapshot([{
+      agentId: 'child-1', parentId: 's1', title: 'Explorer', state: 'running',
+      canCancel: true, startedAt: Date.now() - 5000, totalTokens: 1234,
+      toolUses: 2, model: 'claude-x', description: 'reads the code',
+      children: [{ agentId: 'grand-1', parentId: 'child-1', title: 'Inner', state: 'idle' }],
+    }]));
+    assert.strictEqual(h.btn.hidden, false);
+    assert.strictEqual(h.btn.textContent, '1 Agents');
+
+    dispatchClick(h.btn, h.docListeners);
+    assert.strictEqual(h.panel.hidden, false, '点徽标打开面板');
+    assert.strictEqual(h.subtitle.textContent, '2 agents · click an agent for details');
+    const rows = h.list.querySelectorAll('.agent-map-row');
+    assert.strictEqual(rows.length, 2, '孙 agent 缩进成第二行');
+    assert.strictEqual(rows[0].querySelector('.agent-map-name')!.textContent, 'Explorer');
+    assert.strictEqual(rows[1].querySelector('.agent-map-name')!.textContent, 'Inner');
+    assert.strictEqual(rows[1].style.paddingLeft, '14px');
+    assert.strictEqual(rows[0].querySelector('.agent-map-tokens')!.textContent, '1.2k tok');
+    assert.notStrictEqual(rows[0].querySelector('.agent-map-time')!.textContent, '—',
+      'running = 从 startedAt 起的 elapsed');
+  });
+
+  test('an agent without times shows an em dash; the badge is hidden with no agents', () => {
+    const h = harness();
+    h.NS.agentMap.setFocus('s1');
+    h.NS.agentMap.setSnapshot(snapshot([{
+      agentId: 'child-1', parentId: 's1', state: 'idle', canCancel: false,
+    }], 0));
+    assert.strictEqual(h.btn.textContent, '0 Agents', '历史 agent 仍在，running 为 0');
+    dispatchClick(h.btn, h.docListeners);
+    assert.strictEqual(h.list.querySelector('.agent-map-time')!.textContent, '—');
+    assert.strictEqual(h.list.querySelector('.agent-map-tokens')!.textContent, '—');
+
+    h.NS.agentMap.setSnapshot(snapshot([], 0));
+    assert.strictEqual(h.btn.hidden, true, '没有 agent 就收起徽标');
+  });
+
+  test('clicking a row shows details and Stop posts stopAgent', () => {
+    const h = harness();
+    h.NS.agentMap.setFocus('s1');
+    h.NS.agentMap.setSnapshot(snapshot([{
+      agentId: 'child-1', parentId: 's1', title: 'Explorer', state: 'running',
+      canCancel: true, startedAt: 1, description: 'reads', summary: 'busy',
+      model: 'claude-x', totalTokens: 42, toolUses: 2, costUsd: 0.12,
+    }]));
+    dispatchClick(h.btn, h.docListeners);
+    const row = h.list.querySelector('.agent-map-row')!;
+    dispatchClick(row, h.docListeners);
+
+    assert.strictEqual(h.detail.hidden, false);
+    assert.ok(h.detail.textContent.includes('Running'), 'state shown');
+    assert.ok(h.detail.textContent.includes('claude-x'), 'model shown');
+    assert.ok(h.detail.textContent.includes('reads'), 'description shown');
+    const stop = h.detail.querySelector('.agent-map-stop')!;
+    assert.ok(stop, 'running + canCancel ⇒ Stop');
+
+    dispatchClick(stop, h.docListeners);
+    assert.deepStrictEqual(h.posted.filter(m => m.type === 'stopAgent'),
+      [{ type: 'stopAgent', sessionId: 's1', agentId: 'child-1' }]);
+    assert.strictEqual(stop.disabled, true, '点过就禁用，避免重复');
+  });
+
+  test('Escape / clicking outside / clicking the badge again closes the panel', () => {
+    const h = harness();
+    h.NS.agentMap.setFocus('s1');
+    h.NS.agentMap.setSnapshot(snapshot([{
+      agentId: 'child-1', parentId: 's1', title: 'Explorer', state: 'idle',
+    }], 0));
+    dispatchClick(h.btn, h.docListeners);
+    assert.strictEqual(h.panel.hidden, false);
+    dispatchClick(h.btn, h.docListeners);
+    assert.strictEqual(h.panel.hidden, true, '再点一次徽标收起');
+
+    dispatchClick(h.btn, h.docListeners);
+    const outside = new StubNode('div');
+    dispatchClick(outside, h.docListeners);
+    assert.strictEqual(h.panel.hidden, true, '点外面收起');
+
+    dispatchClick(h.btn, h.docListeners);
+    const event = {
+      key: 'Escape',
+      preventDefault() { /* no default in the stub */ },
+      stopPropagation() { /* capture listener consumes it */ },
+    };
+    for (const fn of h.docListeners.keydown ?? []) { fn(event); }
+    assert.strictEqual(h.panel.hidden, true, 'Escape 收起');
+  });
+
+  test('a snapshot for another session is ignored, and focus resets it', () => {
+    const h = harness();
+    h.NS.agentMap.setFocus('s1');
+    h.NS.agentMap.setSnapshot(snapshot([{
+      agentId: 'child-1', parentId: 's1', title: 'Explorer', state: 'running',
+    }]));
+    assert.strictEqual(h.btn.hidden, false);
+
+    h.NS.agentMap.setSnapshot({ ...snapshot([]), sessionId: 'other' });
+    assert.strictEqual(h.btn.hidden, false, '别的会话的快照不动当前面');
+
+    h.NS.agentMap.setFocus('s2');
+    assert.strictEqual(h.btn.hidden, true, '换会话先清掉旧徽标');
+    assert.strictEqual(h.posted[1].type, 'requestAgentMap');
+    assert.strictEqual(h.posted[1].sessionId, 's2');
   });
 });
 

@@ -13,6 +13,7 @@ import type { EntryPatch, TranscriptEntry, TranscriptSnapshot } from './transcri
 import type { ToolCallView } from './content/toolCalls';
 import type { HistoryDirOption } from './historyDirs';
 import type { ShortcutMap } from './shortcuts';
+import type { AgentMapNode } from './agentmap/AgentMapStore';
 
 /** Why a session left the live set (mirrors SessionManager.SessionCloseReason). */
 export type CloseReason = 'user' | 'agent-disconnected';
@@ -373,6 +374,9 @@ export type ExtToChat =
   | { type: 'rewindReady'; sessionId: string; text: string }
   | { type: 'toolUpdate'; sessionId: string; entryId: string; tool: ToolCallView }
   | { type: 'meta'; sessionId: string; meta: SessionMeta }
+  // [CUSTOM- Agent map（2026-11-09）：根会话当前的子 agent 树。宿主只在签名变化时
+  // 合并发送；客户端按 sessionId 过滤，`running` 驱动底栏徽标。
+  | { type: 'agentMap'; sessionId: string; running: number; agents: AgentMapNode[] }
   | { type: 'attachments'; sessionId: string; attachments: Attachment[] }
   // 一次连接尝试的相位（状态卡用）。
   // **必须无条件回话**，这不是锦上添花：`refreshSessions` 靠签名去重（1867 行的 `conn:` 位），
@@ -444,6 +448,10 @@ export type ChatToExt =
   | { type: 'sideFocus'; sessionId: string }
   | { type: 'sideClose'; sessionId: string }
   | { type: 'cancelTurn'; sessionId: string }
+  // [CUSTOM- Agent map 的按需拉取 / 停止一个子 agent。两条都是会话作用域
+  // （`sessionId` 是根会话；`agentId` 是子会话 id），走 `verifySession` 守卫之后。
+  | { type: 'requestAgentMap'; sessionId: string }
+  | { type: 'stopAgent'; sessionId: string; agentId: string }
   | { type: 'newSession'; agentName: string }
   // /033 - 面板内的两个新入口。
   // 都**不是会话作用域**（可能根本没有聚焦会话——正是要用它们的时候），

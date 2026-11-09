@@ -6,7 +6,7 @@
 >
 > | 分册 | 主题 | 覆盖的 §5.x |
 > |---|---|---|
-> | 本文件 | 面板骨架与消息纪律、安全、子 agent、主双面与 Side surface、大纲、引导条；性能/审计保留跳转入口 | §5.1–§5.12 |
+> | 本文件 | 面板骨架与消息纪律、安全、子 agent、主双面与 Side surface、大纲、引导条、Agent map（§5.57）、右栏 Details（§5.58）；性能/审计保留跳转入口 | §5.1–§5.12、§5.57–§5.58 |
 > | [chat-performance.md](./chat-performance.md) | 长会话、流式 Markdown 尾块与原生正文渲染窗口 | §5.10 |
 > | [chat-panel-audit.md](./chat-panel-audit.md) | 历史面板审计结论与风险 | §5.12 |
 > | [chat-panel-sessions.md](./chat-panel-sessions.md) | 会话目录与重开路径、历史选择器过滤、会话恢复 | §5.13–§5.15、§5.24、§5.48 |
@@ -62,7 +62,7 @@
 | `html/nonce.ts` | CSP nonce 生成 | — |
 | `html/client/modelOrder.ts` | `orderOption` 依据自定义模型顺序稳定重排 agent 已提供的模型、保留分组与未配置项相对顺序 | 自定义模型排序 |
 | `html/client/shortcuts.ts` | 当前 Chat webview 的快捷键匹配与分发：`fromEvent` 给设置录制器共用，`onKeyDown` 在 IME/浮层门控后调用 tab/scroll/composer；设置值由宿主 `shortcuts.ts` 规范化并经 `uiPrefs` 下发 | Chat 快捷键 |
-| `html/client/*.ts` | webview 内联客户端 JS，**每个模块是一个字符串**，统一挂到 `window.__vac`。构件：`dom` / `icons` / `links`（链接与文件 chip）/ `boot`（装配入口）/ `tabs` / `transcriptView` / `toolCallView`（记录区，见 §5.16+）/ `rail`（左侧引导条，§5.11）/ `scroll` + `perf`（滚动记忆与长任务看门狗，§5.10/§5.46）；`scroll` 还负责**内层滚动卡片的焦点门控与自动追尾**（§5.53）/ `times`（记录时刻，§5.29）/ `stickyUser`（置顶最近的用户消息，§5.25）/ `outline` + `contextMenu` + `sessionMenu` + `directoryMenu`（大纲与三个右键菜单，§5.9/§5.50）/ `mermaid`（懒加载 tiny、图表/原文切换、主题重渲染，§5.56）/ `permissionView` + `permissionDrawer`（权限卡与抽屉，§5.8/§5.35）/ `elicitationView`（表单，§5.33）/ `lightbox`（图片放大）/ `stateCard`（**连接状态卡**，§5.28）/ `composer`（输入卡，§5.32）/ `autoExpand`（新输出自动展开，按会话 + 卡片类型，2026-10-21）/ `tail`（消息面板自动追尾，2026-10-28，§5.54）/ `settingsPanel`（设置面板，2026-10-21）/ `popover`（面板内非模态确认 / 输入浮层，2026-10-29；会话删除 / 关闭运行中 / 重命名 / 设置破坏性动作共用）。058 新增 `directoryMenu.ts`；097 新增 `lightbox.ts`；102 新增 `stickyUser.ts`；123 新增 `stateCard.ts`（它同时接管了原先散在 `sessionMenu.ts` 与 `boot.ts` 的空态文案和 Connect 按钮）；151 起 `composer.ts` 也接管**草稿页**的输入卡；152 起 `elicitationView.ts` 从"记录里的内联卡"改成**悬浮抽屉**（记录只留一行待答条） | 改前端交互 |
+| `html/client/*.ts` | webview 内联客户端 JS，**每个模块是一个字符串**，统一挂到 `window.__vac`。构件：`dom` / `icons` / `links`（链接与文件 chip）/ `boot`（装配入口）/ `tabs` / `transcriptView` / `toolCallView`（记录区，见 §5.16+）/ `rail`（左侧引导条，§5.11）/ `scroll` + `perf`（滚动记忆与长任务看门狗，§5.10/§5.46）；`scroll` 还负责**内层滚动卡片的焦点门控与自动追尾**（§5.53）/ `times`（记录时刻，§5.29）/ `stickyUser`（置顶最近的用户消息，§5.25）/ `outline` + `contextMenu` + `sessionMenu` + `directoryMenu`（大纲与三个右键菜单，§5.9/§5.50）/ `detailPane`（右栏 Details 模式，§5.58）/ `mermaid`（懒加载 tiny、图表/原文切换、主题重渲染，§5.56）/ `permissionView` + `permissionDrawer`（权限卡与抽屉，§5.8/§5.35）/ `elicitationView`（表单，§5.33）/ `lightbox`（图片放大）/ `stateCard`（**连接状态卡**，§5.28）/ `composer`（输入卡，§5.32）/ `autoExpand`（新输出自动展开，按会话 + 卡片类型，2026-10-21）/ `tail`（消息面板自动追尾，2026-10-28，§5.54）/ `settingsPanel`（设置面板，2026-10-21）/ `agentMap`（子 agent 徽标与树面板，§5.57）/ `popover`（面板内非模态确认 / 输入浮层，2026-10-29；会话删除 / 关闭运行中 / 重命名 / 设置破坏性动作共用）。058 新增 `directoryMenu.ts`；097 新增 `lightbox.ts`；102 新增 `stickyUser.ts`；123 新增 `stateCard.ts`（它同时接管了原先散在 `sessionMenu.ts` 与 `boot.ts` 的空态文案和 Connect 按钮）；151 起 `composer.ts` 也接管**草稿页**的输入卡；152 起 `elicitationView.ts` 从"记录里的内联卡"改成**悬浮抽屉**（记录只留一行待答条） | 改前端交互 |
 
 **终端输出通路**（CUSTOM-20260923-012）：ACP 的 `Terminal` 工具内容只是引用（`{terminalId}`），终端归客户端所有。
 链路为：`ConnectionInfo.terminals`（`ConnectionManager` 暴露）→ `TerminalHandler.readOutput(terminalId)`
@@ -178,6 +178,8 @@
 并到父会话会直接改坏父的上下文圆环、Todo 卡、tab 名与 "Switched to …" 提示。并行子会话的正文
 在 `TranscriptStore` 里按 `origin`（子会话 id）隔离合帧，不会因为「上一条还在流式」就被拼进另一个
 来源的气泡。工具调用仍并回父会话，嵌套推断据此把子调用挂在 Task 下。
+**2026-11-09 起**：子会话的 `usage_update` / `tool_call(_update)` 在**被丢弃之前**还会喂给
+Agent map 注册表（§5.57）——那只用于徽标与树面板，不改变上面任何一条转录规则。
 
 ### 5.7 主双面与临时 Side surface（CUSTOM-20260924-019）
 
@@ -339,6 +341,35 @@ pending ──用户点按钮──► selected        （回答 optionId）
 ### 5.12 面板审计与阶段 1 修复（已拆出）
 
 历史结论与风险见 [`chat-panel-audit.md`](./chat-panel-audit.md)；编号不变，结论需以当前源码核验。
+
+### 5.57 Agent map（2026-11-09）
+
+底栏徽标 `N Agents` 打开**焦点会话**的子 agent 树。数据来自三条通道：`subagent_update`
+（身份/状态/能力）、子会话自己的 `usage_update`（上下文/成本/模型）与 `tool_call(_update)`
+（最后工具）。后两者**只喂注册表，不并回父会话转录** —— §5.6 的过滤规则一处未改。
+
+| 关注点 | 规则 |
+|---|---|
+| 注册表 | `agentmap/AgentMapStore.ts` 纯逻辑（禁 import vscode）：按根会话分桶、键是子会话 id；`upsert` 局部合并，`noteUsage` / `noteTool` 补用量与最后工具，`snapshot` 按 `parentId` 嵌套，`signature` 做变更检测 |
+| 状态映射 | RFD `state.state` 原样取 running / requires_action / idle / unknown；`idle` + `stopReason:'error'`（或 `error.message`）→ failed，`idle` + `'cancelled'` → cancelled。running 计数只算 running / requires_action |
+| 层级 | 节点 `parentId` 是**别名之前**的 ACP 外层 sessionId：孙 agent 挂在子会话下。`subagentParents` 仍只负责把记录别名回根，两者不要合并 |
+| 推送 | `agentMapSoon` 先比签名、再 200ms 合并（与 `refreshSessionsSoon` 同形）；`requestAgentMap` 按需 force 回；只发给 `surfaceFocused` 等于该会话的面。**绝不 per chunk 发** |
+| 停止 | `stopAgent` 先查注册表 `canCancel` 且仍在跑，再调 `SessionManager.cancelSubagent(根会话, 子会话)` |
+| 时间 | 只用 `_meta["vac/agentMap"]` 的 epoch 毫秒；缺就不发明（UI 显示 "—"）。running 的 elapsed 由客户端每 1s 从 `startedAt` 重算 |
+| 客户端 | `html/client/agentMap.ts`：徽标 + 面板；关闭时不渲染、不读布局；Escape / 点外面 / 再点徽标关闭；详情与 Stop 全部 `textContent`（无 innerHTML） |
+
+### 5.58 右侧栏的 Details 模式（2026-11-09）
+
+右栏 `#outlineSidebar` 有两种内容模式：Outline（既有 Messages/Cards 大纲）与 Details（单张工具卡的完整副本）。头部是 `[Outline][Details]` 分段控件，✕ 仍是关栏。
+
+| 关注点 | 规则 |
+|---|---|
+| 入口 | 工具卡头的 `.tool-open-detail`（真 `<button>`，在 `.tool-head-row` 里与 `.tool-head` 并列——head 本身是 button，嵌套按钮非法）+ 右键记录的 "Open in details"；两者都调 `NS.detailPane.open(entryId)`。Phase 1 只支持 tool 记录且必须已有视图模型 |
+| 渲染 | **再渲染一份**，不搬 DOM。`detailPane.ts` 用 `NS.toolCallView.render(tool, entryId, { slotPrefix: 'detail:' })`；`toolUpdate` → `detailPane.onEntryUpdated` 用同一视图模型 `update()`。内联卡不折叠、不搬正文；详情副本首次渲染展开自己的 body（独立的展开/滚动状态） |
+| markdown 双宿主 | `toolCallView.mdPending[key]` 的宿主是**数组**；key 只由文本 + Read 上下文决定（不再含 slot），同一段文本只发一次请求，回填应用到所有仍连接的宿主。`mdActive` 仍按 slot 记，某个 slot 换文本只摘掉它自己的宿主 |
+| 会话记忆 | 按会话记 `entryId`（客户端 `vscode.setState`）。焦点切换 / hydrate 后该条仍在就恢复详情，否则空态；transcript reset、会话关闭或条目消失时清空。Esc 只在 Details 模式且无 popover/抽屉/输入焦点/IME 合成时生效：回到 Outline 并聚焦记录区 |
+| 宽度 | 大纲宽度仍归宿主 `uiPrefs`；详情宽度客户端本地持久化（`detailPaneWidth`），首次进入默认 `max(大纲宽度, 420px)`。`outline.ts` 用 width-owner 区分，拖动只写当前所有者；`setPane` / `openRail` / `getWidth` / `setDetailWidth` 是详情控制器用的最小 API |
+| 样式 | 卡片全局类照常生效；详情容器补父卡缩进的等价规则，并取消卡内限高（右栏只留一条纵向滚动）。窄至 320px 不产生横向溢出 |
 
 ### 5.13–5.15 已拆出：会话目录与重开路径
 

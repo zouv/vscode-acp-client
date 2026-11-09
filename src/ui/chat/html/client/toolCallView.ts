@@ -249,7 +249,11 @@ export const toolCallViewClient = `
    * Two caches, both cleared per session:
    * · mdCache  - key -> rendered HTML, so a body rebuild (which happens whenever
    * bodySignature changes) puts the HTML straight back;
-   * · mdPending - key -> { entryId, text, host } for the next renderMarkdown batch.
+   * · mdPending - key -> { entryId, text, hosts } for the next renderMarkdown batch.
+   *   'hosts' is a LIST because the same tool text can be on screen in two places at
+   *   once: the inline card and the Details rail copy. One request must feed both.
+   *   Slots (mdActive) stay per placement, so one copy moving to a new text never
+   *   detaches the other copy's host from the text they still share.
    */
   var mdCache = {};
   var mdPending = {};
@@ -280,9 +284,20 @@ export const toolCallViewClient = `
    * rendered as plain text instead: caching it would mean trusting a key we cannot
    * compute.
    */
-  function markdownKey(slot, text) {
+  function markdownKey(contextKey, text) {
     var fp = fingerprintText(text);
-    return fp === null ? null : slot + '#' + fp;
+    return fp === null ? null : (contextKey || '') + '#' + fp;
+  }
+
+  function addHost(entry, host) {
+    if (!entry || !host || entry.hosts.indexOf(host) >= 0) { return; }
+    entry.hosts.push(host);
+  }
+
+  function removeHost(entry, host) {
+    if (!entry || !entry.hosts) { return; }
+    var at = entry.hosts.indexOf(host);
+    if (at >= 0) { entry.hosts.splice(at, 1); }
   }
 
   /** Salt the cache key with all host-published Read paths so late locations invalidate it. */
@@ -301,10 +316,16 @@ export const toolCallViewClient = `
 
   /** Re-render this host from the cache, or queue it for the next round-trip. */
   function markdownText(host, slot, entryId, text, contextKey) {
-    var cacheKey = markdownKey(slot + (contextKey || ''), text);
+    var cacheKey = markdownKey(contextKey, text);
     var previous = mdActive[slot];
     if (previous && previous !== cacheKey && mdPending[previous]) {
-      mdPending[previous].host = null;
+      // [CUSTOM- This placement no longer shows that text. Detach only THIS host;
+      // the other host (inline card / Details copy) may still be showing it.
+      removeHost(mdPending[previous], host);
+      if (mdPending[previous].hosts.length === 0) {
+        delete mdPending[previous];
+        delete mdInFlight[previous];
+      }
     }
     mdActive[slot] = cacheKey;
     if (cacheKey === null) {
@@ -316,7 +337,7 @@ export const toolCallViewClient = `
       return;
     }
     if (!Object.prototype.hasOwnProperty.call(mdPending, cacheKey)) {
-      mdPending[cacheKey] = { entryId: entryId, text: text, host: host };
+      mdPending[cacheKey] = { entryId: entryId, text: text, hosts: [host] };
       // [CUSTOM- ASK FOR IT. This queue used to be write-only from the
       // tool side: 'transcriptView.flushPending' only ever fires while an assistant /
       // thought record tracks its markdown, so a tool body's text was requested **only
@@ -327,9 +348,9 @@ export const toolCallViewClient = `
       scheduleMarkdown();
       return;
     }
-    // The same text asked again (the body was rebuilt): the node is new, the request
-    // is not — point the pending entry at the node that is on screen now.
-    mdPending[cacheKey].host = host;
+    // The same text asked again (the body was rebuilt / the Details copy joined):
+    // the request already exists, so just register this node as another recipient.
+    addHost(mdPending[cacheKey], host);
   }
 
   var markdownFlushPending = false;
@@ -399,7 +420,7 @@ export const toolCallViewClient = `
     return false;
   }
 
-  /** The host rendered one of them: cache it and, if the node still exists, show it. */
+  /** The host rendered one of them: cache it and paint every still-connected host. */
   function applyMarkdown(key, html) {
     var item = mdPending[key];
     // [CUSTOM- 这就是对那条在飞请求的回答（哪怕 pending 已因文本变化而消失）。
@@ -410,7 +431,10 @@ export const toolCallViewClient = `
     if (!item) { return; }
     mdCache[key] = html;
     delete mdPending[key];
-    if (item.host && item.host.parentNode) { applyRendered(item.host, html); }
+    var hosts = item.hosts || [];
+    for (var i = 0; i < hosts.length; i++) {
+      if (hosts[i] && hosts[i].parentNode) { applyRendered(hosts[i], html); }
+    }
   }
 
   /** Session switch: rendered HTML belongs to the previous transcript. */
@@ -421,7 +445,7 @@ export const toolCallViewClient = `
     mdActive = {};
   }
 
-  function renderContentItem(item, key, entryId, tool) {
+  function renderContentItem(item, key, entryId, tool, slotPrefix) {
     var el = NS.dom.el;
     if (item.type === 'diff') { return renderDiff(item, key, tool); }
 
@@ -450,7 +474,7 @@ export const toolCallViewClient = `
       // [CUSTOM- Markdown, not raw text - see markdownText above.
       // [CUSTOM- …and a console fence that holds a markdown table is unwrapped
       // first, so the table renders as a table instead of as literal pipes in a code block.
-      markdownText(textHost, (entryId || '') + '#' + (key || ''), entryId || '',
+      markdownText(textHost, (slotPrefix || '') + (entryId || '') + '#' + (key || ''), entryId || '',
         toolMarkdownSource(block.text, tool), readContextKey(tool));
       return textHost;
     }
@@ -596,7 +620,7 @@ export const toolCallViewClient = `
     return false;
   }
 
-  function fillToolBody(body, tool, entryId) {
+  function fillToolBody(body, tool, entryId, slotPrefix) {
     var el = NS.dom.el;
     NS.dom.clear(body);
     var outputs = [];
@@ -628,7 +652,7 @@ export const toolCallViewClient = `
       if (item.type === 'content' && item.block && item.block.type === 'text' && isBlank(item.block.text)) { continue; }
       // Positional key so a rebuilt diff keeps the user's expansion state.
       var itemKey = 'i' + j + ':' + (item.path || '');
-      var rendered = renderContentItem(item, itemKey, entryId, tool);
+      var rendered = renderContentItem(item, itemKey, entryId, tool, slotPrefix);
       // [CUSTOM- Tag a markdown text host with its slot so a later update whose
       // layout is unchanged can re-render just this host (see patchBodyContent).
       if (item.type === 'content' && item.block && item.block.type === 'text' && rendered.setAttribute) {
@@ -647,7 +671,7 @@ export const toolCallViewClient = `
       if (hasTableRow(tool.output)) {
         var rawHost = el('div', 'tool-text md');
         rawHost.setAttribute('data-tool-item', 'raw');
-        markdownText(rawHost, (entryId || '') + '#raw', entryId || '', tool.output, readContextKey(tool));
+        markdownText(rawHost, (slotPrefix || '') + (entryId || '') + '#raw', entryId || '', tool.output, readContextKey(tool));
         outputs.push(rawHost);
       } else {
         var rawPre = el('pre', 'tool-raw', tool.output);
@@ -856,7 +880,7 @@ export const toolCallViewClient = `
    * new suffix appended, so a selection or inner scroll inside it survives.
    * Returns false when a host is missing — the caller then rebuilds.
    */
-  function patchBodyContent(body, tool, entryId) {
+  function patchBodyContent(body, tool, entryId, slotPrefix) {
     var items = tool.items || [];
     for (var j = 0; j < items.length; j++) {
       var item = items[j];
@@ -866,7 +890,7 @@ export const toolCallViewClient = `
       if (!host) { return false; }
       var fp = signatureText(item.block.text);
       if (host.getAttribute('data-text-sig') === fp) { continue; }
-      markdownText(host, (entryId || '') + '#' + key, entryId || '',
+      markdownText(host, (slotPrefix || '') + (entryId || '') + '#' + key, entryId || '',
         toolMarkdownSource(item.block.text, tool), readContextKey(tool));
       host.setAttribute('data-text-sig', fp);
     }
@@ -874,7 +898,7 @@ export const toolCallViewClient = `
     if (mode === 'md') {
       var mdHost = itemHost(body, 'raw');
       if (!mdHost) { return false; }
-      markdownText(mdHost, (entryId || '') + '#raw', entryId || '', tool.output, readContextKey(tool));
+      markdownText(mdHost, (slotPrefix || '') + (entryId || '') + '#raw', entryId || '', tool.output, readContextKey(tool));
     } else if (mode === 'raw') {
       var pre = body.querySelector('.tool-raw');
       if (!pre) { return false; }
@@ -893,8 +917,9 @@ export const toolCallViewClient = `
   }
 
   /** Build the DOM for a tool call. */
-  function render(tool, entryId) {
+  function render(tool, entryId, options) {
     var el = NS.dom.el;
+    var slotPrefix = options && options.slotPrefix ? String(options.slotPrefix) : '';
     var wrap = el('div', 'tool');
     wrap.setAttribute('data-tool-id', tool.toolCallId);
     if (tool.parentId) { wrap.setAttribute('data-parent-id', tool.parentId); }
@@ -923,7 +948,22 @@ export const toolCallViewClient = `
     if (tool.inferredParent) {
       head.appendChild(inferredMarker());
     }
-    wrap.appendChild(head);
+    // [CUSTOM- Details rail entry point. A real <button> in the head ROW (not inside
+    // the head button — nested buttons are invalid) so it is keyboard reachable.
+    // stopPropagation keeps it from reaching the card's own toggle delegates.
+    var headRow = el('div', 'tool-head-row');
+    headRow.appendChild(head);
+    var detailBtn = el('button', 'tool-open-detail', '\\u2922');
+    detailBtn.type = 'button';
+    detailBtn.title = 'Open details in the sidebar';
+    detailBtn.setAttribute('aria-label', 'Open details in the sidebar');
+    detailBtn.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (NS.detailPane) { NS.detailPane.open(entryId); }
+    });
+    headRow.appendChild(detailBtn);
+    wrap.appendChild(headRow);
 
     var body = el('div', 'tool-body');
     // [CUSTOM- Collapsed by default, for EVERY kind — including a
@@ -932,7 +972,7 @@ export const toolCallViewClient = `
     // command output. IN/OUT is one click away, and the head shows the agent's
     // description so the reader knows what is behind the caret.
     body.hidden = true;
-    fillToolBody(body, tool, entryId);
+    fillToolBody(body, tool, entryId, slotPrefix);
     var signature = bodySignature(tool);
     wrap.setAttribute('data-body-sig', signature.full);
     wrap.setAttribute('data-body-layout', signature.layout);
@@ -1049,8 +1089,9 @@ export const toolCallViewClient = `
   }
 
   /** Apply a fresh view model to an existing card. */
-  function update(node, tool, entryId) {
+  function update(node, tool, entryId, options) {
     if (!node) { return; }
+    var slotPrefix = options && options.slotPrefix ? String(options.slotPrefix) : '';
 
     // Parent link can appear (or disappear) on any update, since the strategy
     // re-runs and a parent's output may only reveal the link at its end.
@@ -1100,10 +1141,10 @@ export const toolCallViewClient = `
       var previous = node.getAttribute('data-body-sig');
       var previousLayout = node.getAttribute('data-body-layout');
       if (previous !== signature.full) {
-        var patched = previousLayout === signature.layout && patchBodyContent(body, tool, entryId);
+        var patched = previousLayout === signature.layout && patchBodyContent(body, tool, entryId, slotPrefix);
         if (!patched) {
           var expansion = captureExpansion(body);
-          fillToolBody(body, tool, entryId);
+          fillToolBody(body, tool, entryId, slotPrefix);
           applyExpansion(body, expansion);
         }
         node.setAttribute('data-body-sig', signature.full);
@@ -1112,7 +1153,11 @@ export const toolCallViewClient = `
     }
     // [CUSTOM- Coalesced, not synchronous: this runs on every
     // output chunk of a running command (see refreshGroupingSoon).
-    if (node.parentNode) { refreshGroupingSoon(node.parentNode); }
+    // Only the transcript copy owns the grouping indicators: the Details copy lives
+    // outside #messages and would otherwise report "no children" and hide the
+    // header's sub-agent toggle.
+    var inTranscript = !node.closest || !!node.closest('.messages');
+    if (inTranscript && node.parentNode) { refreshGroupingSoon(node.parentNode); }
   }
 
   /**

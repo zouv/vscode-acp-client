@@ -120,6 +120,10 @@ export class ConnectionManager {
           // Declaring compaction makes Claude replay a compact summary as
           // `compaction_update` instead of a user_message_chunk (a 64KB user bubble).
           session: { configOptions: { boolean: {} }, compaction: {} },
+          // [CUSTOM- Agent map (2026-11-09): the adapter then enriches every
+          // `subagent_update` with `_meta["vac/agentMap"]` (times, tokens, tool count,
+          // summary). Without it the map still works from the RFD body, just sparser.
+          _meta: { 'vac/agentMap': true },
         },
       }), timeoutMs, 'ACP initialize', signal);
       log(`ConnectionManager: initialized. Agent: ${initResponse.agentInfo?.name || 'unknown'} v${initResponse.agentInfo?.version || '?'}`);

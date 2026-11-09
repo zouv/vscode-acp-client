@@ -201,6 +201,8 @@ export const bootClient = `
     syncRestore();
     // [CUSTOM- 右侧大纲栏的开/关也是**按会话**记的（用户要求），同一个咽喉点同步。
     if (NS.outline && NS.outline.setSession) { NS.outline.setSession(currentSessionId); }
+    // [CUSTOM- Agent map（2026-11-09）：换会话就丢掉上一份快照并重新问宿主。
+    if (NS.agentMap) { NS.agentMap.setFocus(currentSessionId); }
     NS.tabs.setFocus(summary);
     NS.composer.setFocus(summary, meta);
     // [CUSTOM- 这里原有一行 NS.tabs.renderUsage(meta)（顶部那条进度条）。
@@ -228,6 +230,9 @@ export const bootClient = `
     showEmpty(false);
     setLoading(!!summary.loading);
     if (snapshot) {
+      // [CUSTOM- 详情副本引用的是上一份 DOM 里的节点：重建前先清掉，
+      // 重建后由文件末尾的 setFocus 从「按会话记的 entryId」恢复。
+      if (NS.detailPane && NS.detailPane.onTranscriptReset) { NS.detailPane.onTranscriptReset(); }
       // [CUSTOM- 切会话的"短暂延时"就是这一行：整份记录在**同步**重建（DOM + sanitize +
       // 折叠量测）。打一行耗时，真机上就能判断是记录多还是 markdown/工具卡重。正常切换
       // 一次一条，不会刷屏；排查完也留着（与 scroll# / markdownRendered 同类的诊断）。
@@ -269,6 +274,9 @@ export const bootClient = `
     // [CUSTOM- The directory drawer belonged to the previous
     // session/draft too.
     NS.directoryMenu.reset();
+    // [CUSTOM- 详情栏按会话记：这里必须在 hydrate/reset 之后，
+    // 才能判断"记着的那条 entry 还在不在"（不在就回空态）。
+    if (NS.detailPane && NS.detailPane.setFocus) { NS.detailPane.setFocus(currentSessionId); }
     requestMarkdown();
   }
 
@@ -714,6 +722,8 @@ export const bootClient = `
         if (message.sessionId === currentSessionId) {
           currentSessionId = null;
           if (NS.tail) { NS.tail.setFocus(null); }
+          // [CUSTOM- Agent map 属于这个会话：一起清掉徽标与面板。
+          if (NS.agentMap) { NS.agentMap.setFocus(null); }
           resetTranscript();
           showEmpty(true);
           NS.outline.invalidate();
@@ -737,6 +747,11 @@ export const bootClient = `
           if (entries[i].kind === 'elicitation') { appendedForm = true; }
           if (entries[i].kind === 'permission') { appendedPermission = true; }
           NS.transcriptView.append(entries[i], entries[i].toolView);
+          // [CUSTOM- The host may re-send a mutated tool entry through 'append'
+          // (instead of 'toolUpdate'); keep an open Details copy in step as well.
+          if (entries[i].kind === 'tool' && NS.detailPane && NS.detailPane.onEntryUpdated) {
+            NS.detailPane.onEntryUpdated(entries[i].id);
+          }
         }
         if (entries.length > 0) { showEmpty(false); }
         // [CUSTOM- Only the transcript-mutating cases invalidate the
@@ -792,6 +807,8 @@ export const bootClient = `
       case 'toolUpdate':
         if (message.sessionId === currentSessionId) {
           NS.transcriptView.updateTool(message.entryId, message.tool);
+          // [CUSTOM- 详情副本用同一个视图模型再渲染/更新一次（不搬 DOM）。
+          if (NS.detailPane && NS.detailPane.onEntryUpdated) { NS.detailPane.onEntryUpdated(message.entryId); }
           // [CUSTOM- A tool's status is what colours its rail dot.
           NS.rail.invalidate();
           if (NS.outline && NS.outline.noteToolUpdate) { NS.outline.noteToolUpdate(); }
@@ -820,6 +837,11 @@ export const bootClient = `
         if (message.sessionId === currentSessionId) {
           NS.composer.setMeta(message.meta);
         }
+        break;
+
+      // [CUSTOM- Agent map 快照（宿主只在签名变化时合并发送，也响应按需拉取）。
+      case 'agentMap':
+        if (NS.agentMap) { NS.agentMap.setSnapshot(message); }
         break;
 
       case 'attachments':
@@ -1177,6 +1199,9 @@ export const bootClient = `
    */
   function resetTranscript() {
     NS.transcriptView.reset();
+    // [CUSTOM- 记录清了，详情副本引用的节点也就不存在了。setFocus(null) 同时
+    // 清掉当前检视项并回到空态；按会话记的 entryId 留给下一次 focus 恢复。
+    if (NS.detailPane && NS.detailPane.setFocus) { NS.detailPane.setFocus(null); }
     syncDrawers();
   }
 
@@ -1190,6 +1215,8 @@ export const bootClient = `
     NS.transcriptView.init(NS.dom.qs('messages'));
     // [CUSTOM-
     NS.outline.init(NS.dom.qs('messages'), NS.dom.qs('outline'), NS.dom.qs('outlineBtn'));
+    // [CUSTOM- Details 栏（右栏第二模式）：读本地宽度/按会话记忆，装容器。
+    if (NS.detailPane) { NS.detailPane.init(); }
     // [CUSTOM-
     NS.rail.init(NS.dom.qs('messages'), NS.dom.qs('rail'), NS.dom.qs('railTrack'));
     // [CUSTOM- 连接状态卡（取代 sessionMenu 里的空态按钮）。
@@ -1262,6 +1289,8 @@ export const bootClient = `
     // [CUSTOM- 设置面板：Tab 栏右侧齿轮 + 遮罩/导航/行渲染。
     if (NS.settingsPanel) { NS.settingsPanel.init(); }
     if (NS.shortcuts) { NS.shortcuts.init(); }
+    // [CUSTOM- Agent map：底栏徽标 + 面板（按需渲染，init 只绑事件）。
+    if (NS.agentMap) { NS.agentMap.init(); }
     // [CUSTOM- 2026-10-29：document 级 Escape 放在 init 末尾。浮层（popover/outline/
     // contextMenu/sessionMenu/settingsPanel/elicitation/lightbox）都在 capture 阶段或
     // 用 preventDefault 先消费；composer 只处理"没人消费的 Escape"。

@@ -259,6 +259,17 @@ export const contextMenuClient = `
     var forkId = entryIdOf(target);
     var forkEntry = forkId && NS.transcriptView && NS.transcriptView.entry
       ? NS.transcriptView.entry(forkId) : null;
+
+    // [CUSTOM- 详情栏（右栏 Details）：只有**记录里的工具卡**能打开，
+    // 且必须已经有视图模型（空壳卡没有内容可看）。入口与卡头上的 ⤢ 是同一个控制器。
+    if (forkEntry && forkEntry.kind === 'tool' && forkEntry.toolView
+      && NS.detailPane) {
+      items.push({
+        label: 'Open in details',
+        run: function () { NS.detailPane.open(forkId); }
+      });
+    }
+
     if (!sideSurface && forkEntry && forkEntry.kind === 'assistant') {
       items.push({
         label: 'Fork from here',

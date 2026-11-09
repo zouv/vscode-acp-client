@@ -112,6 +112,9 @@ import { directoryKey, directoryOptions, folderName as basename, recentDirectory
 import { claudeTranscriptDir, readDiskSessions, readTranscriptCompactions, readTranscriptTimes, readTranscriptUserAttachments } from './diskSessions';
 import type { TranscriptCompactionMeta, TranscriptUserParts } from './diskSessions';
 import type { HistorySessionSummary } from './protocol';
+// [CUSTOM- Agent map（2026-11-09）：`subagent_update` 的身份/状态 + 子会话自己流量
+// （usage / tool）汇成一张按根会话分桶的注册表。纯逻辑，见 agentmap/AgentMapStore.ts。
+import { AgentMapStore } from './agentmap/AgentMapStore';
 
 /** Prefix of the output channel used for panel-level diagnostics. */
 const LOG_PREFIX = 'chat-panel';
@@ -307,6 +310,7 @@ interface SessionLabelOverride {
 
 const SIDE_MESSAGE_TYPES = new Set([
   'ready', 'sendPrompt', 'cancelTurn', 'cancelSubagent',
+  'requestAgentMap', 'stopAgent',
   'permissionAnswer', 'elicitationAnswer', 'renderMarkdown',
   'copy', 'clientLog', 'openLink', 'openFile', 'setUiPref',
   'detachFile', 'attachPath', 'attachImage', 'setMode', 'setModel',
@@ -402,6 +406,14 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * 子 agent 分组）因此原样生效，卡片只承担身份、状态与取消。
    */
   private readonly subagentParents: Map<string, string> = new Map();
+  /**
+   * [CUSTOM- Agent map 的唯一写者：根会话 id → 子 agent 注册表。
+   * 与 `subagentParents` 并存而不是合并：那张表服务于「把子会话流量别名回父会话」，
+   * 这张表保留父子层级、状态、用量与时间，供底部徽标与 Agent map 面板读取。
+   */
+  private readonly agentMaps = new AgentMapStore();
+  private readonly agentMapSoonTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly agentMapSignatures = new Map<string, string>();
   /**
    * [CUSTOM- Sessions this host is currently opening from history/restore.
    *
@@ -684,6 +696,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       for (const [child, parent] of Array.from(this.subagentParents.entries())) {
         if (parent === sessionId) { this.subagentParents.delete(child); }
       }
+      // [CUSTOM- Agent map：会话没了，它的子 agent 树也再没有可展示的归属。
+      this.agentMaps.clear(sessionId);
+      this.agentMapSignatures.delete(sessionId);
+      const mapTimer = this.agentMapSoonTimers.get(sessionId);
+      if (mapTimer) { clearTimeout(mapTimer); this.agentMapSoonTimers.delete(sessionId); }
       // [CUSTOM- Its notification keys can never fire again.
       this.notifier.forget(sessionId);
       // [CUSTOM- A closed tab must not leave an attention dot behind (the id is
@@ -758,6 +775,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       } else if (!this.focused.sessionId) {
         this.sessionManager.focusSession(sessionId, { force: true });
       }
+      // [CUSTOM- Agent map：回放里的 `subagent_update` 已经重建了注册表。这里只按现有
+      // 数据推一次（时间和用量缺就是缺，绝不拿回放结束时刻冒充）；签名没变则什么也不发。
+      this.agentMapSoon(sessionId);
       refresh();
     });
     on('active-session-changed', (sessionId: string | null, agentName: string | null) => {
@@ -1515,6 +1535,22 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           .catch(e => this.reportError(sessionId, e));
         return;
       }
+      // [CUSTOM- Agent map：按需拉取（客户端切到某会话时问一次）。force = 忽略签名，
+      // 因为上一个面可能刚把同一份签名发过、而这一面还没有。
+      case 'requestAgentMap':
+        this.pushAgentMap(sessionId, true);
+        return;
+      // [CUSTOM- Agent map 面板上的 Stop：只在注册表说这个子 agent 能取消、且仍在跑时
+      // 才打 `session/cancel`。子会话 id 是 `agentId`；父会话仍是外层 sessionId。
+      case 'stopAgent': {
+        const agentId = (msg as { agentId?: string }).agentId ?? '';
+        const node = agentId ? this.agentMaps.get(sessionId, agentId) : undefined;
+        if (!node || !node.canCancel) { return; }
+        if (node.state !== 'running' && node.state !== 'requires_action') { return; }
+        void this.sessionManager.cancelSubagent(sessionId, agentId)
+          .catch(e => this.reportError(sessionId, e));
+        return;
+      }
       case 'focusSession':
         // [CUSTOM- `force` — an explicit request from the client must
         // ALWAYS be answered.
@@ -1710,6 +1746,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // torn down.
     this.sessionUpdateHandler.removeListener(this.updateListener);
     if (this.refreshSoonTimer) { clearTimeout(this.refreshSoonTimer); this.refreshSoonTimer = null; }
+    for (const timer of this.agentMapSoonTimers.values()) { clearTimeout(timer); }
+    this.agentMapSoonTimers.clear();
     this.outbox.dispose();
     for (const d of this.subscriptions) { d.dispose(); }
     this.subscriptions.length = 0;
@@ -1984,6 +2022,48 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     }, ChatPanelHost.REFRESH_SOON_MS);
   }
 
+  /** A sub-agent belongs to exactly one root bucket, even under grandchildren. */
+  private rootSubagentSession(sessionId: string): string {
+    let current = sessionId;
+    const seen = new Set<string>();
+    while (!seen.has(current)) {
+      seen.add(current);
+      const parent = this.subagentParents.get(current);
+      if (!parent) { break; }
+      current = parent;
+    }
+    return current;
+  }
+
+  /**
+   * Coalesced agent-map push: signature first (no post when nothing the panel
+   * paints changed), then one trailing frame. Child chunks never reach here —
+   * only announcements / usage / tool calls do.
+   */
+  private agentMapSoon(sessionId: string): void {
+    if (this.attachedCount === 0) { return; }
+    if (this.agentMapSoonTimers.has(sessionId)) { return; }
+    if (this.agentMaps.signature(sessionId) === (this.agentMapSignatures.get(sessionId) ?? '')) { return; }
+    this.agentMapSoonTimers.set(sessionId, setTimeout(() => {
+      this.agentMapSoonTimers.delete(sessionId);
+      this.pushAgentMap(sessionId);
+    }, ChatPanelHost.REFRESH_SOON_MS));
+  }
+
+  /** Send the nested snapshot to surfaces currently showing that session. */
+  private pushAgentMap(sessionId: string, force = false): void {
+    if (this.attachedCount === 0) { return; }
+    const signature = this.agentMaps.signature(sessionId);
+    if (!force && signature === (this.agentMapSignatures.get(sessionId) ?? '')) { return; }
+    this.agentMapSignatures.set(sessionId, signature);
+    const snapshot = this.agentMaps.snapshot(sessionId);
+    for (const surface of this.surfaces.values()) {
+      if (this.surfaceFocused.get(surface.key) === sessionId) {
+        this.post({ type: 'agentMap', sessionId, running: snapshot.running, agents: snapshot.agents }, surface.key);
+      }
+    }
+  }
+
   /**
    * Close streaming entries and tell the webview, so its copy of the entry
    * learns `streaming: false` (and, for thoughts, the elapsed time).
@@ -2042,6 +2122,34 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   // --- Session update → transcript ----------------------------------------
 
   private onSessionUpdate(update: SessionNotification): void {
+    // [CUSTOM- Agent map 要在**别名之前**看一眼：子会话自己的 usage / tool 更新马上会
+    // 被下面的过滤器丢掉（不能并进父会话的上下文环/Todo），但它们正是子 agent 的
+    // token、模型与"最后在干什么"的来源。这里只喂注册表，不改转录行为。
+    const outerSessionId = update.sessionId;
+    const incomingKind = (update.update as { sessionUpdate?: unknown } | null | undefined)?.sessionUpdate;
+    if (typeof incomingKind === 'string' && this.subagentParents.has(outerSessionId)) {
+      const rootId = this.rootSubagentSession(outerSessionId);
+      const childData = update.update as any;
+      if (incomingKind === 'usage_update') {
+        const meta = childData && typeof childData._meta === 'object' && childData._meta
+          ? childData._meta as Record<string, unknown>
+          : undefined;
+        const model = meta ? meta['_claude/model'] : undefined;
+        this.agentMaps.noteUsage(rootId, outerSessionId, {
+          used: finiteNumber(childData?.used),
+          size: finiteNumber(childData?.size),
+          cost: childData?.cost,
+          model: typeof model === 'string' ? model : undefined,
+        });
+        this.agentMapSoon(rootId);
+      } else if (incomingKind === 'tool_call' || incomingKind === 'tool_call_update') {
+        const toolName = typeof childData?.title === 'string'
+          ? childData.title
+          : typeof childData?.toolName === 'string' ? childData.toolName : undefined;
+        this.agentMaps.noteTool(rootId, outerSessionId, toolName);
+        this.agentMapSoon(rootId);
+      }
+    }
     // [CUSTOM- 子会话别名（见 subagentParents 的注释）：只把**承载记录**的子会话流量
     // 并回父会话渲染；子会话自己的 usage / plan / 标题 / 模式 / 配置 / 压缩等状态属于
     // 子会话，并过来会直接改坏父会话的元数据（上下文圆环、Todo 卡、tab 名、"Switched to …"）。
@@ -2049,8 +2157,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     const parentOfChild = this.subagentParents.get(update.sessionId);
     let subagentOrigin: string | undefined;
     if (parentOfChild) {
-      const kind = (update.update as { sessionUpdate?: unknown } | null | undefined)?.sessionUpdate;
-      if (typeof kind !== 'string' || !SUBAGENT_TRANSCRIPT_KINDS.has(kind)) { return; }
+      if (typeof incomingKind !== 'string' || !SUBAGENT_TRANSCRIPT_KINDS.has(incomingKind)) { return; }
       subagentOrigin = update.sessionId;
       update = { ...update, sessionId: parentOfChild };
     }
@@ -2237,6 +2344,37 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
             : 'unknown';
         // Remember the parent BEFORE the card exists: the child's own output can arrive first.
         this.subagentParents.set(childId, sessionId);
+        // [CUSTOM- Agent map：身份/状态/能力来自 RFD 主体，时间与用量来自
+        // `_meta["vac/agentMap"]`（客户端声明 `_meta["vac/agentMap"] = true` 后才有）。
+        // `parentId` 用**别名之前**的外层 sessionId —— 孙 agent 的父是那个子会话，不是根。
+        const rawMeta = data._meta && typeof data._meta === 'object'
+          ? (data._meta as Record<string, unknown>)['vac/agentMap']
+          : undefined;
+        const mapMeta = rawMeta && typeof rawMeta === 'object' ? rawMeta as Record<string, unknown> : undefined;
+        const rawError = rawState && typeof rawState === 'object'
+          ? (rawState as { error?: { message?: unknown } }).error?.message
+          : undefined;
+        const stopReason = rawState && typeof rawState === 'object'
+          ? (rawState as { stopReason?: unknown }).stopReason
+          : undefined;
+        this.agentMaps.upsert(this.rootSubagentSession(outerSessionId), {
+          agentId: childId,
+          parentId: outerSessionId,
+          title: typeof data.title === 'string' ? data.title : undefined,
+          description: typeof data.description === 'string' ? data.description : undefined,
+          state: rawState && typeof rawState.state === 'string' ? rawState.state : undefined,
+          stopReason: typeof stopReason === 'string' ? stopReason : undefined,
+          error: typeof rawError === 'string' ? rawError : undefined,
+          canCancel: !!caps && typeof caps === 'object' && caps.cancel !== undefined && caps.cancel !== null,
+          startedAt: finiteNumber(mapMeta?.startedAt),
+          endedAt: finiteNumber(mapMeta?.endedAt),
+          durationMs: finiteNumber(mapMeta?.durationMs),
+          totalTokens: finiteNumber(mapMeta?.totalTokens),
+          toolUses: finiteNumber(mapMeta?.toolUses),
+          summary: typeof mapMeta?.summary === 'string' ? mapMeta.summary : undefined,
+          lastToolName: typeof mapMeta?.lastToolName === 'string' ? mapMeta.lastToolName : undefined,
+        });
+        this.agentMapSoon(this.rootSubagentSession(outerSessionId));
         const result = this.transcripts.upsertSubagent(sessionId, {
           subagentSessionId: childId,
           title: typeof data.title === 'string' ? data.title : undefined,
@@ -5992,6 +6130,11 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   const n = Number(value);
   if (!Number.isFinite(n)) { return fallback; }
   return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+/** Keep only real numbers (agent payloads are `unknown`; undefined must stay undefined). */
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 /** [CUSTOM- Markdown 渲染预设的合法值（设置面板与 setUiPref 共用一处白名单）。 */

@@ -19,6 +19,8 @@ import { elicitationViewClient } from './elicitationView';
 import { toolCallViewClient } from './toolCallView';
 import { transcriptViewClient } from './transcriptView';
 import { outlineClient } from './outline';
+// [CUSTOM- Details 栏（右栏第二模式）：状态与容器，卡片仍由 toolCallView 渲染。
+import { detailPaneClient } from './detailPane';
 // [CUSTOM- 连接状态卡（取代 sessionMenu 里的空态按钮）。加载期不碰 DOM，
 // 全部由 boot 的 init() 驱动——这也是它能在桩 DOM 测试里被单独加载的前提。
 import { stateCardClient } from './stateCard';
@@ -45,6 +47,8 @@ import { autoExpandClient } from './autoExpand';
 // [CUSTOM- 设置面板（Tab 栏右侧齿轮）。宿主是唯一写者，模块只渲染与回传。
 import { settingsPanelClient } from './settingsPanel';
 import { shortcutsClient } from './shortcuts';
+// [CUSTOM- Agent map（2026-11-09）：底栏 "N Agents" 徽标 + 子 agent 树面板。
+import { agentMapClient } from './agentMap';
 // [CUSTOM- 长任务看门狗（记录区 markdown 回填分帧的验收手段，也是"点了没反应"
 // 这类症状的常驻证据）。
 import { perfClient } from './perf';
@@ -69,6 +73,8 @@ const MODULES: ReadonlyArray<string> = [
   toolCallViewClient,
   transcriptViewClient,
   outlineClient,
+  // [CUSTOM- Runtime-only dependency on outline/toolCallView; init is called by boot.
+  detailPaneClient,
   stateCardClient,
   sessionMenuClient,
   // [CUSTOM- The draft page's directory drawer (same drawer shape
@@ -95,6 +101,8 @@ const MODULES: ReadonlyArray<string> = [
   autoExpandClient,
   shortcutsClient,
   settingsPanelClient,
+  // [CUSTOM- Agent map 面板（加载期不碰 DOM，init 由 boot 调；可在桩里单独驱动）。
+  agentMapClient,
   // [CUSTOM- 看门狗：boot 的 init 里装（加载期不碰 DOM，可在桩里单独驱动）。
   perfClient,
   bootClient,

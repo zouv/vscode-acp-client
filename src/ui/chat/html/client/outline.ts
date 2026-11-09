@@ -25,6 +25,8 @@ export const outlineClient = `
   var TITLE_MAX = 500;
   var MIN_WIDTH = 180;
   var MAX_WIDTH_RATIO = 0.5;
+  // [CUSTOM- Details 模式的默认宽度：不小于 420px；与大纲宽度分开记。
+  var MIN_DETAIL_WIDTH = 420;
 
   var drawer = null;      // #outline 下拉浮层
   var sidebar = null;     // #outlineSidebar 右侧常驻栏
@@ -36,12 +38,21 @@ export const outlineClient = `
   var drawerList = null;  // 下拉的 .outline-list
   var sideHead = null;    // 侧栏的 .outline-head
   var sideList = null;    // 侧栏的 .outline-list
+  var sideTabs = null;    // 侧栏的 .outline-tabs
+  var detailRoot = null;  // #detailPane（详情栏容器）
+  var paneButtons = [];   // [data-rail-pane] 分段按钮
   var messagesEl = null;  // #messages 滚动容器
   var messageArea = null; // #messageArea（宽度钳制基准）
 
   var mode = 'popup';     // 'popup' | 'sidebar'（持久化）
   var isOpen = false;     // 当前形态是否可见
   var width = 240;        // 侧栏宽度 px（持久化）
+  // [CUSTOM- 右栏两种内容模式；宽度各自记忆。
+  // 「大纲宽度」仍走宿主 uiPrefs（既有行为），「详情宽度」是客户端本地状态
+  // （vscode.setState，由 detailPane.ts 读写），拖动时只写当前所有者的那一份。
+  var pane = 'outline';   // 'outline' | 'details'
+  var widthOwner = 'outline';
+  var detailWidth = 0;
 
   /** IME 合成中（含死键 / AltGraph）的 Escape 属于输入法，不是大纲的快捷键。 */
   function composing(event) {
@@ -284,15 +295,34 @@ export const outlineClient = `
     });
   }
 
+  /** Show exactly the section the current pane owns (outline list vs detail). */
+  function syncPane() {
+    var details = pane === 'details';
+    if (sideTabs) { sideTabs.hidden = details; }
+    if (sideHead) { sideHead.hidden = details; }
+    if (sideList) { sideList.hidden = details; }
+    if (detailRoot) { detailRoot.hidden = !details; }
+    for (var i = 0; i < paneButtons.length; i++) {
+      var on = paneButtons[i].getAttribute('data-rail-pane') === pane;
+      if (on) { paneButtons[i].classList.add('active'); } else { paneButtons[i].classList.remove('active'); }
+      paneButtons[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+  }
+
   /** Sync .hidden and the button's .on state to isOpen/mode/有没有可导航的东西。 */
   function renderVisibility() {
     // [CUSTOM- Nothing to navigate ⇒ no form of this outline is shown,
     // whichever it is (see anchorsPresent). The MODE is a preference and survives —
     // the pinned column comes back by itself with the first message.
-    var live = isOpen && anchorsPresent;
-    if (drawer) { drawer.hidden = !(live && mode === 'popup'); }
-    if (sidebar) { sidebar.hidden = !(live && mode === 'sidebar'); }
+    // Details mode is different: it is a content surface, so an empty state is a
+    // legitimate thing to show and the "no anchors" rule must not hide the rail.
+    var navOk = pane === 'details' ? true : anchorsPresent;
+    var live = isOpen && navOk;
+    var railMode = mode === 'sidebar' || pane === 'details';
+    if (drawer) { drawer.hidden = !(live && mode === 'popup' && pane === 'outline'); }
+    if (sidebar) { sidebar.hidden = !(live && railMode); }
     if (button) { button.classList.toggle('on', live); }
+    syncPane();
     // [CUSTOM- 写在 sidebar.hidden 之后：输入区的版心对齐要知道侧栏**此刻**
     // 是不是真的占着宽度（见 applyReserve）。
     applyReserve();
@@ -412,8 +442,13 @@ export const outlineClient = `
     isOpen = true;
     // [CUSTOM- 打开侧栏 = 一次**持久的**选择（下拉是临时的，不动这套状态）。
     if (mode === 'sidebar') { rememberSidebarOpen(true); }
+    widthOwner = pane === 'details' ? 'details' : 'outline';
     renderVisibility();
+    applyWidth();
     render();
+    // [CUSTOM- Reopening the rail shows what was there: in Details mode the
+    // controller restores the remembered entry (or paints the empty state).
+    if (NS.detailPane && NS.detailPane.onPaneChanged) { NS.detailPane.onPaneChanged(pane); }
     NS.dom.schedule(function () { if (isOpen) { tops = null; syncActive(); } });
   }
 
@@ -432,6 +467,83 @@ export const outlineClient = `
   }
 
   function toggle() { if (isOpen) { hide(); } else { show(); } }
+
+  /** [CUSTOM- 详情栏的宽度：只在 details 所有者生效，且不小于大纲宽度。
+      客户端本地持久化，不走 host uiPrefs（与大纲宽度分开记）。 */
+  function maxWidth(forDetails) {
+    if (!messageArea || !messageArea.clientWidth) { return 9999; }
+    var half = Math.max(MIN_WIDTH, Math.floor(messageArea.clientWidth * MAX_WIDTH_RATIO));
+    // [CUSTOM- The Details default is 420px; on a narrow panel the outline's
+    // "half the message area" cap would silently shrink it below its own minimum.
+    return forDetails ? Math.max(MIN_DETAIL_WIDTH, half) : half;
+  }
+
+  function clampWidth(value, forDetails) {
+    return clamp(value, MIN_WIDTH, maxWidth(forDetails));
+  }
+
+  function setDetailWidth(value) {
+    if (typeof value !== 'number' || !isFinite(value)) { return; }
+    detailWidth = clampWidth(value, true);
+    if (widthOwner === 'details') { applyWidth(); }
+  }
+
+  /** 大纲宽度（详情控制器只读它，用于把两份宽度一起放进客户端状态）。 */
+  function getOutlineWidth() { return width; }
+
+  function setOutlineWidth(value) {
+    if (typeof value !== 'number' || !isFinite(value)) { return; }
+    width = clampWidth(value, false);
+    if (widthOwner !== 'details') { applyWidth(); }
+  }
+
+  /** 该用哪一份宽度：详情模式用详情宽度，其余用大纲宽度。 */
+  function activeWidth() {
+    return widthOwner === 'details' && detailWidth ? detailWidth : width;
+  }
+
+  function ensureDetailWidth() {
+    if (!detailWidth) { detailWidth = clampWidth(Math.max(width, MIN_DETAIL_WIDTH), true); }
+    return detailWidth;
+  }
+
+  /** [CUSTOM- 分段控件 [Outline][Details]。切到 Details 不会丢大纲的宽度。 */
+  function setPane(next) {
+    pane = next === 'details' ? 'details' : 'outline';
+    if (pane === 'details') {
+      ensureDetailWidth();
+      widthOwner = 'details';
+      if (!isOpen) {
+        isOpen = true;
+        mode = 'sidebar';
+        rememberSidebarOpen(true);
+      }
+    } else {
+      widthOwner = 'outline';
+    }
+    syncPane();
+    applyWidth();
+    renderVisibility();
+    if (isOpen) { render(); }
+    if (NS.detailPane && NS.detailPane.onPaneChanged) { NS.detailPane.onPaneChanged(pane); }
+    NS.dom.schedule(function () { if (isOpen) { tops = null; syncActive(); } });
+  }
+
+  /** [CUSTOM- 「在详情栏里打开」的唯一入口：强制常驻右栏 + Details 模式。 */
+  function openRail() {
+    mode = 'sidebar';
+    isOpen = true;
+    rememberSidebarOpen(true);
+    pane = 'details';
+    ensureDetailWidth();
+    widthOwner = 'details';
+    syncPane();
+    applyWidth();
+    renderVisibility();
+    render();
+    if (NS.detailPane && NS.detailPane.onPaneChanged) { NS.detailPane.onPaneChanged('details'); }
+    NS.dom.schedule(function () { if (isOpen) { tops = null; syncActive(); } });
+  }
 
   /** [CUSTOM- 钉住：下拉 → 常驻右栏。 */
   function pin() {
@@ -645,7 +757,7 @@ export const outlineClient = `
   }
 
   function applyWidth() {
-    if (sidebar) { sidebar.style.width = width + 'px'; }
+    if (sidebar) { sidebar.style.width = activeWidth() + 'px'; }
     applyReserve();
   }
 
@@ -668,30 +780,41 @@ export const outlineClient = `
     // setProperty ⇒ 这里必须判空跳过，否则一条新代码就能把整个客户端逻辑测试打红。
     if (!document.body || !document.body.style || !document.body.style.setProperty) { return; }
     var visible = !!(sidebar && !sidebar.hidden);
-    document.body.style.setProperty('--vac-aside-w', visible ? (width + 'px') : '0px');
+    document.body.style.setProperty('--vac-aside-w', visible ? (activeWidth() + 'px') : '0px');
   }
 
-  /** [CUSTOM- 调宽手柄：拖左变宽、拖右变窄（负号决定方向）。 */
+  var dragOwner = 'outline';
+  /** [CUSTOM- 调宽手柄：拖左变宽、拖右变窄（负号决定方向）。
+      拖动只写**当前模式**的宽度；详情模式落盘到客户端本地，不覆盖大纲宽度。 */
   function initResize() {
     if (!resizeEl || !sidebar) { return; }
     resizeEl.addEventListener('pointerdown', function (event) {
       event.preventDefault();
       dragging = true;
       dragStartX = event.clientX;
-      dragStartW = width;
+      dragStartW = activeWidth();
+      dragOwner = widthOwner;
       if (resizeEl.setPointerCapture) { resizeEl.setPointerCapture(event.pointerId); }
     });
     resizeEl.addEventListener('pointermove', function (event) {
       if (!dragging) { return; }
-      var max = messageArea ? Math.floor(messageArea.clientWidth * MAX_WIDTH_RATIO) : 400;
-      width = clamp(dragStartW - (event.clientX - dragStartX), MIN_WIDTH, max);
+      var next = clampWidth(dragStartW - (event.clientX - dragStartX), dragOwner === 'details');
+      if (dragOwner === 'details') { detailWidth = next; } else { width = next; }
       applyWidth();
     });
     resizeEl.addEventListener('pointerup', function (event) {
       if (!dragging) { return; }
       dragging = false;
       if (resizeEl.releasePointerCapture) { resizeEl.releasePointerCapture(event.pointerId); }
-      persistPrefs();
+      if (dragOwner === 'details') {
+        if (NS.detailPane && NS.detailPane.onWidthCommitted) {
+          NS.detailPane.onWidthCommitted(detailWidth);
+        }
+      } else {
+        persistPrefs();
+        // [CUSTOM- 客户端本地也留一份（vscode.setState），与详情宽度一起。
+        if (NS.boot && NS.boot.persistUi) { NS.boot.persistUi({ outlineWidthLocal: width }); }
+      }
       // 宽度变化会改变 #messages 的折行 → 左 rail 圆点要重对齐。
       if (NS.rail && NS.rail.reflow) { NS.rail.reflow(); }
     });
@@ -728,6 +851,18 @@ export const outlineClient = `
     if (sidebar) {
       sideList = sidebar.querySelector('.outline-list');
       sideHead = sidebar.querySelector('.outline-head');
+      sideTabs = sidebar.querySelector('.outline-tabs');
+      detailRoot = NS.dom.qs('detailPane');
+      paneButtons = sidebar.querySelectorAll ? sidebar.querySelectorAll('[data-rail-pane]') : [];
+      for (var p = 0; p < paneButtons.length; p++) {
+        (function (control) {
+          control.addEventListener('click', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            setPane(control.getAttribute('data-rail-pane'));
+          });
+        })(paneButtons[p]);
+      }
     }
     pinBtn = NS.dom.qs('outlinePin');
     unpinBtn = NS.dom.qs('outlineUnpin');
@@ -737,11 +872,12 @@ export const outlineClient = `
     var tabHosts = drawer.querySelectorAll ? drawer.querySelectorAll('[data-outline-tabs]') : [];
     for (var t = 0; t < tabHosts.length; t++) { tabContainers.push(tabHosts[t]); }
     if (sidebar && sidebar.querySelectorAll) {
-      var sideTabs = sidebar.querySelectorAll('[data-outline-tabs]');
-      for (var s = 0; s < sideTabs.length; s++) { tabContainers.push(sideTabs[s]); }
+      var sidebarTabs = sidebar.querySelectorAll('[data-outline-tabs]');
+      for (var s = 0; s < sidebarTabs.length; s++) { tabContainers.push(sidebarTabs[s]); }
     }
     for (var b = 0; b < tabContainers.length; b++) { buildTabs(tabContainers[b]); }
     syncTabs();
+    syncPane();
 
     button.addEventListener('click', function (event) {
       event.preventDefault();
@@ -761,19 +897,32 @@ export const outlineClient = `
       unpinBtn.addEventListener('click', function (event) {
         event.preventDefault();
         event.stopPropagation();
-        unpin();
+        // [CUSTOM- 详情模式下 ✕ 只关栏，保留「Details」这一模式（再次打开还是它）；
+        // 大纲模式维持原有的「取消固定、回到下拉」语义。
+        if (pane === 'details') { hide(); } else { unpin(); }
       });
     }
     initResize();
 
     // Capture + stopPropagation: Escape must close the surface instead of
     // cancelling the running turn (composer listens on the textarea).
+    // [CUSTOM- In Details mode Escape closes the detail (back to Outline) and never
+    // hides the whole rail; the detail controller declines when a popover/drawer or
+    // an input owns the keystroke.
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape' && isOpen && !composing(event)) {
-        event.preventDefault();
-        event.stopPropagation();
-        hide();
+      if (event.key !== 'Escape' || !isOpen || composing(event)) { return; }
+      if (pane === 'details') {
+        var handled = NS.detailPane && NS.detailPane.handleEscape
+          ? NS.detailPane.handleEscape(event) : false;
+        if (handled) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
       }
+      event.preventDefault();
+      event.stopPropagation();
+      hide();
     }, true);
     // [CUSTOM- 点击外部只关临时下拉；钉住的侧栏是常驻面板，
     // 在 transcript 里点来点去不该把它关掉。
@@ -801,7 +950,17 @@ export const outlineClient = `
     // [CUSTOM- 焦点会话（boot 在焦点咽喉点喂）：侧栏的开/关是按会话记的。
     setSession: setSession,
     // [CUSTOM- 会话列表的旁观者：给"已开启的会话"落定开/关状态（2026-10-28）。
-    noteSessions: noteSessions
+    noteSessions: noteSessions,
+    // [CUSTOM- 两模式右栏（Details 栏）的最小 API：详情控制器只通过这里
+    // 打开右栏、读写自己的宽度；大纲宽度仍归宿主 uiPrefs。
+    setPane: setPane,
+    pane: function () { return pane; },
+    openRail: openRail,
+    getWidth: function () { return activeWidth(); },
+    setDetailWidth: setDetailWidth,
+    getDetailWidth: function () { return detailWidth; },
+    getOutlineWidth: getOutlineWidth,
+    setOutlineWidth: setOutlineWidth
   };
 })(window.__vac = window.__vac || {});
 `;
