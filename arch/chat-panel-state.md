@@ -230,8 +230,9 @@ Side 后来使用独立记录（见 §5.55）⇒ `setUiPref` 自此有三个写�
 现在落点容器是**整条 `#tabStrip`**：
 
 - 插入位由**指针横坐标与各 tab 中点**算（`boundaryFor` → 0..n），指示线由同一个数字决定
-  （`markBoundary`：中间那位画左线、`n` 画在最后一个的右边）；草稿 tab 没有 `data-session-id`，
-  指针落在它上面就等于"插到最后一条会话之后"。
+  （`markBoundary`：中间那位画左线、`n` 画在最后一个的右边）；边界清单 = `data-session-id`
+  与 `data-restore-id` 两类 tab（待恢复的也参与排序与落点，2026-11-10）。草稿 tab 没有
+  `data-session-id`，指针落在它上面就等于"插到最后一条会话之后"。
 - `dragleave` **只清线、不清拖动**（`relatedTarget` 仍在条带内则不动）——
   指示线是"此刻落在哪"的提示，不是拖动本身。
 - 落点算不出来（合成事件没有 `clientX`）时**不搬**，也不写盘；搬完原地不动（`moveTo` 判的是
@@ -338,7 +339,7 @@ Tab 栏：`#settingsBtn` 用 `margin-left: auto` 固定在条带最右；`#newTa
 
 | 机制 | 规则 |
 |---|---|
-| 聚焦（`setActive` / `activeScroller` / `activeCard` / `reclaimActive`） | `pointerdown`（document，capture）**只认左键**（`button === 0`；合成事件缺 `button` 时按左键）落在卡片上 ⇒ 该卡片**离落点最近**的纵向滚动容器（落点在标题栏这类"不在滚动区里"的地方时取卡片里第一个）拿到 `.scroll-active`。**再次左键原地点击同一张卡片**（未拖动 >4px、未框选文本、没点在按钮/链接/折叠头/文件 chip 等交互控件上）⇒ `setActive(null)` 取消聚焦。右键（上下文菜单）与中键（自动滚动）都不改变焦点。`pressLabel` 用事件 `offsetX/offsetY` 与目标 client 几何识别原生横条/纵条，两类滚动条均不参与聚焦或二次点击取消；只有 `#messages` 自身滚动条进入面板拖条路径。点面板空白 / 输入卡 / 标签栏即交还。切会话（`restore`）也交还。内层重建后 `reclaimActive` 找同卡接替者，没有则清焦点，不能留下半失效状态。 |
+| 聚焦（`setActive` / `activeScroller` / `activeCard` / `reclaimActive`） | `pointerdown`（document，capture）**只认左键**（`button === 0`；合成事件缺 `button` 时按左键）落在卡片上 ⇒ 该卡片**离落点最近**的纵向滚动容器（落点在标题栏这类"不在滚动区里"的地方时取卡片里第一个**卡片自己的**纵向滚动区；正文内嵌的 `.mermaid-chart` 不参与这个兜底——只有点中图表本身才聚焦图表）拿到 `.scroll-active`。**再次左键原地点击同一张卡片**（未拖动 >4px、未框选文本、没点在按钮/链接/折叠头/文件 chip 等交互控件上）⇒ `setActive(null)` 取消聚焦。右键（上下文菜单）与中键（自动滚动）都不改变焦点。`pressLabel` 用事件 `offsetX/offsetY` 与目标 client 几何识别原生横条/纵条，两类滚动条均不参与聚焦或二次点击取消；只有 `#messages` 自身滚动条进入面板拖条路径。点面板空白 / 输入卡 / 标签栏即交还。切会话（`restore`）也交还。内层重建后 `reclaimActive` 找同卡接替者，没有则清焦点，不能留下半失效状态。 |
 | 滚轮门控（document `wheel`，`capture` + `passive:false`） | 按**指针位置**分流：已聚焦卡片只滚有效 `activeScroller`，到边界就停、面板不动（`scrollInner` 夹紧，不交余量）；未聚焦卡片只要有纵向 `deltaY`，无论是否命中内层或原生横条，都 `preventDefault` + `writeTop(面板 + delta)` 并取消 Tail，不能因 `!scroller` 早退。离开卡片、Ctrl/Cmd+wheel、纯横向与 Shift+wheel 保持原生；`cancelable=false` 不做补偿滚动。斜向输入由 `wheelDelta` 归一化双轴后按轴处理：纵向走焦点规则，横向经 `nearestHorizScroller` 写最近容器 `scrollLeft`。纵向候选只认 `INNER_SCROLL_SELECTOR`（`.thought-body` / `.tool-body` / `.tool-seg-out` / `.diff-body` / `.elic-preview`）；横向识别独立使用 `overflowX` + 真实横向溢出，不把 pre/table 混入纵向白名单。`isVertScrollable` 用标准 `overflowY` + `scrollHeight > clientHeight + 1`，不再扣横条高度而漏掉小幅真实纵向溢出。 |
 | 一张卡一条滚动条 | 自动展开时外层 `.tool-body` 是视口，里层 `.tool-seg-out`（510）/`.diff-body`（340）**不再各自限高**；`styles.ts` 同时覆盖自动展开的直接 `.diff-body` 与 `.tool-seg-out` 内嵌 diff，均设 `max-height:none`，保留横向 `overflow:auto`。不这么做就是"滚动条套滚动条"。 |
 | 中键原生自动滚动（`guardMiddleAutoScroll` / `restoreMiddleGuard`） | Chromium autoscroll 由浏览器内部驱动，**不反复派发 `wheel`**，会绕过门控直接选中内层。未聚焦卡片在 `pointerdown(button===1)` 时收集落点到 `#messages` 间的**全部**有效纵向白名单与真实横向候选，暂存各节点 inline overflow 并统一设为 **`overflow:clip`**（`hidden` 仍是滚动候选），不取消默认动作，让原生滚动落到面板；已聚焦卡片跳过。保护持续到下一次按下，并在 `pointercancel` / Escape / blur / 页面隐藏时逐一精确恢复；下一次左键先恢复再聚焦。不能下一 macrotask 就恢复，否则 Chromium 可能尚未完成 autoscroll 启动。 |

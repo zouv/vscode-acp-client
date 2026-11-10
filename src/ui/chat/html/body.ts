@@ -307,10 +307,11 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
             <button id="slashBtn" class="picker-btn" type="button" title="Commands" disabled>
               <span class="picker-icon">/</span>
             </button>
-            <div id="configPickers" class="config-pickers"></div>
             <!-- [CUSTOM- Agent map 徽标（2026-11-09）：只有焦点会话有子 agent 时才出现，
-                 文案是正在跑的数量（历史 agent 也能打开面板查看）。 -->
-            <button id="agentMapBtn" class="agent-map-btn" type="button" title="Agent map" hidden>0 Agents</button>
+                 文案是正在跑的数量（历史 agent 也能打开面板查看）。
+                 2026-11-10 移到模型选择器右侧（靠左那一簇）：它现在挂在 #configPickers 里，
+                 由 composer.renderPickers 重建选择器时保留，并插到 model picker 之后。 -->
+            <div id="configPickers" class="config-pickers"><button id="agentMapBtn" class="agent-map-btn" type="button" title="Agent map" hidden>0 Agents</button></div>
             <div id="contextMeter" class="context-meter" hidden title="Context usage"></div>
             <button id="sendStopBtn" class="send-stop send" disabled title="Send" aria-label="Send"></button>
           </div>

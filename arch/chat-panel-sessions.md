@@ -251,7 +251,7 @@ key 由宿主算好。
 | 问不问 | 客户端：面板**空着**（无聚焦会话、无草稿）且设置不是 `never` 时才问。卡片的 `restore` 相位**压过 `ready`**（那张"Claude Code is ready"要让位）。设置项 `vac.restoreSessionsOnOpen`（ask/always/never，默认 ask），读写走 125 那套 `PanelPrefsIO` 注入缝 |
 | 谁让位 | 提问待决期间：①宿主 `handleConnectAgent` **跳过 createSession**（否则用户既拿到新空会话又被打扰）；②客户端 `connection === 'connected'` 那句 `startDraft()` 也跳过（草稿页会把提问顶掉）。按 `+`（draftIntent）例外 —— 那是用户明确要一张新草稿 |
 | 懒恢复 | 点【Restore】只做两件事：宿主把**上次聚焦的那条**现在就 `openExistingSession` 起来（面板立刻有内容），客户端把 N 条变成**本地 tab**（`tabs.ts` 的 `restoring`，形态同草稿：有 id/agent/cwd/title 但宿主里还不存在）。**其余点开才加载**（`openHistorySession … keepOthers: true`）。实测：8 个大会话若逐个 eager load，replay 是秒级到十几秒 × 8 ⇒ 这条路不能走 |
-| 顺序 | 待恢复的 tab 与真会话**放进同一张 `tabOrder` 排名**（`tabModels()` 先把两者合成一个列表再排）—— 否则恢复出来的会全挤到真会话后面 |
+| 顺序 | 待恢复的 tab 与真会话**放进同一张 `tabOrder` 排名**（`tabModels()` 先把两者合成一个列表再排）—— 否则恢复出来的会全挤到真会话后面。**拖拽排序同样包含它们**（2026-11-10）：待恢复 tab 可拖、也是落点边界，否则会出现「未 load 的几条拖不动、别的 tab 也插不进去」的死角 |
 | `keepOthers` | `handleOpenHistorySession` 的**替换语义（099）只属于历史选择器**（那是导航，不该越点越多）。恢复是"多开" ⇒ 新增 `keepOthers` 跳过"关掉当前聚焦会话"那一段；其余（preload times → `openExistingSession`）一字未改 |
 | 关掉一个未加载的 | 只丢本地那条 + `forgetRestorable`（宿主把它从快照里摘掉）—— 否则下次重载还会拿它问你，而用户的动作明确是"不要它"。会话**已经活了**时反之：`setSessions` 里让真 tab 顶替那条本地 tab |
 | 【New session】 | `dismissSessions`（清快照 + 本次不再问；宿主同时取消排队中的防抖写入并广播 `sessionsDismissed`）+ 客户端 `startDraft()` ⇒ 停在**全新草稿页**，目录 / 额外目录 / 模式模型都可先配置，**不立刻建真实会话**（旧版是 `connectAgent`，会立即建一个空会话） |
@@ -261,8 +261,8 @@ key 由宿主算好。
 > 既有漂移（本轮未修）：`vac.restoreSessionsOnOpen = 'always'` 目前仍会显示恢复卡片（`recoverableSessions()` 只排除 `never`）；`never` 下连接时仍会直接建真实会话。
 | 失败不纠缠 | `startRestore` 里那条加载失败（会话在 agent 侧已经没了）⇒ 把它从快照里摘掉 + 报错，下次不再问 |
 
-**不做**：不恢复草稿页（未发出的内容只在客户端，重载即失 —— 同浏览器不恢复未提交表单）；
-「未加载」的 tab 不可拖拽（顺序已由 tabOrder 决定，与草稿同规矩）。
+**不做**：不恢复草稿页（未发出的内容只在客户端，重载即失 —— 同浏览器不恢复未提交表单）。
+草稿 tab 不可拖拽（它还没有会话 id）；待恢复 tab **可以**拖拽（与真会话共用 `tabOrder`）。
 
 **验收**：客户端桩 8 条（卡片提问态与退场规则、两个按钮 + 勾选把回答交给 boot、New session 开草稿
 且不建会话、Remember 写 never、New session 文案、待恢复 tab 的排序/点击/关闭、活了就让位）；

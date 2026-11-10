@@ -1428,6 +1428,37 @@ suite('chat client logic: tab strip (stub DOM)', () => {
       ['s2', 's3', 's1']);
   });
 
+  // [CUSTOM- 2026-11-10 用户报：重启编辑器后，待恢复（未 load，斜体）的 tab 拖不动，
+  // 别的正常 tab 也插不进它们之间。根因是它们既没有 draggable、也不在落点边界里。
+  // 它们本来就和真会话共用同一张 tabOrder，现在一并参与拖拽与排序。
+  test('restored tabs are draggable, and loaded tabs can be inserted among them', () => {
+    const { NS, els } = tabStrip();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.tabs.setSessions([summary('s1')]);
+    NS.tabs.setRestoring([
+      { agentName: 'Claude Code', sessionId: 'r2', cwd: '/tmp', title: 'restored two' },
+      { agentName: 'Claude Code', sessionId: 'r3', cwd: '/tmp', title: 'restored three' },
+    ]);
+    const order = () => els.tabs.querySelectorAll('.tab').map(t =>
+      t.getAttribute('data-session-id') || t.getAttribute('data-restore-id'));
+    assert.deepStrictEqual(order(), ['s1', 'r2', 'r3']);
+    const tabs = els.tabs.querySelectorAll('.tab');
+    assert.strictEqual(tabs[1].getAttribute('draggable'), 'true', '待恢复的 tab 也可拖拽');
+    const box = layOut(tabs);
+
+    tabs[2].dispatch('dragstart', {
+      target: tabs[2], preventDefault: () => {}, dataTransfer: { setData: () => {} },
+    });
+    dragOver(els.tabStrip, box.mids[0] - 10);
+    dropAt(els.tabStrip, box.mids[0] - 10);
+
+    assert.deepStrictEqual(order(), ['r3', 's1', 'r2'], '恢复的页签插到了真会话前面');
+    assert.deepStrictEqual(
+      (posted.find(m => m.type === 'setUiPref') as { tabOrder: string[] }).tabOrder,
+      ['r3', 's1', 'r2'], '真会话与待恢复共用同一张顺序');
+  });
+
   test('dropping into the gap between two tabs still lands (201)', () => {
     const { NS, els } = tabStrip();
     NS.tabs.setSessions([summary('s1'), summary('s2'), summary('s3')]);
@@ -3902,6 +3933,40 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
       .map(p => p.getAttribute('data-category'));
     assert.deepStrictEqual(order, ['model', 'thought_level', 'mode'],
       '非 mode 保持原相对顺序；mode 最后（CSS 用 margin-left:auto 把它推到最右）');
+  });
+
+  // [CUSTOM- 2026-11-10] 用户要求：底栏的 "N Agents" 徽标从最右侧移到模型选择器右边，
+  // 仍留在靠左那一簇。徽标是 #configPickers 的非 .picker 子节点，重建选择器时必须保留它
+  // 并插回 model picker 之后（否则它会被 clear 掉，或落到 mode/发送按钮旁边）。
+  test('the Agent map badge is kept and placed right after the model picker', () => {
+    const { NS, pickers } = draftComposer();
+    const badge = new StubNode('button');
+    badge.className = 'agent-map-btn';
+    pickers.appendChild(badge);
+    NS.composer.setDraft(draft('d1'));
+    NS.composer.setDraftOptions({
+      draftId: 'd1',
+      configOptions: [
+        {
+          id: 'model', name: 'Model', description: 'Model', category: 'model', type: 'select',
+          currentValue: 'm1', options: [{ value: 'm1', name: 'Model One' }],
+        },
+        {
+          id: 'mode', name: 'Mode', description: 'Session permission mode', category: 'mode', type: 'select',
+          currentValue: 'default', options: [{ value: 'default', name: 'Manual' }],
+        },
+        {
+          id: 'effort', name: 'Effort', description: 'Reasoning effort', category: 'thought_level', type: 'select',
+          currentValue: 'low', options: [{ value: 'low', name: 'Low' }],
+        },
+      ],
+      availableCommands: [],
+    });
+
+    assert.strictEqual(pickers.childNodes[0].getAttribute('data-category'), 'model');
+    assert.strictEqual(pickers.childNodes[1], badge, '徽标紧贴模型选择器右侧');
+    assert.strictEqual(pickers.childNodes[2].getAttribute('data-category'), 'thought_level');
+    assert.strictEqual(pickers.childNodes[3].getAttribute('data-category'), 'mode');
   });
 
   test('entering a draft asks the host what the composer should show', () => {
@@ -7146,6 +7211,29 @@ suite('scroll: 内层滚动卡片的焦点门控与自动追尾 ()', () => {
     assert.strictEqual(messages.scrollTop, 0, '聚焦时面板必须原地不动（余量不再交给面板）');
   });
 
+  // [CUSTOM- 2026-11-09] 用户报：点一条长助手消息（正文里嵌了 mermaid 图）的任何位置，
+  // 焦点环都会跑到那张图上 —— 之后滚轮只滚图表。规则是「点中哪个滚动区才聚焦哪个」：
+  // 图表本身被点中才算数，点正文 / 标题一律不替用户选一个内层滚动区（兜底只负责卡片视口）。
+  test('点正文不接管卡片里嵌的图表；点中图表本身才聚焦', () => {
+    const { messages, docListeners } = mountPanel();
+    const prose = box('div', 'entry');
+    const chart = clamped(box('div', 'mermaid-chart', 900, 300));
+    chart.style.overflowY = 'auto';
+    prose.appendChild(chart);
+    messages.appendChild(prose);
+    const active = () => String(chart.className).split(' ').includes('scroll-active');
+
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: prose });
+    assert.strictEqual(active(), false, '点正文不该把焦点交给正文里的图表');
+
+    fireDoc(docListeners, 'pointerdown', { button: 0, target: chart });
+    assert.strictEqual(active(), true, '点中滚动区本身才聚焦');
+
+    wheel(docListeners, chart, 100);
+    assert.strictEqual(chart.scrollTop, 100, '聚焦后滚轮滚的是图表自己');
+    assert.strictEqual(messages.scrollTop, 0, '面板原地不动');
+  });
+
   test('聚焦内层重建后没有有效接替者 ⇒ 清掉半失效焦点并回落面板', () => {
     const { messages, inner, card, docListeners, observers } = mountPanel();
     fireDoc(docListeners, 'pointerdown', { button: 0, target: inner });
@@ -8445,7 +8533,8 @@ suite('chat client logic: 会话恢复（stub DOM, ）', () => {
     const tip = (doc.body as StubNode).querySelector('.tab-tip')!;
     assert.ok(tip.childNodes.map(n => n.textContent).some(t => t.includes('not loaded yet')),
       'tooltip 说明它还没加载');
-    assert.strictEqual(tabs[0].getAttribute('draggable'), null, '待恢复的不可拖拽（顺序已由 tabOrder 决定）');
+    assert.strictEqual(tabs[0].getAttribute('draggable'), 'true',
+      '待恢复的也可拖拽（与真会话共用同一张 tabOrder）');
 
     dispatchClick(tabs[1], {});
     const open = sent.find(m => m.type === 'openHistorySession') as Record<string, unknown>;
@@ -9440,6 +9529,102 @@ suite('chat client logic: mermaid blocks (stub DOM)', () => {
     assert.strictEqual((block.querySelector('.mermaid-source') as StubNode).hidden, false);
     assert.strictEqual((block.querySelector('.mermaid-chart') as StubNode).hidden, true);
     assert.strictEqual(block.getAttribute('data-view'), 'source');
+  });
+
+  // [CUSTOM- 2026-11-09] mermaid 默认把临时容器挂到 document.body；面板 body 是 100vh 的
+  // flex 列，渲染慢 / 卡住时它会把整块面板挤走（用户报的「全灰屏」）。现在渲染进一个
+  // fixed + 不可见的舞台，由 render 的第三个参数传入，结束后摘掉。
+  test('renders into a throwaway hidden stage, never into document.body', async () => {
+    const { NS, win, doc } = loadClient();
+    const calls: Array<{ id: string; stage: StubNode | null }> = [];
+    win.mermaid = {
+      initialize: () => {},
+      render: (id: string, _text: string, stage: StubNode) => {
+        calls.push({ id, stage });
+        return Promise.resolve({ svg: '<svg data-id="' + id + '"></svg>' });
+      },
+    };
+    const { host } = blockHost();
+    NS.mermaid.decorate(host, false);
+    await settle();
+
+    assert.strictEqual(calls.length, 1);
+    assert.ok(calls[0].stage, 'render 必须拿到第三个参数（渲染容器）');
+    assert.strictEqual(calls[0].stage!.className, 'mermaid-stage');
+    assert.strictEqual((doc.body as StubNode).contains(calls[0].stage), false,
+      '渲染结束后舞台必须摘掉：body 上不许留 mermaid 的临时容器');
+  });
+
+  // [CUSTOM- 2026-11-10] mermaid 的 <style> 原本留在 SVG 里（SVGStyleElement）。把它挪成
+  // 块上的 HTML <style>：规则本来就带 #vac-mermaid-N 前缀，作用域不变；同时避开 SVG 样式表
+  // 那条原生崩溃路径（用户报的「图表/原文来回切换就灰屏」）。
+  test('moves the SVG <style> into an HTML style element on the block', async () => {
+    const { NS, win } = loadClient();
+    win.mermaid = {
+      initialize: () => {},
+      render: () => Promise.resolve({
+        svg: '<svg><style>#vac-mermaid-1{fill:red}</style><g></g></svg>',
+      }),
+    };
+    const { host } = blockHost();
+    NS.mermaid.decorate(host, false);
+    await settle();
+
+    const block = host.querySelector('.mermaid-block') as StubNode;
+    const chart = block.querySelector('.mermaid-chart') as unknown as { innerHTML: string };
+    assert.ok(!chart.innerHTML.includes('<style'), 'SVG 里不再有 SVGStyleElement');
+    const styleEl = block.querySelector('style') as StubNode;
+    assert.ok(styleEl, 'CSS 挪到了块上的 HTML style');
+    assert.ok(String(styleEl.textContent).includes('#vac-mermaid-1{fill:red}'));
+  });
+
+  // [CUSTOM- 2026-11-10] 隐藏一个还带着选区的子树，下一次鼠标按下会让 Blink 的选区控制器
+  // 直接崩掉渲染进程。切走前先把落在将被隐藏节点里的选区折叠掉。
+  test('collapses a selection inside the view it is about to hide', async () => {
+    const { NS, win } = loadClient();
+    win.mermaid = {
+      initialize: () => {},
+      render: () => Promise.resolve({ svg: '<svg></svg>' }),
+    };
+    const { host } = blockHost();
+    NS.mermaid.decorate(host, false);
+    await settle();
+
+    const block = host.querySelector('.mermaid-block') as StubNode;
+    const source = block.querySelector('.mermaid-source') as StubNode;
+    let removed = 0;
+    win.getSelection = () => ({
+      rangeCount: 1, anchorNode: source, focusNode: source,
+      removeAllRanges: () => { removed++; },
+    });
+    const buttons = block.querySelectorAll('[data-mermaid-view]') as StubNode[];
+    const srcBtn = buttons.find(b => b.getAttribute('data-mermaid-view') === 'source')!;
+    const chartBtn = buttons.find(b => b.getAttribute('data-mermaid-view') === 'chart')!;
+
+    NS.mermaid.showView(srcBtn);
+    assert.strictEqual(removed, 0, '选区在即将显示的 source 里不动它');
+    NS.mermaid.showView(chartBtn);
+    assert.strictEqual(removed, 1, '隐藏 source 前把选区折叠掉');
+  });
+
+  // [CUSTOM- 2026-11-10] 用户复现：双击工具栏空白处会触发灰屏（崩溃转储里正是 Blink 的
+  // 双击选词路径）。第二次按下阻止默认动作，别让它进入选区控制器。
+  test('a double-click on the toolbar does not start word selection', async () => {
+    const { NS, win } = loadClient();
+    win.mermaid = {
+      initialize: () => {},
+      render: () => Promise.resolve({ svg: '<svg></svg>' }),
+    };
+    const { host } = blockHost();
+    NS.mermaid.decorate(host, false);
+    await settle();
+
+    const toolbar = host.querySelector('.mermaid-toolbar') as StubNode;
+    let prevented = 0;
+    toolbar.dispatch('mousedown', { detail: 1, preventDefault: () => { prevented++; } });
+    assert.strictEqual(prevented, 0, '单击照常');
+    toolbar.dispatch('mousedown', { detail: 2, preventDefault: () => { prevented++; } });
+    assert.strictEqual(prevented, 1, '双击的第二次按下被拦下');
   });
 
   test('does not touch a streaming block', () => {

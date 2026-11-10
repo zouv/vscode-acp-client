@@ -2284,12 +2284,33 @@ export function styles(): string {
     border: 1px solid var(--vscode-panel-border); border-radius: 4px;
     background: var(--vscode-textCodeBlock-background);
   }
+  /* [CUSTOM- 2026-11-09] mermaid 的渲染舞台（client/mermaid.ts 传给 render 的第三个参数）：
+     fixed 脱离布局、不可见，但保留几何 —— mermaid 量文字依赖真实布局，所以**不能**用
+     display:none。绝不要让 mermaid 的临时容器落回 document.body：面板 body 是 100vh 的
+     flex 列，渲染慢 / 卡住时它会把整块面板挤走，只剩一片背景（用户报的「全灰屏」）。 */
+  .mermaid-stage {
+    position: fixed; left: -20000px; top: 0;
+    visibility: hidden; pointer-events: none;
+  }
+  /* 旧版 / 未来版本的 mermaid 仍可能直接往 body 上挂临时容器：同样让它脱离布局（可见即事故）。 */
+  body > [id^="dvac-mermaid-"],
+  body > [id^="ivac-mermaid-"] {
+    position: fixed !important; left: -20000px !important; top: 0 !important;
+    visibility: hidden !important; pointer-events: none !important;
+  }
   .mermaid-toolbar {
     display: flex; align-items: center; justify-content: space-between;
     flex-wrap: wrap; gap: 2px; padding: 3px 4px;
     border-bottom: 1px solid var(--vscode-panel-border);
+    /* [CUSTOM- 2026-11-10] 工具栏不做文本选区：双击空白处会走 Blink 的
+       双击选词路径（SelectionController::handleMousePressEventDoubleClick），
+       用户实测它能把 webview 渲染进程直接打崩（灰屏）。 */
+    user-select: none;
   }
   .mermaid-view, .mermaid-zoom { display: flex; align-items: center; gap: 2px; }
+  /* [CUSTOM- 2026-11-10] Diagram/Source 永远靠右：Source 视图里缩放组 display:none，
+     只靠 space-between 会让这一组跳到左边（用户报的"一会在左一会在右"）。 */
+  .mermaid-view { margin-left: auto; }
   .mermaid-tab {
     font: inherit; font-size: 0.78em; padding: 1px 7px; border-radius: 3px;
     cursor: pointer; color: var(--vscode-descriptionForeground);
@@ -2307,6 +2328,10 @@ export function styles(): string {
   .mermaid-chart {
     padding: 8px; overflow: auto; white-space: normal;
     max-height: min(60vh, 560px); overscroll-behavior: contain;
+    /* [CUSTOM- 2026-11-10] 图表不做文本选区：SVG 里的文字选中后会随原文/图表切换
+       落进被隐藏的子树，而 Blink 在「隐藏子树里仍有选区」时下一次鼠标按下可能直接崩掉
+       渲染进程（用户报的灰屏）。要复制源码请切到 Source。 */
+    user-select: none;
   }
   /* mermaid writes an inline max-width in px; author !important is the only
      reliable way to let the zoom variable drive the rendered width. */

@@ -660,7 +660,11 @@ applyAction 摘行换标签且不重置过滤）；真 Chromium 的 `#historyrow
 | 切换 | 每个块两个真按钮（Diagram / Source），只切 `hidden` + `aria-pressed`；用户手动选的视图在主题重渲染后保持 |
 | 尺寸 | `.mermaid-chart` 设 `max-height: min(60vh, 560px)` + `overflow:auto`，长图在图表内滚动而不是撑高消息列；SVG 用 `width: calc(100% * var(--vac-mermaid-zoom, 1))`、`height:auto`、`max-width:none !important` 覆盖 mermaid 的内联 `max-width:Npx`，默认按 1:1 宽高比贴合面板宽度 |
 | 缩放 | 每个块独立 `mermaidZoom`（50–200，步进 10）；toolbar 左组 `− / N% / +`，百分比按钮 Reset 100%；缩放只改 `.mermaid-chart` 的 CSS 变量，主题重渲染后 `renderOne` 重新应用；`data-mermaid-zoom` 记录块状态，`data-mermaid-zoom-action` 只挂在按钮上（避免与 `data-mermaid-view` 的 aria 循环冲突） |
-| 内层滚动 | `.mermaid-chart` 加入 `scroll.ts` 的 `INNER_SCROLL_SELECTOR` 与 overscroll/thin-scrollbar 列表：点击图表后滚图不滚面板，未聚焦时仍滚面板 |
+| 内层滚动 | `.mermaid-chart` 加入 `scroll.ts` 的 `INNER_SCROLL_SELECTOR` 与 overscroll/thin-scrollbar 列表：点击图表后滚图不滚面板，未聚焦时仍滚面板。焦点门控的标题栏兜底（`firstInnerScroller`）**跳过** `.mermaid-chart`：点消息正文不会把焦点交给图表，只有点中图表本身才聚焦 |
+| 渲染隔离 | `mermaid.render(id, source, stage)` 的第三个参数把临时容器建在 `.mermaid-stage`（`fixed` / 离屏 / `visibility:hidden`，保留布局供量字）里，渲染结束立刻摘掉。绝不能让临时容器落回 `document.body`：面板 body 是 100vh 的 flex 列，渲染慢或卡住时它会参与布局、把整块面板挤成一片背景（用户报的「全灰屏」）。`suppressErrorRendering:true` 让失败只抛错、不往页面画错误图 |
+| 切换与选区 | 「图表 / 原文」切换前，先折叠落在**将被隐藏**的节点里的文本选区（`clearSelectionInside`）；`.mermaid-chart` 与 `.mermaid-toolbar` 都不参与文本选择（`user-select:none`），工具栏的第二次按下（`detail>1`）还会 `preventDefault`；重写 `chart.innerHTML` 前同样先折叠旧 SVG 里的选区。这是为了避开 VS Code webview 渲染进程在「隐藏子树仍带选区 / 双击选词 / SVG 样式表」路径上的原生崩溃（用户实测：双击工具栏空白处即灰屏；日志里没有任何 mermaid 渲染失败；崩溃转储是 `vscode-webview` renderer 的 `EXCEPTION_BREAKPOINT`，栈上有 `SelectionController::handleMousePressEventDoubleClick`） |
+| 工具栏 | Diagram / Source 永远靠右：`.mermaid-view { margin-left:auto }`（Source 视图里缩放组 `display:none`，只靠 `space-between` 会让它跳到左边） |
+| SVG 样式归属 | mermaid 把主题 CSS 写在 SVG 内的 `<style>`（SVGStyleElement）。`renderOne` 用 `splitSvgStyle` 把它摘出来，改挂到 `.mermaid-block` 上的普通 HTML `<style>`（`applySvgStyle`）：规则本来就全部带 `#vac-mermaid-N` 前缀，作用域不变，同时避开 SVG 样式表的原生生命周期路径 |
 | 主题 | `MutationObserver(body.class)` 变化后重新 `initialize` 并重渲染 `state=ready` 的块；颜色从 `--vscode-*` 读取 |
-| 失败 | 脚本加载失败 / 语法错误 → `data-mermaid-state="error"`，自动切 Source、显示固定错误文案、禁用 Diagram；失败不逐块重试 |
+| 失败 | 脚本加载失败 / 语法错误 / 超过 `maxTextSize`（30000）或 `maxEdges`（200）/ 单图 15s 超时 → `data-mermaid-state="error"`，自动切 Source、显示固定错误文案、禁用 Diagram；失败不逐块重试；原因写一行 `console.warn('[vac] mermaid render failed: …')` |
 | 安全边界 | 带 nonce 的外部脚本仍是 nonce-only CSP；**不要**为了 Mermaid 把 `cspSource` 加进 `script-src` |

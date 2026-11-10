@@ -356,7 +356,7 @@ pending ──用户点按钮──► selected        （回答 optionId）
 | 推送 | `agentMapSoon` 先比签名、再 200ms 合并（与 `refreshSessionsSoon` 同形）；`requestAgentMap` 按需 force 回；只发给 `surfaceFocused` 等于该会话的面。**绝不 per chunk 发** |
 | 停止 | `stopAgent` 先查注册表 `canCancel` 且仍在跑，再调 `SessionManager.cancelSubagent(根会话, 子会话)` |
 | 时间 | 只用 `_meta["vac/agentMap"]` 的 epoch 毫秒；缺就不发明（UI 显示 "—"）。running 的 elapsed 由客户端每 1s 从 `startedAt` 重算 |
-| 客户端 | `html/client/agentMap.ts`：徽标 + 面板；关闭时不渲染、不读布局；Escape / 点外面 / 再点徽标关闭；详情与 Stop 全部 `textContent`（无 innerHTML） |
+| 客户端 | `html/client/agentMap.ts`：徽标 + 面板；关闭时不渲染、不读布局；Escape / 点外面 / 再点徽标关闭；详情与 Stop 全部 `textContent`（无 innerHTML）。徽标是 `#configPickers` 里的非 `.picker` 子节点，`composer.renderPickers` 重建选择器时保留它并插回 **model picker 右侧**（2026-11-10） |
 
 ### 5.58 右侧栏的 Details 模式（2026-11-09）
 

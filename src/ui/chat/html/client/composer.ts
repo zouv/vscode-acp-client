@@ -860,16 +860,39 @@ export const composerClient = `
   }
 
   function renderPickers() {
+    // [CUSTOM- 2026-11-10] #configPickers 里除了选择器还挂着底栏的 Agent map 徽标
+    // （必须在模型选择器右侧）。重建时保留这些非 .picker 子节点，稍后原样插回去。
+    var extras = [];
+    for (var j = 0; j < pickersEl.childNodes.length; j++) {
+      var child = pickersEl.childNodes[j];
+      if (child.nodeType === 1 && !child.classList.contains('picker')) { extras.push(child); }
+    }
     NS.dom.clear(pickersEl);
     var options = state.configOptions || [];
     var mode = null;
+    var modelPicker = null;
+    var lastLeft = null;
     for (var i = 0; i < options.length; i++) {
       var option = options[i];
       if (option.type !== 'select' && option.type !== 'boolean') { continue; }
       // [CUSTOM- 2026-10-29：mode 放到最后 append —— 视觉上靠右（紧挨上下文进度），
       // DOM 顺序与视觉/Tab 顺序一致。模型/Effort 保持 agent 给的顺序留在左侧。
       if (option.category === 'mode') { mode = option; continue; }
-      pickersEl.appendChild(buildPicker(option));
+      var picker = buildPicker(option);
+      pickersEl.appendChild(picker);
+      lastLeft = picker;
+      if (option.category === 'model') { modelPicker = lastLeft; }
+    }
+    // 徽标紧跟在模型选择器右侧；没有模型选择器时留在左侧簇的末尾。
+    var insertAt = pickersEl.childNodes.length;
+    if (modelPicker) {
+      for (var m = 0; m < insertAt; m++) {
+        if (pickersEl.childNodes[m] === modelPicker) { insertAt = m + 1; break; }
+      }
+    }
+    for (var k = 0; k < extras.length; k++) {
+      pickersEl.insertBefore(extras[k], pickersEl.childNodes[insertAt] || null);
+      insertAt++;
     }
     if (mode) { pickersEl.appendChild(buildPicker(mode)); }
   }

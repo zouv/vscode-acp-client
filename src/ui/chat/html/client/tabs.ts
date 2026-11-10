@@ -583,9 +583,13 @@ export const tabsClient = `
     var nodes = stripEl ? stripEl.querySelectorAll('.tab') : [];
     var out = [];
     for (var i = 0; i < nodes.length; i++) {
-      // 草稿 tab 没有 data-session-id。草稿永远排在所有会话**之后**，所以指针落在它上面
-      // （或它右边的空白）就等于"插到最后一条会话之后" —— 正是用户拖到末尾时会做的事。
-      var id = nodes[i].getAttribute ? nodes[i].getAttribute('data-session-id') : null;
+      // 草稿 tab 没有 data-session-id / data-restore-id。草稿永远排在所有会话**之后**，
+      // 所以指针落在它上面（或它右边的空白）就等于"插到最后一条会话之后" —— 正是用户拖到末尾时会做的事。
+      // [CUSTOM- 2026-11-10] 待恢复（还没 load）的 tab 也要算进落点：它与真会话共用同一张
+      // tabOrder，排除它会造成"恢复出来的几条拖不动、别的 tab 也插不进去"的死角。
+      var id = nodes[i].getAttribute
+        ? (nodes[i].getAttribute('data-session-id') || nodes[i].getAttribute('data-restore-id'))
+        : null;
       if (id) { out.push({ node: nodes[i], id: id }); }
     }
     return out;
@@ -861,9 +865,11 @@ export const tabsClient = `
         });
         // [CUSTOM- 手工排序。只有会话 tab 能排：草稿的 id 是本地的临时号，
         // 排它没有意义（它连会话都不是）。
+        // [CUSTOM- 2026-11-10] 待恢复（未 load）的 tab 也参与：它和真会话共用 tabOrder，
+        // 不让拖就会留下"恢复出来的几条永远钉在原位/别的 tab 插不进去"的死角。Side 仍不参与。
         // [CUSTOM- 这里只留"谁被拖"与"拖完清理"；落点（dragover/drop/dragleave）
         // 在条带上，见 installDrag。
-        if (!isDraft && !isRestore && !side) {
+        if (!isDraft && !side) {
           tab.setAttribute('draggable', 'true');
           tab.addEventListener('dragstart', function (event) { dragStart(tab, model, event); });
           tab.addEventListener('dragend', function () { endDrag(); });

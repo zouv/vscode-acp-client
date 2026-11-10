@@ -170,11 +170,19 @@ export const scrollClient = `
     return (current && current.parentNode === container) ? current : null;
   }
 
-  /** 卡片里第一块纵向滚动区（落点在标题栏这类"不在滚动区里"的地方时用）。 */
-  function firstInnerScroller(card) {
+  /**
+   * 卡片里第一块纵向滚动区（落点在标题栏这类"不在滚动区里"的地方时用）。
+   *
+   * [CUSTOM- 2026-11-09] skipCharts：'.mermaid-chart' 是**正文里嵌的图表**，不是卡片自己的
+   * 视口。用户报的现象：点一条长助手消息的任意位置，焦点环却跑到其中的 mermaid 图上
+   *（下一格再滚轮就只滚那张图）。规则是「点中哪个滚动区才聚焦哪个」——图表被点中时
+   * 走 nearestVertScroller，不需要这里的兜底；兜底只负责卡片自己的视口（工具卡正文等）。
+   */
+  function firstInnerScroller(card, skipCharts) {
     if (!card || !card.querySelectorAll) { return null; }
     var list = card.querySelectorAll(INNER_SCROLL_SELECTOR);
     for (var i = 0; i < list.length; i++) {
+      if (skipCharts && list[i].matches && list[i].matches('.mermaid-chart')) { continue; }
       if (isVertScrollable(list[i])) { return list[i]; }
     }
     return null;
@@ -443,7 +451,8 @@ export const scrollClient = `
         return;
       }
       pendingUnfocus = null;
-      var scroller = nearestVertScroller(target) || firstInnerScroller(card);
+      // [CUSTOM- 2026-11-09] 兜底只认卡片自己的视口：正文里嵌的图表不参与（见 firstInnerScroller）。
+      var scroller = nearestVertScroller(target) || firstInnerScroller(card, true);
       if (scroller) { setActive(scroller, card); } else { setActive(null); }
     }, true); }
     // [CUSTOM- 2026-10-29] 第二次左键的 pointerup：只有"原地点击、没有框选文本、
