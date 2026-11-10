@@ -18,3 +18,29 @@ release/
 /.opencode/sessions/
 /.history/
 
+# 环境变量（真实值绝不提交；样例 .env.example 入库）
+.env
+.env.*
+!.env.example
+.runtime/
+*.log
+# IDE / 系统
+.idea/
+.vscode/
+.vs/
+*.swp
+Thumbs.db
+# AI 工具的本地会话 / 个人设置（项目共享的 .claude/settings.json 与 skills 要入库）
+.claude/settings.local.json
+.claude/worktrees/
+.codex/
+.opencode/
+# ===== Node / VS Code extension =====
+coverage/
+*.tsbuildinfo
+# 模板基础规则默认忽略 .vscode/；扩展项目要提交 launch/tasks 配置。
+!.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json

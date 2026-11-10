@@ -92,6 +92,26 @@ npm run dev:host      # 编译 + 打开 Extension Development Host
 
 宿主窗口里打开活动栏的 **VAC** 图标即可看到三个视图；改完代码按 `Ctrl+R` 重载生效。完整开发流程见 [`docs/dev-workflow.md`](docs/dev-workflow.md)。
 
+## manager.sh 命令一览
+
+所有命令通过 `sh manager.sh <命令>` 执行（Windows 用 Git Bash），与 `sh manager.sh help` 一致：
+
+| 命令 | 说明 |
+|---|---|
+| `dev` | 编译后启动 Extension Development Host（= `npm run dev:host`） |
+| `watch` | 增量构建（= `npm run watch`） |
+| `build` | 开发构建（= `npm run compile`） |
+| `package` | 生产构建（= `npm run package`） |
+| `lint` | ESLint，零警告闸门（= `npm run lint`） |
+| `typecheck` | `tsc --noEmit`（= `npm run typecheck`） |
+| `test-unit` | vitest 纯逻辑测试，秒级（= `npm run test:unit`） |
+| `test` | 编译 + lint + 真实 Extension Host 测试（= `npm test`） |
+| `verify` | 一次跑齐 lint + typecheck + test-unit + test |
+| `docs` | 文档体系机械体检（= `sh check-docs.sh`） |
+| `vsix` | 打包成 `.vsix`（`npx vsce package`） |
+| `clean` | 删除构建产物 `dist/` 与 `out/`（不动 `node_modules`） |
+| `help` | 显示本帮助 |
+
 ## 快速开始
 
 ### 1. 前置条件

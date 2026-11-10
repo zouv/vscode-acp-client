@@ -13,6 +13,9 @@
 
 ## [未发布]
 
+### 变更
+- 文档体系：同步 vibe-coding-starter 2026-11-10.1（check-docs / skills / hook / ARCH 分册 / HANDOFF 清理 / README 命令表）。
+
 ## [1.14.1] - 2026-11-10
 
 ### 变更

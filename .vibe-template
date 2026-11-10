@@ -1,0 +1,8 @@
+# 由 vibe-coding-starter/init.sh 生成；用来判断本项目的文档体系 / 脚手架是否落后于模板（升级见模板 README.md）。
+type=vscode-extension
+project_name=vscode-acp-client
+template_version=2026-11-10.1
+created=2026-11-11
+pkg_manager=npm
+vscode_publisher=zouv
+upgraded=2026-11-11
