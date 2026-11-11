@@ -53,7 +53,7 @@
 
 | 我要改的东西 | 关键函数 / 锚点 | 备注 |
 |---|---|---|
-| 发一轮 prompt | `sendPrompt()` | 有在途轮次则抛错；进出分别 emit `turn-state-changed` |
+| 发一轮 prompt | `sendPrompt()` | 有在途轮次则抛错；进出分别 emit `turn-state-changed`；可选的第三参 `onDispatched` 在 prompt **首次真正上线**时回调一次（auth 重试不重复），面板据此在发送时清附件、而不是等整轮结束 |
 | 取消当前轮次 | `cancelTurn()` | **先回答待决权限/表单**，再发 `session/cancel`；轮次在途时两桥 `holdCancelled`，cancel 后晚到的请求直接答 cancelled，轮次结束 `releaseCancelHold` 解除 |
 | 轮次中补发消息 | `steerPrompt()` / `supportsSteering()` | 走 `extMethod('_session/steering')`；返回 `'idle'` 表示要回落成普通 prompt |
 | 轮次是否进行中 | `hasRunningTurn()` / `isTurnInFlight()` | UI 的 Stop 按钮与 `vac.turnInProgress` 靠它 |
@@ -93,7 +93,7 @@
 | Markdown 渲染预设 | `UiPrefs.markdownStyle` + `boot.ts` 的 `applyMarkdownStyle` + `styles.ts` 的 `body[data-md-style]` 规则 | `editor`（默认，跟随主题）/ `github` / `obsidian` / `typora` / `atom` / `minimal` / `things`；每套预设都带排版 + 明暗两套配色（变量 `--vac-md-*`，高对比度主题回落 token），不改渲染链路 |
 | 新输出自动展开 | `html/client/autoExpand.ts`（状态 + 地址栏按钮）+ `transcriptView.setAutoExpand` / `expandEntry` | 按会话（`autoExpandBySession` + 默认值）与全局卡片类型（`autoExpandKinds`：tool / thought / diff）；只作用于 live append/patch/updateTool，hydrate 不碰 |
 | 消息面板自动追尾（Tail 按钮 / Jump） | `html/client/tail.ts`（状态 + 地址栏按钮 + `resumeFromJump`）+ `scroll.setTail` / `follow` / `reflow` / `cancelTail` / `scheduleRecompute` + `transcriptView.afterMarkdownSlice`；开启时写 `body[data-tail="on"]`，消息列底部左右两个 L 形角高亮（中间不亮，随 `--vac-composer-h` 等让位）；拖条/中键按实际位移判定，手势期间 follow/reflow 不写回 | 与 Times 同一形态：`tailBySession` + `tailDefault`（默认 true）；**只有真实用户滚动**（wheel / 拖滚动条 / 中键自动滚动 / 键盘翻页）才取消，浏览器自身 scroll（anchoring / 夹紧 / 布局变化）不取消；Tail 开启时 follow/reflow 不被布局滚动留下的 `pinned=false` 锁死，stream/tool Markdown 每片收尾也 follow；Tail 关闭时 `follow()` 每帧重算 pinned/Jump；Jump 置底并恢复**当前会话** Tail，不改默认值，且只同步写一次 scrollTop；草稿 / 关闭聚焦会话同步 `tail.setFocus(null)`；`pushBoot` 定向顺序为 `uiPrefs → boot`，避免恢复中间位置时用未 hydrate 的表写回；§5.54 |
-| 目录抽屉「Recently used」删一条 / 同路径重复 | `html/client/directoryMenu.ts` 的 `makeRow(..., removable)` / `removeRecent` + 宿主 `handleRemoveRecentDirectory` + `SessionHistoryStore.dismissRecentDirectory` + `historyDirs.recentDirectoryList` | 列表是派生的 ⇒ 记 `vac.recentCwdDismissed.v1` 并在合并时过滤；**去重按 `directoryKey`**（`F:/x` 与 `f:/x` 是同一条）；同目录再建会话即恢复；**顶部 `#cwdSearch` 本地搜索**两组候选，Browse 始终可达 |
+| 目录抽屉「Recently used」删一条 / 同路径重复 | `html/client/directoryMenu.ts` 的 `makeRow(..., removable)` / `removeRecent` + 宿主 `handleRemoveRecentDirectory` + `SessionHistoryStore.dismissRecentDirectory` + `historyDirs.recentDirectoryList` | 列表是派生的 ⇒ 记 `vac.recentCwdDismissed.v1` 并在合并时过滤；**去重按 `directoryKey`**（`F:/x` 与 `f:/x` 是同一条）；同目录再建会话即恢复；**顶部 `#cwdSearch` 本地搜索**两组候选，Browse 始终可达；搜索无结果时 `Use this directory`（`data-cwd-use-query`）直接采用搜索文本（`directPath` / `looksLikeDirectoryPath`） |
 | 「Recently used」条数范围 / 0 隐藏分组 | `ChatPanelHost.clampRecentDirectories`（唯一夹紧口：0–30，默认 8；空串回落 8）+ `recentDirectories()`（limit=0 直接返回）+ `settingsItems()` + 客户端 `settingsPanel.ts` 的 number 步进 | 历史 CHANGELOG / ROADMAP 里的 3–16 是已发布记录，不改 |
 | 首屏连接预热 / 连接耗时 | `ChatPanelHost.prewarm`（由 `ChatViewProvider.resolveWebviewView` / `openEditorChat` 调用） | 只预热 `ensureConnected`、不建会话；日志里有 `prewarm connected in Nms` 与 `initialized in Nms` / `session ready in Nms` |
 | webview 样式 | `html/styles.ts` | 按 §5 的锚点搜 |

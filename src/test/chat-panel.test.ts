@@ -1229,6 +1229,44 @@ suite('chat panel: draft page creates the session on first send', () => {
       'the first turn has to run with what the draft page showed');
   });
 
+  // [CUSTOM- 用户报「发送第一个消息时先顿一下，输入框和消息面板才一起刷新」。
+  // `session/new` 本身省不掉（agent 侧 sdk-initialize），但界面不必陪它等：
+  // 会话一回来就发 draftResolved / 画用户气泡；配置落地只是发送前的闸门。
+  test('the draft resolves and the bubble shows before the picks land; only the send waits', async function () {
+    let releaseApply!: () => void;
+    const applyGate = new Promise<void>(resolve => { releaseApply = resolve; });
+    class GatedApplyManager extends DraftSessionManager {
+      override async setConfigOption(sessionId: string, configId: string, value: string) {
+        await applyGate;
+        return super.setConfigOption(sessionId, configId, value);
+      }
+    }
+    let manager!: GatedApplyManager;
+    const harness = makeHarness('placeholder-session', 'Claude Code', handler => {
+      manager = new GatedApplyManager(new AgentManager(), new ConnectionManager(handler), handler);
+      return manager;
+    });
+    manager.configOptionsForNew = NEW_SESSION_OPTIONS;
+
+    harness.host.onMessage({
+      type: 'createDraftAndSend', draftId: 'd1', cwd: '/dir', text: 'hello',
+      configSelections: [{ configId: 'mode', value: 'plan' }],
+    });
+    const appendedEntries = () => messagesOf(harness, 'append').flatMap(
+      message => (message.entries as Array<Record<string, unknown>>) ?? []);
+    await waitFor(
+      () => messagesOf(harness, 'draftResolved').length === 1
+        && appendedEntries().some(entry => entry.kind === 'user' && entry.text === 'hello'),
+      'the draft to resolve and the bubble to show',
+    );
+    assert.strictEqual(manager.sent.length, 0,
+      'the prompt itself is still behind the picks (first turn runs on them)');
+
+    releaseApply();
+    await waitFor(() => manager.sent.length === 1, 'the prompt after the picks');
+    assert.deepStrictEqual(manager.order, ['apply:mode=plan', 'send']);
+  });
+
   test('a model picked on the draft page is applied BEFORE the first message (and sticks)', async function () {
     // [CUSTOM- 用户报「草稿页选好自定义模型，发出消息后自己变回内置模型」。
     // 这条把顺序钉住：apply 必须在 send 之前，且会话最后那份 configOptions 就是用户选的。
@@ -2142,7 +2180,10 @@ suite('chat panel: history picker directory filter', () => {
 suite('chat panel: image attachments ()', () => {
   class RecordingSendManager extends SessionManager {
     readonly sent: Array<{ sessionId: string; prompt: unknown }> = [];
-    override async sendPrompt(sessionId: string, prompt: unknown): Promise<PromptResponse> {
+    override async sendPrompt(
+      sessionId: string, prompt: unknown, onDispatched?: () => void,
+    ): Promise<PromptResponse> {
+      onDispatched?.();
       this.sent.push({ sessionId, prompt });
       return { stopReason: 'end_turn' } as PromptResponse;
     }
@@ -2207,6 +2248,37 @@ suite('chat panel: image attachments ()', () => {
     assert.ok(String(link.uri).indexOf('notes.txt') >= 0, 'the resource_link names the file');
     // Empty text ⇒ no text block.
     assert.strictEqual(blocks.find(b => b.type === 'text'), undefined, 'empty text yields no text block');
+  });
+
+  // [CUSTOM- 用户报「输入框引用的图片，消息发出后没有清空引用」。附件原先要等整轮
+  // 结束才清（放在 `await pending` 之后），于是一轮跑几分钟、chip 也挂几分钟。现在
+  // SessionManager 在 prompt **真正发出去**的那一刻回调，失败的发送（没连上）仍保留 chip。
+  test('the chips are consumed at dispatch, while the turn is still running', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    class SlowSendManager extends SessionManager {
+      override async sendPrompt(
+        _sessionId: string, _prompt: unknown, onDispatched?: () => void,
+      ): Promise<PromptResponse> {
+        onDispatched?.();
+        await gate;
+        return { stopReason: 'end_turn' } as PromptResponse;
+      }
+    }
+    const harness = makeHarness('slow-session', 'Claude Code', handler =>
+      new SlowSendManager(new AgentManager(), new ConnectionManager(handler), handler));
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({
+      type: 'attachImage', sessionId: 'slow-session', id: 'img-9', name: 'a.png',
+      mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAAA',
+    });
+    assert.strictEqual(latestAttachments(harness).length, 1);
+
+    harness.host.onMessage({ type: 'sendPrompt', sessionId: 'slow-session', text: 'look' });
+    await waitFor(() => latestAttachments(harness).length === 0, 'the attachments broadcast');
+    assert.strictEqual(((harness.host as any).imageData as Map<string, unknown>).get('slow-session'),
+      undefined, 'the image bytes are released too');
+    release();
   });
 
   test('a send with text and an image records the image inside the user bubble (108)', async () => {

@@ -146,6 +146,35 @@ export const directoryMenuClient = `
     render();
   }
 
+  /** The search text as a path: trimmed, with Explorer-style wrapping quotes removed. */
+  function directPath() {
+    var path = String(query || '').replace(/^\\s+|\\s+$/g, '');
+    if (path.length >= 2) {
+      var first = path.charAt(0);
+      var last = path.charAt(path.length - 1);
+      if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+        path = path.slice(1, -1);
+      }
+    }
+    return path;
+  }
+
+  /**
+   * Only offer "use this directory" for something that can plausibly be a
+   * filesystem path — a bare word is a search term, not a directory. A path the
+   * agent rejects still fails loudly on the draft card (draftFailed), so this is
+   * a convenience filter, not validation.
+   */
+  function looksLikeDirectoryPath(path) {
+    if (!path) { return false; }
+    var first = path.charAt(0);
+    if (first === '/' || first === '~') { return true; }
+    if (path.length > 2 && path.charAt(1) === ':' && (path.charAt(2) === '/' || path.charAt(2) === '\\\\')) {
+      return true;
+    }
+    return path.indexOf('/') >= 0 || path.indexOf('\\\\') >= 0;
+  }
+
   function render() {
     if (!drawer) { return; }
     NS.dom.clear(headEl);
@@ -160,6 +189,21 @@ export const directoryMenuClient = `
     if (query && folders.length === 0 && recent.length === 0) {
       var shown = query.length > 80 ? query.slice(0, 80) + '\\u2026' : query;
       listEl.appendChild(NS.dom.el('div', 'outline-group', 'No directories match "' + shown + '"'));
+      // [CUSTOM- 搜索没命中时，用户手里往往已经有一个候选目录（从资源管理器复制来的）。
+      // 除了清空搜索，再给一条"就用这个目录"：直接把它作为本会话（或新草稿）的工作目录。
+      var direct = directPath();
+      if (looksLikeDirectoryPath(direct)) {
+        var use = NS.dom.el('button', 'outline-item', 'Use this directory');
+        use.type = 'button';
+        use.setAttribute('data-cwd-use-query', '');
+        use.setAttribute('title', direct);
+        use.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          applyPath(direct);
+        });
+        listEl.appendChild(use);
+      }
       var clear = NS.dom.el('button', 'outline-item', 'Clear search');
       clear.type = 'button';
       clear.setAttribute('data-clear-cwd-search', '');

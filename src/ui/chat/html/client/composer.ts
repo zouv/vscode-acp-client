@@ -404,6 +404,15 @@ export const composerClient = `
         // [CUSTOM- 草稿页显式勾选的额外根目录（additionalDirectories）。
         additionalDirectories: state.additionalDirectories
       });
+      // [CUSTOM- 回车立刻要看得见反应：文字先存进草稿表（失败时 failDraft 原样还原），
+      // 输入框马上清空。建会话本身仍可能要等几秒（agent 侧 sdk-initialize），那段时间
+      // 由状态卡的"建会话中"相位说明；不再把已发出的文字留在输入框里。
+      if (input.value) { stashDraft(); persistDraftsSoon(); }
+      input.value = '';
+      hideSlash();
+      autoGrow();
+      refreshSendState();
+      refreshSteerHint();
       refreshControls();
       return;
     }
@@ -1501,8 +1510,14 @@ export const composerClient = `
   }
 
   /** Creating the session failed: stay in draft mode AND keep the typed text. */
-  function failDraft() {
+  function failDraft(draftId) {
     state.draftPending = false;
+    // [CUSTOM- 发送时输入框已经清空（见 send 的草稿分支），文字留在草稿表里。
+    // 失败要把还回来 —— 但只在用户没有重新输入、且看的仍是这张草稿时，
+    // 否则会覆盖他刚打的新字 / 别的草稿。
+    if (state.draft && (!draftId || state.draft.draftId === draftId) && !input.value) {
+      restoreDraft(state.draft.draftId);
+    }
     refreshControls();
     input.focus();
   }

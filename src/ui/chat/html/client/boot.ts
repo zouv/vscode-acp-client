@@ -483,7 +483,7 @@ export const bootClient = `
 
   /** Creating the session failed: keep the draft AND the typed text. */
   function failDraft(draftId, message) {
-    NS.composer.failDraft();
+    NS.composer.failDraft(draftId);
     // [CUSTOM- The draft page's "page" is the status card. Appending a notice
     // to an empty transcript would be hidden behind the card (and showEmpty(false) hid the
     // card outright), so the failure goes where the user is actually looking.

@@ -103,7 +103,7 @@
 | 草稿生命周期（2026-11-08） | 草稿 id = `draft-<文档种子>-<序号>`（种子含时间戳/随机数），**不再从 `draft-1` 重来**——否则重载后新的草稿会复用旧 id、持久化的旧文本（已随首条消息发出的那句）又回到输入框。`resolveDraft` 在 boot 侧（知道 draftId）与 composer 侧都调 `forgetDraft(draftId)`，把按 id 存的文字与本地附件一起忘掉 |
 | 选择存在哪 | 存在 **boot 持有的 draft 对象**上（`draft.selections`），composer 只读它 —— 一份副本（pitfall #19）。切走再切回时靠它重放；快照每次聚焦都会重新下发，所以"快照值"永远不许覆盖用户已经选过的值 |
 | 草稿态点菜单**不发** `setConfigOption` | 草稿没有 sessionId，那条消息会带 `sessionId: null` 被守卫静默丢弃（§5.4 规则一）—— 用户选了等于没选。改为只改本地副本的 `currentValue`（显示即所得）+ 记进 `selections` |
-| 应用时机 | `createSession` → 发 `draftResolved`（保持 058 的不变量）→ 逐项校验后 `await setConfigOption` → 播种切换基线 → `pushMeta` → 首条消息。**在首条消息之前**是重点：第一轮就该跑在用户选的模式/模型上 |
+| 应用时机 | `createSession` → 发 `draftResolved`（界面先走）→ 逐项校验后 `await setConfigOption` → 播种切换基线 → `pushMeta` → 首条消息。**在首条消息之前**是重点：第一轮就该跑在用户选的模式/模型上。2026-11-11 起这段应用是 `handleSendPrompt` 的发送前闸门（`beforeSend`），不再挡 `draftResolved`/用户气泡的渲染 |
 | 三道校验闸门 | ① 按**新会话**的 `configOptions` 校验 id 与取值（`selectValues()`，`sessionChoices.ts` 的纯函数，含分组形态；快照可能来自 agent 旧版本）；② 与当前值相同的跳过（省一次往返，也少一次让 agent 推通知的机会）；③ 单项失败**不阻断**发消息，但**不许静默**（pitfalls #29）：记日志 + 在记录区留一行，否则用户只看到选择器自己弹回默认值 |
 | 为什么要播种切换基线 | 应用完 `this.choices.set(sessionId, choiceState(sessionId))`。**不播种反而静默**（`syncChoices` 在 `!previous` 时 return），真正会出噪声的时序是：agent 在应用前先推过一次 `session/update`（`onSessionUpdate` 拿**默认值**当基线），应用后的通知 diff 非空 ⇒ 播出一条用户**从未做过**的切换。这是 pitfall #34 那套"两份副本 + 去重"的既定前提 |
 | 不可覆盖的边界 | 全新环境（本进程没开过该 agent 的会话、globalState 也空）仍然只有输入框 —— 没有会话就没有地方问，这是这条路的**固有边界**，不是漏做 |

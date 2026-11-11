@@ -4116,6 +4116,39 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
       'the retry must carry the selection as it is now');
   });
 
+  // [CUSTOM- 用户报「发送第一个消息时先顿一下，输入框才刷新」：建会话的等待是
+  // agent 侧 session/new（sdk-initialize），界面不该陪着一起等。回车即清空输入框，
+  // 失败再由 failDraft 把文字原样还回来（058 的保命语义不变）。
+  test('sending from a draft clears the box immediately and a failed create restores it', () => {
+    const { NS, input, sendBtn, posted, docListeners } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+
+    input.value = 'build me a thing';
+    dispatchClick(sendBtn, docListeners);
+    assert.ok(posted.some(m => m.type === 'createDraftAndSend'), 'the message is handed to the host');
+    assert.strictEqual(input.value, '', 'the box answers on Enter, not when session/new returns');
+
+    NS.composer.failDraft('d1');
+    assert.strictEqual(input.value, 'build me a thing',
+      'a failed create must hand the text back (nothing is lost)');
+  });
+
+  test('a failure for another draft does not overwrite what the user is typing now', () => {
+    const { NS, input, sendBtn, posted, docListeners } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+
+    input.value = 'first message';
+    dispatchClick(sendBtn, docListeners);
+    assert.strictEqual(input.value, '');
+
+    // The user moved on: a new draft is on screen with fresh text when the old one fails.
+    NS.composer.setDraft(draft('d2'));
+    input.value = 'still typing here';
+    NS.composer.failDraft('d1');
+    assert.strictEqual(input.value, 'still typing here', 'no cross-draft text injection');
+    assert.ok(posted.some(m => m.type === 'createDraftAndSend'));
+  });
+
   test('re-entering a draft keeps the picks, and replays them onto a fresh snapshot', () => {
     const { NS, pickers, docListeners } = draftComposer();
     const d1 = draft('d1');
@@ -6124,15 +6157,17 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
     // 这两个抽屉的邻居：show() 会去关它们（真模块，未初始化，替掉最省事）。
     NS.outline = { close: () => { /* stub */ } };
     NS.sessionMenu = { reset: () => { /* stub */ } };
+    const picked: Array<{ id: string | null; path: string }> = [];
     NS.draft = {
       get: (id: string) => ({ draftId: id, cwd: '' }),
       focusedId: () => 'd1',
-      setCwd: () => { /* stub */ },
+      setCwd: (id: string, path: string) => { picked.push({ id, path }); },
+      start: (path: string) => { picked.push({ id: null, path }); },
     };
     NS.directoryMenu.init();
     NS.directoryMenu.refresh({ draftId: 'd1' });   // boot 在 focusDraft 时就是这么喂的
     return {
-      NS, els, list, posted, search, clear, docListeners: harness.docListeners,
+      NS, els, list, posted, search, clear, picked, docListeners: harness.docListeners,
       // 打开抽屉走**真路径**（点标题栏那一格）—— show/toggle 都是私有的。
       open: () => dispatchClick(els.cwdBtn, harness.docListeners),
       choices: (recent: string[]) => NS.directoryMenu.setChoices({
@@ -6232,7 +6267,43 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
     assert.ok(d.list.querySelector('[data-cwd-browse]'), 'no matches: Browse is still reachable');
     assert.ok(d.list.textContent.includes('No directories match "zzz"'));
     assert.ok(d.list.querySelector('[data-clear-cwd-search]'), 'empty state offers Clear search');
+    assert.strictEqual(d.list.querySelector('[data-cwd-use-query]'), null,
+      'a bare word is a search term, not a directory to adopt');
     assert.deepStrictEqual(d.posted, [], 'search is local (no listDirectoryChoices)');
+  });
+
+  // [CUSTOM- 搜索没命中时，用户往往已经有一个想用的目录（从资源管理器复制来的）：
+  // 除了 Clear search，再给一条「Use this directory」，直接采用搜索框里的路径。
+  test('no matches offers "Use this directory" for a typed path', () => {
+    const d = drawer();
+    d.open();
+    d.choices(['/old/project']);
+    d.picked.length = 0;                     // setChoices adopts the default cwd once
+
+    d.search.value = '/srv/brand-new';
+    d.search.dispatch('input', {});
+    const use = d.list.querySelector('[data-cwd-use-query]');
+    assert.ok(use, 'the typed path is directly usable');
+    assert.strictEqual(use!.getAttribute('title'), '/srv/brand-new');
+
+    const event = { preventDefault: () => { /* stub */ }, stopPropagation: () => { /* stub */ } };
+    use!.dispatch('click', event);
+    assert.deepStrictEqual(d.picked, [{ id: 'd1', path: '/srv/brand-new' }],
+      'the draft adopts the searched directory');
+    assert.strictEqual(d.els.cwdMenu.hidden, true, 'choosing closes the drawer');
+  });
+
+  test('Explorer-style quoted paths are unwrapped before use', () => {
+    const d = drawer();
+    d.open();
+    d.choices(['/old/project']);
+    d.picked.length = 0;
+    d.search.value = '"/srv/quoted path"';
+    d.search.dispatch('input', {});
+    const use = d.list.querySelector('[data-cwd-use-query]');
+    assert.ok(use);
+    use!.dispatch('click', { preventDefault: () => { /* stub */ }, stopPropagation: () => { /* stub */ } });
+    assert.deepStrictEqual(d.picked, [{ id: 'd1', path: '/srv/quoted path' }]);
   });
 
   test('Escape clears the directory search before closing, and removal keeps the query', () => {

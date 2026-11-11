@@ -167,8 +167,10 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 | 存活性 | **`sessionsChanged` / `boot` 不得把它冲掉**。服务端列表按定义不含草稿——所以 `tabs.setSessions` 刻意**不碰** drafts，草稿走独立的 `setDrafts` / `setDraftFocus`。漏了的表现是"点 `+` 后标签闪一下就没了" |
 | 两个模式互斥 | `composer` 的 `setFocus` 清 `draft`、`setDraft` 清 `sessionId`——因为 `send()` 按 `state.draft` 分支，留一个陈旧的会让发送走错路 |
 | 发出第一条 | `createDraftAndSend {draftId, agentName, cwd, text}` → 宿主 `createSession(agent,{cwd,focus:true})` → **复用 `handleSendPrompt`**（`recordFirstPrompt` / 附件 / `finalizeTurn` 都在里面） |
+| **首条消息的界面时序（2026-11-11）** | `session/new` 一回来就发 `draftResolved` 并画用户气泡；模式/模型/推理强度与草稿选择的应用（`applyDraftConfiguration`）变成 `handleSendPrompt` 的**发送前闸门**（`beforeSend`），只挡 `session/prompt`、不挡界面。原先这些 `set_config_option` 串在 `draftResolved` 前面，是 `session/new` 之后用户看到的第二段等待。**「首轮必须跑在用户选的配置上」不变** |
 | 应答相关性 | `draftResolved {draftId, sessionId}` / `draftFailed {draftId, message}`。**`draftId` 不能省**：`createSession` 会连带触发 `session-created → sessionsChanged → focus`，靠"收到新 focus 就删草稿"在慢/失败路径上会留下孤儿草稿或误删 |
-| 失败时 | 草稿**和已输入的文字都保留**——所以 composer 在草稿模式下**刻意不清空输入框**，清空发生在 `draftResolved` |
+| 失败时 | 草稿**和已输入的文字都保留**——composer 在发送时只**视觉上**清空输入框（文字先存进草稿表），`draftFailed` 时若用户没重新输入就把文字还原；成功则 `draftResolved` 后忘掉。这样回车立刻有反馈，而建会话失败仍然一个字不丢 |
+| **目录搜索无结果（2026-11-11）** | 除 `Clear search` 外还提供 `Use this directory`（`data-cwd-use-query`）：直接把搜索框里的文本当作本会话（或新草稿）的工作目录。文本先 trim、去掉 Explorer「复制为路径」自带的成对引号；仅在它像路径时出现（开头 `/`、`~`、盘符 `X:\`，或含 `/` / `\`）——裸词是搜索词，不是目录。路径不存在时由 `session/new` 报错走 `draftFailed`，不在这里静默吞掉 |
 | 消息位置 | 三条请求都**非会话作用域**，因此在 `verifySession` 守卫**之前**（§5.4 规则二）；四条应答都**定向**给发起请求的那个面 |
 | 目录候选 | 工作区文件夹（**含多根**，此前只用了 `workspaceFolders[0]`）/ 最近用过（本地 `recentDirectories` 与 agent 侧 `session/list` 的 cwd **合并**——前者是 `workspaceState` 作用域的，新工作区开局为空）/ 默认目录 / 「浏览…」走宿主 `showOpenDialog`（webview 打不开） |
 | **目录候选的刷新（203）** | 这份列表会变（Browse 选的目录、刚用过的目录要等宿主把它们算进最近列表），所以**每次打开抽屉都回头问一次**：先用手上那份渲染（列表永远瞬间出来），回复到了再重渲染。**只在"还没数据"与"打开时"问** —— boot 在切草稿/切会话时也会调 `refresh`，那时抽屉是关的，不能每次都付一次宿主往返（它的回复可能带一次 `session/list`）。此前 `choices` 是**一次拉取、终身缓存**（连 `reset()` 都不清）⇒ 当天新用过的目录永远进不了「Recently used」（用户报的就是它） |

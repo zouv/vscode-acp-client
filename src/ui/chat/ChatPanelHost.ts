@@ -1769,7 +1769,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   // --- Prompt handling -----------------------------------------------------
 
-  private async handleSendPrompt(sessionId: string, text: string): Promise<void> {
+  private async handleSendPrompt(sessionId: string, text: string, beforeSend?: Promise<void>): Promise<void> {
     const session = sessionOf(this.sessionManager, sessionId);
     if (!session) { return; }
 
@@ -1884,16 +1884,17 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // in-flight turn synchronously before its first await, so refreshing
       // beforehand would always report `running: false` (no Stop button).
       // [CUSTOM- 新轮次开始：不必再替后台任务"占着"运行中（轮次自己就会报告）。
+      // [CUSTOM- 草稿页：界面（标签、清空的输入框、用户气泡）已经先出去了；只有这一发
+      // RPC 等配置闸门，因为首轮必须跑在用户选的模式/模型上。
+      if (beforeSend) { await beforeSend; }
       this.endBackgroundTask(sessionId, 'turn');
-      const pending = this.sessionManager.sendPrompt(sessionId, blocks);
+      const pending = this.sessionManager.sendPrompt(
+        sessionId, blocks, () => this.clearPendingAttachments(sessionId));
       this.finalizeEntries(sessionId, { only: 'thought' });
       this.refreshSessions();
       this.pushMeta(sessionId);
 
       const response = await pending;
-      // [CUSTOM- The prompt is on the wire now, so its attachments have been
-      // consumed. A failed send keeps them (the composer still has the chips).
-      this.clearPendingAttachments(sessionId);
       this.applyStopReason(sessionId, response.stopReason);
       // [CUSTOM- 这里原来还有一次 `applyResponseUsage`（把 PromptResponse 的
       // totalTokens 折进圆环）—— 那是单位张冠李戴，已删除；圆环只认 usage_update。
@@ -4504,30 +4505,44 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         this.sessionManager.getHistoryStore()?.setAdditionalDirectories(
           session.agentName, session.sessionId, session.additionalDirectories);
       }
-      // [CUSTOM- 草稿页选过的模式/模型先落到位，再让客户端把草稿换成真会话。
-      // 顺序反了的话，客户端会先收到 `focus` 里那份**会话创建时**的选项（如 opus），
-      // 再等一条 `meta` 把用户选的模型推回去 —— 用户看到的就是"选好的模型自己弹回内置模型"。
-      // 先等"记住的默认模式"落地（session-created 那次应用），再应用用户显式选过的值：
-      // 两个都是同一条连接上的 setConfigOption，后到的赢。
-      await this.awaitModeApply(session.sessionId);
-      // [CUSTOM- 默认模型也要先落地，避免和草稿页的显式模型选择抢同一条连接（后到的赢）。
-      await this.awaitModelApply(session.sessionId);
-      // [CUSTOM- 默认推理强度排在默认模型之后（见 session-created 那处注释）。
-      await this.awaitEffortApply(session.sessionId);
-      await this.applyDraftSelections(session, selections);
-      this.post({ type: 'draftResolved', draftId, sessionId: session.sessionId }, to);
       // [CUSTOM- 草稿页攒的附件：会话已经有了，**走与普通附件完全相同的那条路**
       // （handleAttachImage / handleAttachPaths），于是 handleSendPrompt 读 this.attachments /
       // imageData 时自然就带上了 —— 这里不另存一份，避免两份账（pitfall #19）。
+      // 必须排在 `draftResolved` 前面：客户端收到它会把本地草稿态（含附件 chip）清空，
+      // 晚到的 `attachments` 广播会把用户刚发出去的 chip 又装回来。
       for (const image of images) {
         this.handleAttachImage(session.sessionId, image.id, image.name, image.mimeType, image.dataUrl);
       }
       if (paths.length > 0) { this.handleAttachPaths(session.sessionId, paths); }
-      void this.handleSendPrompt(session.sessionId, text)
+
+      // [CUSTOM- 会话一建好就放行界面（清空输入框、把草稿换成真会话、把用户气泡画出来），
+      // 不再等模式/模型/推理强度与草稿选择落地 —— 那几发 set_config_option 只属于"首轮必须
+      // 跑在用户选的配置上"这条发送前约束，不该挡界面刷新。原先它们是串在 `session/new`
+      // 后面的第二段等待，用户看到的就是"顿一下，然后输入框和消息面板才一起刷新"。
+      this.post({ type: 'draftResolved', draftId, sessionId: session.sessionId }, to);
+      const ready = this.applyDraftConfiguration(session, selections).catch((e: unknown) => {
+        log(`${LOG_PREFIX}: applying the draft's configuration failed (the message still goes out): ${String(e)}`);
+      });
+      void this.handleSendPrompt(session.sessionId, text, ready)
         .catch(e => this.reportError(session.sessionId, e));
     } catch (e: any) {
       this.post({ type: 'draftFailed', draftId, message: errorDetail(e) }, to);
     }
+  }
+
+  /** [CUSTOM- 草稿页首条消息前必须落地、但不必挡住界面刷新的配置工作。 */
+  private async applyDraftConfiguration(
+    session: SessionInfo,
+    selections: Array<{ configId: string; value: string }>,
+  ): Promise<void> {
+    // 先等"记住的默认模式"落地（session-created 那次应用），再应用用户显式选过的值：
+    // 两个都是同一条连接上的 setConfigOption，后到的赢。
+    await this.awaitModeApply(session.sessionId);
+    // [CUSTOM- 默认模型也要先落地，避免和草稿页的显式模型选择抢同一条连接（后到的赢）。
+    await this.awaitModelApply(session.sessionId);
+    // [CUSTOM- 默认推理强度排在默认模型之后（见 session-created 那处注释）。
+    await this.awaitEffortApply(session.sessionId);
+    await this.applyDraftSelections(session, selections);
   }
 
   /**

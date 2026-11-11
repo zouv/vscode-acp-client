@@ -486,7 +486,11 @@ export class SessionManager extends EventEmitter {
 
   // --- Prompting -------------------------------------------------------------
 
-  async sendPrompt(sessionId: string, prompt: string | ContentBlock[]): Promise<PromptResponse> {
+  async sendPrompt(
+    sessionId: string,
+    prompt: string | ContentBlock[],
+    onDispatched?: () => void,
+  ): Promise<PromptResponse> {
     const session = this.requireSession(sessionId);
     const conn = this.requireConnection(session);
     if (this.inFlightTurns.has(sessionId)) {
@@ -497,12 +501,19 @@ export class SessionManager extends EventEmitter {
 
     this.inFlightTurns.add(sessionId);
     this.emit('turn-state-changed', sessionId, true);
+    // [CUSTOM- Fires once, on the first real dispatch — an auth retry re-invokes
+    // the call, but "the prompt went out" is still one event. Callers use it to
+    // consume pending attachments at send time instead of at turn end.
+    let dispatched = false;
+    const call = () => {
+      if (!dispatched) {
+        dispatched = true;
+        try { onDispatched?.(); } catch (e) { logError('sendPrompt: onDispatched failed (ignored)', e); }
+      }
+      return conn.connection.prompt({ sessionId, prompt: blocks });
+    };
     try {
-      const response = await this.withAuthRetry(
-        session.agentName,
-        conn,
-        () => conn.connection.prompt({ sessionId, prompt: blocks }),
-      );
+      const response = await this.withAuthRetry(session.agentName, conn, call);
       log(`Prompt response: stopReason=${response.stopReason}`);
       return response;
     } finally {

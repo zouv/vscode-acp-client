@@ -254,4 +254,43 @@ suite('session manager: protocol details', () => {
     assert.strictEqual(takesApiKey({ id: 'b', name: 'B' }), false);
     assert.strictEqual(takesApiKey({ id: 'c', name: 'C', _meta: { 'api-key': null } }), false);
   });
+
+  // [CUSTOM- "prompt went out" is one event even when auth retries the call:
+  // the panel consumes the pending attachments from it (they must not linger for
+  // the whole turn, but a retry must not broadcast an empty list twice either).
+  test('sendPrompt reports the dispatch once, before the prompt RPC', async () => {
+    const stored = new Map<string, string>([['vac.apiKey.Codex CLI', 'sk-test']]);
+    setAuthSecrets({
+      get: async (k: string) => stored.get(k),
+      store: async (k: string, v: string) => { stored.set(k, v); },
+      delete: async (k: string) => { stored.delete(k); },
+    } as unknown as vscode.SecretStorage);
+
+    const calls: Call[] = [];
+    let prompts = 0;
+    const info = fakeConnection(calls);
+    let dispatchedAtPrompt = -1;
+    let dispatched = 0;
+    Object.assign(info.connection, {
+      prompt: async () => {
+        prompts++;
+        if (prompts === 1) { throw Object.assign(new Error('Authentication required'), { code: -32000 }); }
+        dispatchedAtPrompt = dispatched;
+        return { stopReason: 'end_turn' };
+      },
+      authenticate: async () => ({}),
+    });
+    (info as { initResponse: unknown }).initResponse = {
+      protocolVersion: 1,
+      authMethods: [{ id: 'api-key', name: 'API Key', _meta: { 'api-key': { provider: 'openai' } } }],
+    };
+    const manager = managerWith(info);
+    seed(manager, 's1');
+
+    await manager.sendPrompt('s1', 'hi', () => { dispatched++; });
+
+    assert.strictEqual(prompts, 2);
+    assert.strictEqual(dispatched, 1, 'one dispatch per prompt, not one per auth retry');
+    assert.strictEqual(dispatchedAtPrompt, 1, 'the callback runs before the RPC that actually succeeds');
+  });
 });
