@@ -5062,6 +5062,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         description: buildStamp(),
       },
       { key: 'about.version', group: 'advanced', type: 'info', label: 'Version', value: readPackageVersion() || '—' },
+      { key: 'about.author', group: 'advanced', type: 'info', label: 'Author', value: '@zouv' },
       { key: 'about.agent', group: 'advanced', type: 'info', label: 'Agent', value: this.panelAgent() ?? '—' },
     ];
   }
