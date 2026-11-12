@@ -96,7 +96,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/handlers/ElicitationBridge.ts` | 表单请求（AskUserQuestion）的唯一出口，与权限桥同构；`submit` 校验 expected session；`fieldsOf()` 把 JSON Schema 扁平化成五种字段，`optionOf()` 保留选项的 description 与 preview；结算时写回 `summary` + **结构化的 `answers`**（回执卡据此标出所选） | 表单行为 / schema 形状 |
 | `src/handlers/ElicitationHandler.ts` | 表单策略层 + 逐字段弹框兜底 | 弹框兜底行为 |
 | `src/handlers/SessionUpdateHandler.ts` | `session/update` 通知扇出（单订阅者异常隔离） | 流式更新丢事件 |
-| `src/ui/chat/` | Chat 面板子系统（host/surface/transcript + webview）；`markdown.ts` / `content/readHighlight.ts` 管安全渲染与 Read 文件语言推断（后者纯逻辑）；`agentmap/AgentMapStore.ts` 是子 agent 注册表（纯逻辑，禁 import vscode）；`usage/ContextStats.ts` 是上下文圆环 / Tip 的统计（纯逻辑，禁 import vscode，见 `arch/chat-panel-input.md` §5.59）；webview 右栏 Details 由 `html/client/detailPane.ts` 驱动（§5.58） | 聊天 UI / 渲染 / Agent map / 上下文用量 / 右栏 Details |
+| `src/ui/chat/` | Chat 面板子系统（host/surface/transcript + webview）；`markdown.ts` / `content/readHighlight.ts` 管安全渲染与 Read 文件语言推断（后者纯逻辑）；`agentmap/AgentMapStore.ts` 是子 agent 注册表（纯逻辑，禁 import vscode）；`usage/ContextStats.ts` 是上下文圆环 / Tip 的统计（纯逻辑，禁 import vscode，见 `arch/chat-panel-usage.md` §5.59）；webview 右栏 Details 由 `html/client/detailPane.ts` 驱动（§5.58） | 聊天 UI / 渲染 / Agent map / 上下文用量 / 右栏 Details |
 | `src/ui/chat/shortcuts.ts` | Chat 快捷键默认值、物理键规范化、旧值修复与重复绑定校验；纯逻辑 | 改快捷键格式 / 默认值 / 冲突规则 |
 | `src/ui/chat/ChatPanelHost.ts` | 面板核心（**本仓库最大的文件，用 grep 定位、勿整读**）：记录、协议、标签、权限/表单呈现 | 面板行为 |
 | `src/ui/chat/ChatViewProvider.ts` | 侧边栏 `vac-chat`、编辑区主面板与单面板多标签 Side 的装配/销毁及主双面焦点同步（视图上唯一的消息监听器） | 视图注册 / surface 归属 |

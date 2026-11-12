@@ -188,4 +188,4 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 | P2-7 | 会话级 MCP 注入 | `vac.mcpServers` 配置 → `session/new` 的 `mcpServers`（按 agent 的 `mcpCapabilities` 过滤） |
 | P2-8 | 编辑器上下文 | 发送选区 / 当前文件 / Problems 诊断到聊天；评估 `document/did*`（UNSTABLE） |
 | P2-9 | 拆分 `ChatPanelHost` | 4.4k 行：按设置 / 历史 / 恢复 / 草稿 / 更新投影拆控制器，host 只做路由 |
-| ~~P2-10~~ | ~~上下文用量面板~~ | ✅ 2026-11-12：输入卡圆环可点击，弹出用量 Tip（增长曲线 / 本轮 token 构成 / 费用 / 额度 / `/compact` 与 Dashboard 入口）。细节见 `CHANGELOG [未发布]`，实现说明见 `arch/chat-panel-input.md` §5.59 |
+| ~~P2-10~~ | ~~上下文用量面板~~ | ✅ 2026-11-12：输入卡圆环可点击，弹出用量 Tip（增长曲线 / 本轮 token 构成 / 费用 / 额度 / `/compact` 与 Dashboard 入口）。细节见 `CHANGELOG [1.15.0]`，实现说明见 `arch/chat-panel-usage.md` §5.59 |

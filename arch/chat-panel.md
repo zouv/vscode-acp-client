@@ -10,7 +10,8 @@
 > | [chat-panel-audit.md](./chat-panel-audit.md) | 历史面板审计结论与风险 | §5.12 |
 > | [chat-panel-sessions.md](./chat-panel-sessions.md) | 会话目录与重开路径、历史选择器过滤、会话恢复 | §5.13–§5.15、§5.24、§5.48 |
 > | [chat-panel-records.md](./chat-panel-records.md) | 记录区：折叠 / 时间 / 渲染 / 右键 / 置顶 / 文件引用呈现 / 上下文压缩 compact 行 | §5.16–§5.23、§5.25–§5.26、§5.29–§5.30、§5.41、§5.47、§5.49–§5.51、§5.55 |
-> | [chat-panel-input.md](./chat-panel-input.md) | 输入侧与交互抽屉：输入卡 / 草稿页 / 表单与权限抽屉 / 回车语义 / steering / 上下文用量 Tip | §5.27、§5.31–§5.33、§5.35–§5.36、§5.42–§5.44、§5.59 |
+> | [chat-panel-input.md](./chat-panel-input.md) | 输入侧与交互抽屉：输入卡 / 草稿页 / 表单与权限抽屉 / 回车语义 / steering | §5.27、§5.31–§5.33、§5.35–§5.36、§5.42–§5.44 |
+> | [chat-panel-usage.md](./chat-panel-usage.md) | 上下文用量 Tip（圆环点击 / 增长曲线 / token 构成 / 费用 / 额度 / 双色） | §5.59 |
 > | [chat-panel-state.md](./chat-panel-state.md) | 会话状态、诊断与几何：状态卡 / 通知 / 后台任务 / 日志与构建指纹 / 滚动诊断 / Tail 与会话级开关 | §5.28、§5.34、§5.37–§5.40、§5.45–§5.46、§5.53–§5.54 |
 >
 > **什么时候读**：改 `src/ui/chat/**` 之前，先按上表挑**一个**分册读，不要整包通读。
