@@ -13,15 +13,18 @@
 
 ## 状态快照
 
-- **最近更新**：2026-11-11
-- **整体状态**：v1.14.2 已发布为 GitHub Latest（tag `v1.14.2`）：新建会话首条消息的界面时序优化（回车即清空输入框、会话一就绪就切页签/显示消息，配置应用只挡发送）、目录搜索无结果可直接采用搜索框路径、输入框图片/文件引用在 prompt 发出时即清空。自动验证通过，真机验收待做。
-- **当前分支（必填）**：`main`；发布提交与 tag 已推送至 `origin/main`。
-- **最后验证状态**（2026-11-09）：typecheck / lint / webview 语法 / 生产构建 ✅；unit **393 / 48 文件**、真实宿主 **799 passing** ✅；VSIX 已打包并上传至 GitHub Release（见发布记录）。
-- **本轮验证状态**（2026-11-11）：typecheck / lint ✅；unit **393** ✅；真实宿主 **813 passing** ✅（新增首条消息时序、目录直用搜索路径、附件发送即清空 7 条用例）。
+- **最近更新**：2026-11-12
+- **整体状态**：v1.15.0 已发布（GitHub Release 附 `vscode-acp-client-1.15.0.vsix`）：上下文用量 Tip（含双色圆环）、页签右键 New Session to the Right、New Session in This Folder 改为草稿、草稿页签拖拽排序、页签压缩。自动验证全绿；真机验收待做。
+- **当前分支（必填）**：`main`；提交与 tag 已推送到 `origin/main`。
+- **最后验证状态**（2026-11-12，v1.15.0）：`typecheck` / `lint` / `check-webview-client`（39 个客户端模块）✅；unit **404 / 49 文件** ✅；真实宿主 **825 passing** ✅。适配器 fork：`lint` ✅，改动的两个 `_meta` 用例通过；该仓库另有 164 个既有的 Windows 路径/快照失败（stash 验证过与本次改动无关）。
 
 ## 当前任务（In Progress）
 
-- **v1.13.0 / 真机验收收尾**：长回复流式增量、链接引用 `[x]: url`、Bash / diff 卡输出、Task 嵌套分组、大纲固定侧栏、长历史按需补齐、自动追尾、加载中切换页签、Windows 四种 agent 启动路径、权限 20s 兜底、UNC / `file://host` 拦截、多根 `additionalDirectories` 恢复、取消 Task 状态。自动验证已过，待按 `docs/03-验收清单.md` 真机确认。
+- **v1.15.0 真机验收**（自动验证已过，按 `docs/03-验收清单.md` 与下列重点）：
+  1. 上下文 Tip：长会话看增长曲线与压缩 ▼；流式中反复开关不闪；深/浅色主题；`/compact` 运行中置灰；订阅账号看额度条、API Key 账号确认隐藏。
+  2. 圆环双色：需要先让本机适配器缓存刷新（`globalStorage/agents/` 删缓存或等 7 天），否则退回单色（不会报错）。
+  3. 页签：右键 New Session to the Right / in This Folder 只开草稿；草稿拖拽与"右侧插入"；十几个 tab 时压缩/隐藏标题/隐藏关闭的逐级降级。
+  4. 输入卡：多行草稿第一行输入 `/` 弹命令面板；选中命令保留其余行。
 - **待验收（最多 5 条）**：
   1. Chat 交互：Tail / Jump / 中键 / 卡片焦点 / Tab 五色 / 目录抽屉。
   2. Markdown / Mermaid / 代码高亮 / 两个搜索框 / Cards 大纲。
@@ -44,10 +47,9 @@
 
 ## 下一步（Next Steps）
 
-1. `npm run dev:host`，按 `docs/03-验收清单.md` 跑 246–266 的真机验收。
-2. 通过后把成果写入 `CHANGELOG.md` 的 `[未发布]`，并在 `ROADMAP.md` 对应条目打 ✅。
-3. 按 ROADMAP 继续 P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
-4. Codex 真机验证按 `docs/03-验收清单.md` 的 P1-1 条目执行。
+1. `npm run dev:host`，按「当前任务」的 4 条重点做真机验收。
+2. 验收发现问题时在 `CHANGELOG.md` 的 `[未发布]` 记录修复并补测试。
+3. 继续 `ROADMAP.md` 的 P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
 
 ## 如何运行 / 测试（Quick Verify）
 

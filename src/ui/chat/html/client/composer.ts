@@ -726,8 +726,20 @@ export const composerClient = `
   function currentQuery() {
     var value = input.value;
     if (value.length === 0 || value.charAt(0) !== '/') { return null; }
-    if (value.indexOf(' ') !== -1) { return null; }
-    return value.slice(1).toLowerCase();
+    // [CUSTOM- 只看第一行：输入框可以是多行草稿，命令永远写在第一行的行首。
+    // 以前拿整段 value 判"有没有空格"，只要下面几行里有一个空格，面板就永远弹不出来
+    // （用户 2026-11-12 报的就是这个）。
+    var lineEnd = value.indexOf('\\n');
+    var firstLine = lineEnd === -1 ? value : value.slice(0, lineEnd);
+    // 光标不在第一行（用户接着写正文）时不弹。
+    var caret = input.selectionStart;
+    if (typeof caret === 'number' && caret > 0 && value.slice(0, caret).indexOf('\\n') !== -1) {
+      return null;
+    }
+    // 刚在第一行行首敲下 '/'：先给全部命令，别拿后面的旧文字当过滤词。
+    if (typeof caret === 'number' && caret === 1) { return ''; }
+    if (firstLine.indexOf(' ') !== -1) { return null; }
+    return firstLine.slice(1).toLowerCase();
   }
 
   function updateSlashPopup() {
@@ -788,7 +800,18 @@ export const composerClient = `
   function acceptSlash() {
     var cmd = state.slashMatches[state.slashIndex];
     if (!cmd) { hideSlash(); return; }
-    input.value = '/' + cmd.name + ' ';
+    // [CUSTOM- 只替换第一行：面板允许在"第一行是 /query、下面还有草稿"时弹出
+    // （见 currentQuery），整段覆盖会把下面几行一起丢掉。
+    var value = input.value;
+    var insertion = '/' + cmd.name + ' ';
+    if (value.charAt(0) === '/') {
+      var lineEnd = value.indexOf('\\n');
+      var rest = lineEnd === -1 ? '' : value.slice(lineEnd);
+      input.value = insertion + rest;
+      if (input.setSelectionRange) { input.setSelectionRange(insertion.length, insertion.length); }
+    } else {
+      input.value = insertion;
+    }
     hideSlash();
     input.focus();
     autoGrow();
@@ -1033,8 +1056,12 @@ export const composerClient = `
 
   /** A 26x26 pair of rings: the inner one is the progress, the outer one only shows up
    * while a turn is running (CSS spins it). The gap between them is deliberate — with a
-   * smaller one the two rings touch and the outer arc stops reading as a separate ring. */
-  function buildGauge(pct) {
+   * smaller one the two rings touch and the outer arc stops reading as a separate ring.
+   *
+   * [CUSTOM- 内环是两段：**提示**（input + cache read/write）与**输出**（output）。
+   * 拆分来自 meta.usage.parts（适配器 _meta["_claude/usage"]）；没有它时退回单色。
+   * 两段弧的 dasharray/dashoffset 见 applyGauge。 */
+  function buildGauge(pct, outputRatio, hasParts) {
     var root = document.createElementNS(GAUGE_NS, 'svg');
     root.setAttribute('viewBox', '0 0 26 26');
     root.setAttribute('width', '24');
@@ -1042,20 +1069,63 @@ export const composerClient = `
     root.setAttribute('aria-hidden', 'true');
     root.appendChild(gaugeCircle('gauge-track', GAUGE_R));
     var fill = gaugeCircle('gauge-fill', GAUGE_R);
-    // dasharray is the whole circumference and dashoffset hides the part not yet reached.
-    // SVG attributes cannot do calc(), so both numbers are computed here rather than in CSS.
-    fill.setAttribute('stroke-dasharray', String(GAUGE_C));
-    fill.setAttribute('stroke-dashoffset', String(GAUGE_C * (1 - pct)));
+    var output = hasParts ? gaugeCircle('gauge-output', GAUGE_R) : null;
     root.appendChild(fill);
+    if (output) { root.appendChild(output); }
     root.appendChild(gaugeCircle('gauge-spin', GAUGE_SPIN_R));
-    return root;
+    applyGauge(fill, output, pct, outputRatio);
+    return { root: root, fill: fill, output: output };
   }
 
-  // [CUSTOM- 现在画在 DOM 里的那组数字（见 renderContext 的"数值没变就不重建"）。
+  /** 弧长按 pct 缩放；输出段从提示段终点接着画（负 dashoffset 把起点挪过去）。 */
+  function applyGauge(fill, output, pct, outputRatio) {
+    if (!fill) { return; }
+    var total = GAUGE_C * pct;
+    var outputLen = total * outputRatio;
+    var promptLen = total - outputLen;
+    fill.setAttribute('stroke-dasharray', String(GAUGE_C));
+    fill.setAttribute('stroke-dashoffset', String(GAUGE_C - promptLen));
+    if (!output) { return; }
+    output.setAttribute('stroke-dasharray', String(outputLen) + ' ' + String(GAUGE_C));
+    output.setAttribute('stroke-dashoffset', String(-promptLen));
+    output.setAttribute('display', outputLen > 0.5 ? 'inline' : 'none');
+  }
+
+  /** output / (input + output + cache read + cache write)；没有拆分就是 0。 */
+  function gaugeOutputRatio(usage) {
+    var parts = usage && usage.parts;
+    if (!parts) { return 0; }
+    var input = Number(parts.inputTokens) || 0;
+    var output = Number(parts.outputTokens) || 0;
+    var cacheRead = Number(parts.cachedReadTokens) || 0;
+    var cacheWrite = Number(parts.cachedWriteTokens) || 0;
+    var total = input + output + cacheRead + cacheWrite;
+    if (!(total > 0)) { return 0; }
+    return Math.max(0, Math.min(1, output / total));
+  }
+
+  /** 小数字的 k/M 格式化（圆环 tooltip 的拆分用）。 */
+  function fmtTokens(value) {
+    if (typeof value !== 'number' || !isFinite(value)) { return ''; }
+    if (value < 1000) { return String(Math.round(value)); }
+    if (value < 1000000) {
+      return value < 100000
+        ? (value / 1000).toFixed(1).replace(/\\.0$/, '') + 'k'
+        : Math.round(value / 1000) + 'k';
+    }
+    return (value / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
+  }
+
+  // [CUSTOM- 现在画在 DOM 里的那组结构（见 renderContext 的"结构没变就不重建"）。
   var drawnGauge = null;
 
   function renderContext(usage) {
     lastUsage = usage || null;
+    // [CUSTOM- 圆环点开的 Tip 面板与圆环共用这一份数据（宿主 meta.usage）。
+    // 没有读数时它要跟着收起 —— 一个"没有上下文窗口"的会话不该留着旧面板。
+    if (NS.contextTip) {
+      NS.contextTip.setUsage(state.sessionId, lastUsage && lastUsage.size ? lastUsage : null);
+    }
     if (!lastUsage || !lastUsage.size) {
       contextMeter.hidden = true;
       drawnGauge = null;
@@ -1063,6 +1133,7 @@ export const composerClient = `
     }
     var pct = Math.max(0, Math.min(1, lastUsage.used / lastUsage.size));
     var percent = Math.round(pct * 100);
+    var outputRatio = gaugeOutputRatio(lastUsage);
     var label = Math.round(lastUsage.used / 1000) + 'k / ' + Math.round(lastUsage.size / 1000) + 'k tokens';
     // The cost line used to live in the header bar; that bar is gone, so it rides in the
     // tooltip rather than being dropped.
@@ -1080,25 +1151,45 @@ export const composerClient = `
     if (typeof lastUsage.thoughtTokens === 'number' && lastUsage.thoughtTokens > 0) {
       label += '  ·  ' + Math.round(lastUsage.thoughtTokens / 1000) + 'k thinking';
     }
+    // [CUSTOM- 双色拆分同样进 tooltip：这是"used 由什么构成"的唯一文字出口。
+    // 注意它描述的是**最近一次调用**，不是本轮所有调用之和（那在 Tip 面板里）。
+    if (lastUsage.parts) {
+      var outTokens = Number(lastUsage.parts.outputTokens) || 0;
+      var promptTokens = (Number(lastUsage.parts.inputTokens) || 0)
+        + (Number(lastUsage.parts.cachedReadTokens) || 0)
+        + (Number(lastUsage.parts.cachedWriteTokens) || 0);
+      label += '  ·  prompt ' + fmtTokens(promptTokens) + ' / output ' + fmtTokens(outTokens);
+    }
     contextMeter.hidden = false;
     contextMeter.title = percent + '%  ·  ' + label;
     contextMeter.className = 'context-meter'
       + (pct > 0.9 ? ' hot' : (pct > 0.7 ? ' warn' : ''))
       + (state.running ? ' running' : '');
-    // [CUSTOM- 数字没变就**不要重建 DOM**，只改上面那几样（便宜、不碰结构）。
+    // [CUSTOM- 结构没变就**不要重建 DOM**，只改数值（便宜、不碰节点身份）。
     //
     // 为什么必须这样：setRunning 会走到这里，而它由 sessionsChanged 驱动 —— 宿主**每收到一个
-    // agent_message_chunk 就 refreshSessions()**（见 ChatPanelHost 的 chunk 分支），于是流式
-    // 期间这里每秒重建几十次。而重建 <svg> 会让外圈那条 CSS 动画**从 0 重新开始**，它永远到不了
-    // 转起来的那一步 —— 用户看到的就是"任务进行中时外圈的闪烁失效，只剩下面多了一段圆环"。
-    // 实测（preview-records.mjs 的 #gauge-rebuild 档，判据是节点身份而非动画时钟）：
-    // sameSvgNode: false（修前）→ 修后为 true。⚠️ 本文件禁反引号，注释里也别写（pitfalls #11）。
-    var sameNumbers = drawnGauge && drawnGauge.used === lastUsage.used && drawnGauge.size === lastUsage.size;
-    if (!sameNumbers) {
+    // agent_message_chunk 就 refreshSessions()**（见 ChatPanelHost 的 chunk 分支）；更不用说
+    // usage_update 在流式期间每个 delta 都会推一次 meta。重建 <svg> 会让外圈那条 CSS 动画
+    // **从 0 重新开始**，它永远到不了转起来的那一步 —— 用户看到的就是"任务进行中时外圈的闪烁
+    // 失效，只剩下面多了一段圆环"。实测（preview-records.mjs 的 #gauge-rebuild 档，判据是节点
+    // 身份而非动画时钟）：sameSvgNode: false（修前）→ 修后为 true。
+    // 现在只有**窗口大小或"有没有拆分"变化**才重建；used / 两段长度都走属性更新。
+    // ⚠️ 本文件禁反引号，注释里也别写（pitfalls #11）。
+    var hasParts = !!lastUsage.parts;
+    var sameStructure = drawnGauge && drawnGauge.size === lastUsage.size && drawnGauge.hasParts === hasParts;
+    if (!sameStructure) {
       NS.dom.clear(contextMeter);
-      contextMeter.appendChild(buildGauge(pct));
-      contextMeter.appendChild(NS.dom.el('span', 'gauge-text', String(percent)));
-      drawnGauge = { used: lastUsage.used, size: lastUsage.size };
+      var gauge = buildGauge(pct, outputRatio, hasParts);
+      contextMeter.appendChild(gauge.root);
+      var textEl = NS.dom.el('span', 'gauge-text', String(percent));
+      contextMeter.appendChild(textEl);
+      drawnGauge = {
+        size: lastUsage.size, hasParts: hasParts,
+        fill: gauge.fill, output: gauge.output, text: textEl,
+      };
+    } else {
+      applyGauge(drawnGauge.fill, drawnGauge.output, pct, outputRatio);
+      drawnGauge.text.textContent = String(percent);
     }
   }
 
@@ -1574,6 +1665,8 @@ export const composerClient = `
     }
     // [CUSTOM- 已有会话：额外根目录只读（创建后锁死不可改）。
     state.addDirectoriesReadonly = true;
+    // [CUSTOM- 换会话时 Tip 的 /compact 可用性要跟上新会话的轮次状态。
+    if (NS.contextTip) { NS.contextTip.setRunning(state.running); }
     renderPickers();
     renderAttachments();
     renderAdditionalDirectories();
@@ -1586,6 +1679,8 @@ export const composerClient = `
     state.running = running;
     // [CUSTOM- 轮次自己结束了（或切走了）：那一问就没有意义了。
     if (!running) { hideStopAsk(); }
+    // [CUSTOM- Tip 面板里的 /compact 在轮次进行中必须禁用（宿主会拒绝第二个 prompt）。
+    if (NS.contextTip) { NS.contextTip.setRunning(running); }
     refreshControls();
     // [CUSTOM- The ring's outer arc says "a turn is running", and this path
     // has no meta of its own — redraw from the numbers we kept.

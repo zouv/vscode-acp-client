@@ -54,6 +54,52 @@ export interface SessionSummary {
   };
 }
 
+/** [CUSTOM- 一次上下文采样：每轮结束时记一个点，画圆环 Tip 的增长曲线。 */
+export interface ContextSample {
+  /** 轮次序号（1 起）。 */
+  turn: number;
+  used: number;
+  size: number;
+}
+
+/**
+ * [CUSTOM- 本轮新增 token 的构成。
+ *
+ * 来自 `PromptResponse.usage`。claude-agent-acp 在**轮次激活时重置**这个累计器
+ * （一轮内多条 assistant result 会 `+=`），所以它描述的是本轮，不是整个会话；
+ * `used` 仍然只由 `usage_update` 写。
+ */
+export interface TurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedReadTokens: number;
+  cachedWriteTokens: number;
+  thoughtTokens?: number;
+  /** [CUSTOM- 本轮的费用增量（相邻两次会话累计 cost 之差）。 */
+  costAmount?: number;
+}
+
+/** [CUSTOM- 最近一次模型调用的 token 拆分（适配器 `_meta["_claude/usage"]`）。
+ *  圆环用它把「提示」和「输出」画成两段；缺失时退回单色。 */
+export interface ContextUsageParts {
+  inputTokens: number;
+  outputTokens: number;
+  cachedReadTokens: number;
+  cachedWriteTokens: number;
+}
+
+/** [CUSTOM- `usage_update._meta["_claude/rateLimit"]` 的最新一份（按 type 去重）。 */
+export interface ContextRateLimit {
+  /** five_hour / seven_day / seven_day_opus / … */
+  type: string;
+  /** allowed / allowed_warning / rejected */
+  status: string;
+  /** 0..1 */
+  utilization?: number;
+  /** epoch 毫秒 */
+  resetsAt?: number;
+}
+
 /** Everything the panel needs to render one session's header + composer. */
 export interface SessionMeta {
   sessionId: string;
@@ -71,6 +117,21 @@ export interface SessionMeta {
      * ACP 的 Usage 类型里有这个字段，但实测当前适配器没发过来 —— 有就显示，没有就不显示。
      */
     thoughtTokens?: number;
+    /** [CUSTOM- 当前模型（`usage_update._meta["_claude/model"]`）。 */
+    model?: string;
+    /** [CUSTOM- 本面板已观察到的完成轮数（恢复会话/重启后从 0 重新数）。 */
+    turns?: number;
+    /** [CUSTOM- 最近一轮的 token 构成（`PromptResponse.usage`，按轮累计）。 */
+    lastTurn?: TurnUsage;
+    /** [CUSTOM- 最近一次模型调用的拆分（圆环双色）；`used` 就是这四项之和。 */
+    parts?: ContextUsageParts;
+    /** [CUSTOM- 每轮一个采样点，最多 48 个（窗口内滚动）。 */
+    history?: ContextSample[];
+    /** [CUSTOM- 压缩发生时所处的轮次（0 = 尚未完成任何轮）。 */
+    compactions?: number[];
+    rateLimits?: ContextRateLimit[];
+    /** [CUSTOM- 子 agent 累计成本（USD），来自 AgentMapStore。 */
+    subagentCostUsd?: number;
   } | null;
   /**
    * Pending attachments for this session. Carried on `meta` (and therefore on
@@ -457,6 +518,9 @@ export type ChatToExt =
   // 都**不是会话作用域**（可能根本没有聚焦会话——正是要用它们的时候），
   // 因此必须在 verifySession 守卫**之前**处理。
   | { type: 'connectAgent'; agentName?: string }
+  // [CUSTOM- 上下文 Tip 里的「用量面板 ↗」：打开 Dashboard 视图。非会话作用域
+  // （守卫之前处理）——它不读写任何会话，只是 executeCommand 一个视图 focus。
+  | { type: 'openDashboard' }
   // [CUSTOM- `cwd` = 客户端**地址栏当前显示**的目录（草稿的目录在客户端，
   // 宿主猜不到，058）。宿主用它标记 `directories` 里 `current: true` 的候选，客户端据此
   // 把过滤器的默认目录设成它。缺省时宿主仍按自己的规则猜（见 historyFilterCwd）。

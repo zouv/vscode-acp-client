@@ -49,6 +49,8 @@ import { settingsPanelClient } from './settingsPanel';
 import { shortcutsClient } from './shortcuts';
 // [CUSTOM- Agent map（2026-11-09）：底栏 "N Agents" 徽标 + 子 agent 树面板。
 import { agentMapClient } from './agentMap';
+// [CUSTOM- 上下文用量 Tip（2026-11-12）：点输入卡圆环弹出，含增长曲线与本轮构成。
+import { contextTipClient } from './contextTip';
 // [CUSTOM- 长任务看门狗（记录区 markdown 回填分帧的验收手段，也是"点了没反应"
 // 这类症状的常驻证据）。
 import { perfClient } from './perf';
@@ -103,6 +105,8 @@ const MODULES: ReadonlyArray<string> = [
   settingsPanelClient,
   // [CUSTOM- Agent map 面板（加载期不碰 DOM，init 由 boot 调；可在桩里单独驱动）。
   agentMapClient,
+  // [CUSTOM- 上下文 Tip（同 Agent map：加载期不碰 DOM，init 由 boot 调）。
+  contextTipClient,
   // [CUSTOM- 看门狗：boot 的 init 里装（加载期不碰 DOM，可在桩里单独驱动）。
   perfClient,
   bootClient,

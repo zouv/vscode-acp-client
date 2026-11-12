@@ -25,6 +25,13 @@ export const tabsClient = `
   // （uiPrefs 消息带回，见 applyPrefs）。**不在表里的会话按原顺序排在其后** —— 新会话永远
   // 不会因为"你没拖过它"而消失或跑到最前。
   var tabOrder = [];
+  // [CUSTOM- 草稿（本地页）的顺序与锚点（2026-11-12）。它们没有会话 id，不能进 tabOrder；
+  // 但用户要求草稿也能拖拽、并且"新建到某个会话右侧"能生效，所以：
+  // · draftOrder：草稿之间的相对顺序；
+  // · draftAfter：draftId → 锚点 id（某个会话 / 待恢复 tab；'__front__' = 排在最前）。
+  //   没有锚点的草稿追加在末尾（与旧行为一致）。纯客户端内存，刷新即丢（草稿本来也不持久化）。
+  var draftOrder = [];
+  var draftAfter = {};
   // 拖动中的会话 id 与落点（'before' | 'after'，相对 dropId）。
   var dragId = null;
   var dropId = null;
@@ -55,10 +62,8 @@ export const tabsClient = `
    * Tab could not reach them.
    */
   function tabModels() {
-    var out = [];
     var i;
-    // [CUSTOM- 会话按**手工顺序**排（tabOrder 里没有的按原顺序接在后面）；
-    // 草稿永远在最后 —— 它们是本地页，还没有 id 可排。
+    // [CUSTOM- 会话按**手工顺序**排（tabOrder 里没有的按原顺序接在后面）。
     // [CUSTOM- **待恢复的会话与真会话一起排**：它们本来就在上次那张 tabOrder 里，
     // 一起排队才恢复得出原来的位置（否则恢复出来的 tab 会全挤在真会话后面）。
     var entries = [];
@@ -80,11 +85,60 @@ export const tabsClient = `
       known.sort(function (a, b) { return rank[a.id] - rank[b.id]; });
       entries = known.concat(unknown);
     }
-    out = entries;
+    // [CUSTOM- 草稿不再是"永远最后"：按 draftOrder 排，再按 draftAfter 的锚点插进
+    // entries（同锚点按 draftOrder 依次排在锚点后面；'__front__' = 插到最前；
+    // 锚点不存在的退回末尾）。这是"新建 Session 到右侧"与草稿拖拽排序的共同基础。
+    var drafts = [];
     for (i = 0; i < state.drafts.length; i++) {
-      out.push({ kind: 'draft', id: state.drafts[i].draftId, draft: state.drafts[i] });
+      drafts.push({ kind: 'draft', id: state.drafts[i].draftId, draft: state.drafts[i] });
     }
-    return out;
+    var draftRank = {};
+    for (i = 0; i < draftOrder.length; i++) { draftRank[draftOrder[i]] = i; }
+    drafts.sort(function (a, b) {
+      var ra = draftRank[a.id] === undefined ? 1e9 : draftRank[a.id];
+      var rb = draftRank[b.id] === undefined ? 1e9 : draftRank[b.id];
+      return ra - rb;
+    });
+    var insertTail = {};
+    for (i = 0; i < drafts.length; i++) {
+      var model = drafts[i];
+      var anchor = draftAfter[model.id];
+      if (anchor === '__front__') {
+        var fpos = insertTail['__front__'] === undefined ? 0 : insertTail['__front__'];
+        entries.splice(fpos, 0, model);
+        insertTail['__front__'] = fpos + 1;
+        continue;
+      }
+      var at = anchor ? indexOfModelId(entries, anchor) : -1;
+      if (at < 0) { entries.push(model); continue; }
+      var pos = insertTail[anchor] === undefined ? at + 1 : insertTail[anchor];
+      entries.splice(pos, 0, model);
+      insertTail[anchor] = pos + 1;
+    }
+    return entries;
+  }
+
+  function indexOfModelId(models, id) {
+    for (var i = 0; i < models.length; i++) { if (models[i].id === id) { return i; } }
+    return -1;
+  }
+
+  /** 草稿只活在客户端：清掉已经不存在的 draftId，新增的按 drafts 原顺序接在后面。 */
+  function syncDraftOrder() {
+    var alive = {};
+    var i;
+    for (i = 0; i < state.drafts.length; i++) { alive[state.drafts[i].draftId] = true; }
+    var kept = [];
+    for (i = 0; i < draftOrder.length; i++) {
+      if (alive[draftOrder[i]]) { kept.push(draftOrder[i]); }
+    }
+    for (i = 0; i < state.drafts.length; i++) {
+      if (kept.indexOf(state.drafts[i].draftId) === -1) { kept.push(state.drafts[i].draftId); }
+    }
+    draftOrder = kept;
+    for (var id in draftAfter) {
+      if (Object.prototype.hasOwnProperty.call(draftAfter, id) && !alive[id]) { delete draftAfter[id]; }
+    }
   }
 
   function isActiveModel(model) {
@@ -399,7 +453,7 @@ export const tabsClient = `
     // 点菜单外任意处收起（菜单项自己的 click 会 stopPropagation）。
     document.addEventListener('click', function () { closeAgentMenu(); });
     document.addEventListener('scroll', hideTip, true);
-    window.addEventListener('resize', hideTip);
+    window.addEventListener('resize', function () { hideTip(); updateDensity(); });
 
     // [CUSTOM- The tablist keyboard contract: arrows move the
     // selection, Delete closes. Needed because the roving tabindex deliberately
@@ -579,20 +633,28 @@ export const tabsClient = `
   // 最后一个 tab 右边的空白属于 .tab-strip、tab 之间还有 2px 的缝，指针一旦落在这些地方
   // 就**没有 drop 目标**（松手即复位），而指示线又没有 dragleave 清除 —— 现场就是
   // "线还在、松手却没插进去"。现在条带里的任何位置都是落点。
-  function sessionTabNodes() {
+  function allTabNodes() {
     var nodes = stripEl ? stripEl.querySelectorAll('.tab') : [];
     var out = [];
     for (var i = 0; i < nodes.length; i++) {
-      // 草稿 tab 没有 data-session-id / data-restore-id。草稿永远排在所有会话**之后**，
-      // 所以指针落在它上面（或它右边的空白）就等于"插到最后一条会话之后" —— 正是用户拖到末尾时会做的事。
-      // [CUSTOM- 2026-11-10] 待恢复（还没 load）的 tab 也要算进落点：它与真会话共用同一张
-      // tabOrder，排除它会造成"恢复出来的几条拖不动、别的 tab 也插不进去"的死角。
-      var id = nodes[i].getAttribute
-        ? (nodes[i].getAttribute('data-session-id') || nodes[i].getAttribute('data-restore-id'))
-        : null;
-      if (id) { out.push({ node: nodes[i], id: id }); }
+      // [CUSTOM- 2026-11-12 草稿也参与落点：它们现在可以拖拽、也可以被插到会话右侧，
+      // 所以视觉顺序（含草稿）才是落点计算的依据。kind 区分"落到会话之间"与"落到草稿之间"。
+      // [CUSTOM- 2026-11-10] 待恢复（还没 load）的 tab 与真会话共用同一张 tabOrder，算落点。
+      if (!nodes[i].getAttribute) { continue; }
+      var draftId = nodes[i].getAttribute('data-draft-id');
+      var id = nodes[i].getAttribute('data-session-id')
+        || nodes[i].getAttribute('data-restore-id') || draftId;
+      if (id) { out.push({ node: nodes[i], id: id, kind: draftId ? 'draft' : 'session' }); }
     }
     return out;
+  }
+
+  /** 可见 id 的类型：草稿（客户端本地）还是会话/待恢复（走宿主 tabOrder）。 */
+  function kindOfTabId(id) {
+    for (var i = 0; i < state.drafts.length; i++) {
+      if (state.drafts[i].draftId === id) { return 'draft'; }
+    }
+    return 'session';
   }
 
   /** 指针的横坐标；拿不到（合成的/老事件）返回 null —— 没有坐标就别猜落点。 */
@@ -603,7 +665,7 @@ export const tabsClient = `
 
   /** 横坐标对应的插入位（0..n，n = 插到最后）与此刻屏幕上的会话 id 顺序。 */
   function boundaryFor(x) {
-    var tabs = sessionTabNodes();
+    var tabs = allTabNodes();
     var ids = [];
     var index = 0;
     for (var i = 0; i < tabs.length; i++) {
@@ -620,7 +682,7 @@ export const tabsClient = `
 
   /** 落点指示线：第 index 个 tab 的左侧；index === n 时画在最后一个的右侧。 */
   function markBoundary(index) {
-    var tabs = sessionTabNodes();
+    var tabs = allTabNodes();
     if (tabs.length === 0) { return; }
     var side = index >= tabs.length ? 'after' : 'before';
     var id = tabs[Math.min(index, tabs.length - 1)].id;
@@ -638,7 +700,7 @@ export const tabsClient = `
   function clearIndicator() {
     dropId = null;
     dropAt = null;
-    var tabs = sessionTabNodes();
+    var tabs = allTabNodes();
     for (var i = 0; i < tabs.length; i++) {
       tabs[i].node.className = String(tabs[i].node.className || '').replace(/ drop-(before|after)/g, '');
     }
@@ -648,7 +710,7 @@ export const tabsClient = `
     dragId = null;
     dropId = null;
     dropAt = null;
-    var tabs = sessionTabNodes();
+    var tabs = allTabNodes();
     for (var i = 0; i < tabs.length; i++) {
       tabs[i].node.className = String(tabs[i].node.className || '').replace(/ (dragging|drop-before|drop-after)/g, '');
     }
@@ -678,16 +740,78 @@ export const tabsClient = `
     var boundary = boundaryFor(x);
     var index = boundary.index;
     var ids = boundary.ids;
+    var fromKind = fromId ? kindOfTabId(fromId) : null;
     endDrag();
     // 诊断常驻（本仓库的既有风格，见 scroll# / markdownRendered）：真机若仍"松手复位"，
     // 这一行与 dragStart 那一行合起来就能区分三种断法 —— dragstart 没跑 / drop 没到 /
     // 落了但顺序被别的东西覆盖（那就看日志里这条之后的 uiPrefs 回话）。
     console.warn('[vac] tabdrag drop from=' + String(fromId) + ' to=' + index + ' order=' + ids.join(','));
     if (!fromId) { return; }
-    if (!moveTo(fromId, index, ids)) { return; }
-    tabOrder = ids;
+    if (fromKind === 'draft') {
+      dropDraftAt(fromId, index, ids);
+      return;
+    }
+    // [CUSTOM- 会话只和会话排（宿主 tabOrder 里没有草稿）。落点折算成"前面有几条会话"。
+    var sessionIds = [];
+    var sessionIndex = 0;
+    for (var i = 0; i < ids.length; i++) {
+      if (kindOfTabId(ids[i]) === 'draft') { continue; }
+      if (i < index) { sessionIndex += 1; }
+      sessionIds.push(ids[i]);
+    }
+    if (!moveTo(fromId, sessionIndex, sessionIds)) { return; }
+    tabOrder = sessionIds;
     // 先落盘再重渲染：渲染若抛错，顺序也已经交上去了（两件事没有共享的失败点）。
-    NS.bridge.post({ type: 'setUiPref', tabOrder: ids });
+    NS.bridge.post({ type: 'setUiPref', tabOrder: sessionIds });
+    renderTabs();
+  }
+
+  /**
+   * [CUSTOM- 草稿的落点（纯客户端，不写宿主 tabOrder）：
+   * · 锚点 = 落点左侧最近的非草稿 tab；拖到整条末尾 = 没有锚点（排在末尾）；
+   * · 拖到最前、左侧只有草稿时用 '__front__'；
+   * · 同锚点的草稿之间用 draftOrder 决定先后，落点相邻的草稿决定插在它前面还是后面。
+   */
+  function dropDraftAt(fromId, index, ids) {
+    var anchor = null;
+    var i;
+    for (i = index - 1; i >= 0; i--) {
+      if (ids[i] !== fromId && kindOfTabId(ids[i]) !== 'draft') { anchor = ids[i]; break; }
+    }
+    if (index >= ids.length) {
+      delete draftAfter[fromId];
+    } else if (anchor) {
+      draftAfter[fromId] = anchor;
+    } else if (index <= 0) {
+      draftAfter[fromId] = '__front__';
+    } else {
+      var leftId = null;
+      for (i = index - 1; i >= 0; i--) { if (ids[i] !== fromId) { leftId = ids[i]; break; } }
+      if (leftId && draftAfter[leftId]) { draftAfter[fromId] = draftAfter[leftId]; }
+      else { delete draftAfter[fromId]; }
+    }
+
+    var order = draftOrder.slice();
+    var at = order.indexOf(fromId);
+    if (at >= 0) { order.splice(at, 1); }
+    var leftDraft = null;
+    for (i = index - 1; i >= 0; i--) {
+      if (ids[i] !== fromId && kindOfTabId(ids[i]) === 'draft') { leftDraft = ids[i]; break; }
+    }
+    var rightDraft = null;
+    for (i = index; i < ids.length; i++) {
+      if (ids[i] !== fromId && kindOfTabId(ids[i]) === 'draft') { rightDraft = ids[i]; break; }
+    }
+    if (leftDraft) {
+      var li = order.indexOf(leftDraft);
+      if (li >= 0) { order.splice(li + 1, 0, fromId); } else { order.push(fromId); }
+    } else if (rightDraft) {
+      var ri = order.indexOf(rightDraft);
+      if (ri >= 0) { order.splice(ri, 0, fromId); } else { order.unshift(fromId); }
+    } else {
+      order.push(fromId);
+    }
+    draftOrder = order;
     renderTabs();
   }
 
@@ -783,6 +907,9 @@ export const tabsClient = `
           tab.setAttribute('data-unread', '');
         }
         tab.setAttribute('aria-selected', active ? 'true' : 'false');
+        // [CUSTOM- 2026-11-12：紧凑模式下标题文字会被隐藏（只留目录徽标），
+        // aria-label 让屏幕阅读器仍然读得到这个 tab 的名字。
+        tab.setAttribute('aria-label', label);
         tab.tabIndex = active || (!activeSeen && index === 0) ? 0 : -1;
         // [CUSTOM- 自绘悬停提示（2026-10-27）：标签名正常色，会话 id 灰色。
         var tabLines = isDraft
@@ -863,13 +990,13 @@ export const tabsClient = `
           if (event.stopPropagation) { event.stopPropagation(); }
           closeModel(model, tab, event);
         });
-        // [CUSTOM- 手工排序。只有会话 tab 能排：草稿的 id 是本地的临时号，
-        // 排它没有意义（它连会话都不是）。
+        // [CUSTOM- 手工排序。2026-11-12 起**草稿也能拖**（它现在有 draftOrder / draftAfter，
+        // 见 tabModels）；Side 仍不参与（Side 面板有自己的顺序语义）。
         // [CUSTOM- 2026-11-10] 待恢复（未 load）的 tab 也参与：它和真会话共用 tabOrder，
         // 不让拖就会留下"恢复出来的几条永远钉在原位/别的 tab 插不进去"的死角。Side 仍不参与。
         // [CUSTOM- 这里只留"谁被拖"与"拖完清理"；落点（dragover/drop/dragleave）
         // 在条带上，见 installDrag。
-        if (!isDraft && !side) {
+        if (!side) {
           tab.setAttribute('draggable', 'true');
           tab.addEventListener('dragstart', function (event) { dragStart(tab, model, event); });
           tab.addEventListener('dragend', function () { endDrag(); });
@@ -877,6 +1004,23 @@ export const tabsClient = `
         tabsEl.appendChild(tab);
       })(models[j], j);
     }
+    updateDensity();
+  }
+
+  /**
+   * [CUSTOM- 页签密度（2026-11-12）：tab 多时先压缩宽度（浏览器式），压到只剩省略号
+   * 仍放不下就隐藏标签文字，最后隐藏关闭按钮；都不行才退回横向滚动（.tabs 的
+   * overflow-x 兜底）。读 scrollWidth 会同步 reflow，但只在重绘时做两次、tab 数量有限。
+   * 桩 DOM 没有布局（scrollWidth / clientWidth 为 0）⇒ 不切换任何密度类。
+   */
+  function updateDensity() {
+    if (!tabsEl) { return; }
+    tabsEl.className = 'tabs';
+    if (!tabsEl.scrollWidth || !tabsEl.clientWidth) { return; }
+    if (tabsEl.scrollWidth <= tabsEl.clientWidth + 1) { return; }
+    tabsEl.className = 'tabs compact';
+    if (tabsEl.scrollWidth <= tabsEl.clientWidth + 1) { return; }
+    tabsEl.className = 'tabs compact tight';
   }
 
   /**
@@ -1111,6 +1255,18 @@ export const tabsClient = `
   function setDrafts(drafts, focusedDraftId) {
     state.drafts = drafts || [];
     state.focusedDraftId = focusedDraftId || null;
+    syncDraftOrder();
+    renderTabs();
+  }
+
+  /**
+   * [CUSTOM- 把新草稿插到某个 tab 右侧（右键菜单的 "New Session to the Right" 与
+   * "New Session in This Folder"）。锚点只是客户端内存，不写宿主 tabOrder。
+   */
+  function placeDraftAfter(draftId, anchorId) {
+    if (!draftId) { return; }
+    if (anchorId) { draftAfter[draftId] = anchorId; } else { delete draftAfter[draftId]; }
+    if (draftOrder.indexOf(draftId) === -1) { draftOrder.push(draftId); }
     renderTabs();
   }
 
@@ -1190,7 +1346,9 @@ export const tabsClient = `
     // [CUSTOM- 前/后一个 tab（-1 / +1，首尾循环），快捷键入口。
     activateRelative: activateRelative,
     // [CUSTOM- 快捷键懒恢复的完结结果（宿主 'restoreFinished' 消息消费）。
-    finishRestore: finishRestore
+    finishRestore: finishRestore,
+    // [CUSTOM- 右键菜单「在右侧新建 Session」：把刚创建的草稿插到指定 tab 右边。
+    placeDraftAfter: placeDraftAfter
   };
 })(window.__vac = window.__vac || {});
 `;

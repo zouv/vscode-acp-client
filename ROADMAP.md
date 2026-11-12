@@ -36,10 +36,15 @@ Recently used 条数可配、tab/目录提示分色、Markdown 渲染预设。�
 **v1.11.0（2026-11-05）**：聊天面板增强——Mermaid 图表（限高/50–200% 缩放/原文切换）、代码块语法高亮、历史会话与目录抽屉搜索、大纲 Messages/Cards 双 tab、Tail 两角 + 淡渐隐；同步修复滚动条拖拽与 Tail 抢视口、底部中键/滚轮误关 Tail，两个下拉改为按面板剩余高度滚动。明细见 `CHANGELOG [1.11.0]`。
 **v1.14.2（2026-11-11）**：新建会话首条消息的界面时序优化（回车即清空输入框、会话一就绪就切页签/显示消息，配置应用只挡发送）、目录搜索无结果可直接采用搜索框路径、输入框图片/文件引用在 prompt 发出时即清空。明细见 `CHANGELOG [1.14.2]`。
 **v1.14.1（2026-11-10）**：Mermaid 稳定性与页签拖拽修复——修复图表/原文切换与双击工具栏空白导致的 webview 渲染进程崩溃（灰屏），Diagram/Source 固定靠右；重启后待恢复页签可拖拽、其余页签可插入其排序；Agents 徽标移到模型选择器右侧。明细见 `CHANGELOG [1.14.1]`。
+**v1.15.0（2026-11-12）**：上下文用量 Tip（点圆环弹出图表：增长曲线 / 本轮 token 构成 / 费用 / 额度 / `/compact` 与 Dashboard 入口，圆环按提示与输出双色）、页签右键「New Session to the Right」、New Session in This Folder 改为预填目录的草稿、草稿页签可拖拽排序、页签多时按浏览器方式压缩宽度。明细见 `CHANGELOG [1.15.0]`。
 
 ---
 
 ## ✅ 已交付里程碑
+
+### v1.15.0 · ~~上下文用量 Tip 与页签交互~~ ✅（2026-11-12）
+
+输入卡圆环可点击，弹出用量面板：上下文增长曲线（压缩轮次标 ▼）、本轮 token 构成、费用（本会话 / 上一轮 / 子 agent）、订阅额度条、`/compact` 与用量面板入口；圆环与 Tip 大环按「提示 / 输出」双色显示最近一次调用。页签侧：右键 **New Session to the Right**、**New Session in This Folder** 改为预填目录的草稿（发首条消息才建会话）、草稿可拖拽排序、页签多时先压缩宽度再隐藏标题/关闭按钮。适配器 fork 在 `usage_update._meta` 增加 `_claude/usage` 拆分。自动验证见提交记录；真机验收状态见 `HANDOFF.md`。明细见 `CHANGELOG [1.15.0]`。
 
 ### v1.14.2 · ~~首条消息时序、目录搜索直用与附件清理~~ ✅（2026-11-11）
 
@@ -183,3 +188,4 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 | P2-7 | 会话级 MCP 注入 | `vac.mcpServers` 配置 → `session/new` 的 `mcpServers`（按 agent 的 `mcpCapabilities` 过滤） |
 | P2-8 | 编辑器上下文 | 发送选区 / 当前文件 / Problems 诊断到聊天；评估 `document/did*`（UNSTABLE） |
 | P2-9 | 拆分 `ChatPanelHost` | 4.4k 行：按设置 / 历史 / 恢复 / 草稿 / 更新投影拆控制器，host 只做路由 |
+| ~~P2-10~~ | ~~上下文用量面板~~ | ✅ 2026-11-12：输入卡圆环可点击，弹出用量 Tip（增长曲线 / 本轮 token 构成 / 费用 / 额度 / `/compact` 与 Dashboard 入口）。细节见 `CHANGELOG [未发布]`，实现说明见 `arch/chat-panel-input.md` §5.59 |

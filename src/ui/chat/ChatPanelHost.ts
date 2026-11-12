@@ -26,10 +26,13 @@ import { MarkdownStreamCache, streamSourceOf, type MarkdownStreamFrame } from '.
 // [CUSTOM- 回放里文件引用是一段文本（`[@名](file:///…)`），得先认出来。
 import { fileMentionViews } from './markdown';
 import { Outbox } from './Outbox';
+// [CUSTOM- 上下文用量统计（圆环 + Tip 面板的数据源）：纯逻辑，不 import vscode。
+import { ContextStats } from './usage/ContextStats';
 import type {
   Attachment,
   ChatToExt,
   CloseReason,
+  ContextUsageParts,
   ExtToChat,
   ExtToChatMessage,
   MarkdownRendered,
@@ -386,7 +389,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   /**
    * [CUSTOM- sessionId → 上下文占用，渲染成输入卡右下角那颗圆环。
    *
-   * **只有一个写入者：`usage_update`**（`used` = 当前上下文 token 数，`size` = 窗口大小）。
+   * **`used` 只有一个写入者：`usage_update`**（`used` = 当前上下文 token 数，`size` = 窗口大小）。
    * 曾经还有一个 `applyResponseUsage` 把 `PromptResponse.usage.totalTokens` 折进 `used` ——
    * 那是**单位张冠李戴**：协议里 `Usage.totalTokens` 是 *Sum of all token types across session*
    * （claude-agent-acp 实现为每轮 `+= input/output/cache_read/cache_write`，cache read 每轮都重算），
@@ -394,8 +397,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * 它当初的理由是"没发 usage_update 的 agent 也能有读数"，但那**不成立**：没有 usage_update
    * 就没有 `size`，`renderContext` 在 `!size` 时直接隐藏 —— 那个分支唯一能做到的事就是把
    * 已经正确的读数改坏。要再引入"会话累计 token"，请**另开字段**，别复用 `used`。
+   * `ContextStats` 就是这么做的：`lastTurn` 存本轮 `PromptResponse.usage`（适配器按轮重置的
+   * 累计值），`history` 存每轮结束时的 `used` 采样（Tip 的曲线），互不污染。
    */
-  private readonly usage: Map<string, SessionMeta['usage']> = new Map();
+  private readonly contextStats = new ContextStats();
   /** `${sessionId}::${toolCallId}` → transcript entry id. */
   private readonly toolEntryIds: Map<string, string> = new Map();
   /**
@@ -685,7 +690,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       for (const key of Array.from(this.ideFilesByMessage.keys())) {
         if (key.startsWith(`${sessionId}::`)) { this.ideFilesByMessage.delete(key); }
       }
-      this.usage.delete(sessionId);
+      this.contextStats.clear(sessionId);
       this.planEntryIds.delete(sessionId);
       // [CUSTOM- Session ids are never reused, so a stale switch
       // baseline could only ever suppress the first notice of a new session.
@@ -1108,6 +1113,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // 都按设计不带 sessionId（要用它们时往往根本没有聚焦会话），所以在守卫之前处理。
       case 'connectAgent': {
         this.handleConnectAgent((msg as { agentName?: string }).agentName);
+        return;
+      }
+      // [CUSTOM- 上下文 Tip 的「用量面板」：只打开 Dashboard 视图，不读写会话，
+      // 因此与 connectAgent 同区（守卫之前）。
+      case 'openDashboard': {
+        void vscode.commands.executeCommand('vac-dashboard.focus');
         return;
       }
       case 'listHistory': {
@@ -1898,6 +1909,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       this.applyStopReason(sessionId, response.stopReason);
       // [CUSTOM- 这里原来还有一次 `applyResponseUsage`（把 PromptResponse 的
       // totalTokens 折进圆环）—— 那是单位张冠李戴，已删除；圆环只认 usage_update。
+      // 现在这个值交给 ContextStats：它是**本轮**的累计（适配器在轮次激活时重置），
+      // 用来记 Tip 的「本轮构成」与曲线采样点，绝不写回 `used`。
+      this.contextStats.noteTurn(sessionId, response.usage ?? undefined);
+      this.pushMeta(sessionId);
       // [CUSTOM- 这一轮怎么结束的，决定要不要（以及怎么）通知。
       outcome = turnOutcome(response.stopReason);
     } catch (e: any) {
@@ -2445,7 +2460,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       }
 
       case 'usage_update': {
-        this.usage.set(sessionId, {
+        const rawMeta = data._meta && typeof data._meta === 'object'
+          ? data._meta as Record<string, unknown> : undefined;
+        // [CUSTOM- 主会话也读 `_meta`：模型名与速率额度原先只有子会话分支在用，
+        // 主会话的这两条信息被直接丢掉了（Tip 面板要用）。
+        const model = rawMeta ? rawMeta['_claude/model'] : undefined;
+        this.contextStats.noteUsage(sessionId, {
           used: Number(data.used ?? 0),
           size: Number(data.size ?? 0),
           costAmount: data.cost?.amount,
@@ -2455,7 +2475,22 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           thoughtTokens: typeof (data as { thoughtTokens?: unknown }).thoughtTokens === 'number'
             ? (data as { thoughtTokens?: number }).thoughtTokens
             : undefined,
+          model: typeof model === 'string' && model ? model : undefined,
+          // [CUSTOM- 圆环双色：`used` 就是这四项之和，适配器在同一条 `_meta` 里给拆分。
+          parts: rawMeta ? contextUsageParts(rawMeta['_claude/usage']) : undefined,
         });
+        const rateLimit = rawMeta ? rawMeta['_claude/rateLimit'] : undefined;
+        if (rateLimit && typeof rateLimit === 'object') {
+          const info = rateLimit as {
+            status?: unknown; rateLimitType?: unknown; utilization?: unknown; resetsAt?: unknown;
+          };
+          this.contextStats.noteRateLimit(sessionId, {
+            status: typeof info.status === 'string' ? info.status : undefined,
+            rateLimitType: typeof info.rateLimitType === 'string' ? info.rateLimitType : undefined,
+            utilization: typeof info.utilization === 'number' ? info.utilization : undefined,
+            resetsAt: typeof info.resetsAt === 'number' ? info.resetsAt : undefined,
+          });
+        }
         this.pushMeta(sessionId);
         return;
       }
@@ -2590,6 +2625,11 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       status: data.status,
     });
     if (!result) { return; }
+    // [CUSTOM- 压缩成功的轮次是 Tip 曲线上的 ▼ 标记；失败的不算（上下文没被换掉）。
+    if (!error) {
+      this.contextStats.noteCompaction(sessionId);
+      this.pushMeta(sessionId);
+    }
     if (result.created) {
       this.stampReplayTime(sessionId, result.entry, compactionId);
       this.post({ type: 'append', sessionId, entries: [result.entry] });
@@ -5807,13 +5847,18 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   private metaOf(sessionId: string): SessionMeta {
     const session = sessionOf(this.sessionManager, sessionId);
+    const usage = this.contextStats.snapshot(sessionId);
+    if (usage) {
+      const subagentCostUsd = this.agentMaps.totalCostUsd(sessionId);
+      if (subagentCostUsd !== undefined) { usage.subagentCostUsd = subagentCostUsd; }
+    }
     return {
       sessionId,
       modes: session?.modes ?? null,
       models: session?.models ?? null,
       configOptions: session?.configOptions ?? null,
       availableCommands: wireCommands(session),
-      usage: this.usage.get(sessionId) ?? null,
+      usage,
       // [CUSTOM- Whether Enter may send while a turn is running.
       steering: this.sessionManager.supportsSteering(sessionId),
       // Attachments live here so they survive a focus/boot round-trip; the
@@ -6151,6 +6196,27 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 /** Keep only real numbers (agent payloads are `unknown`; undefined must stay undefined). */
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** [CUSTOM- `usage_update._meta["_claude/usage"]` → 圆环双色的拆分。
+ *  四项全缺 = 适配器没给（旧版 / 压缩后），返回 undefined，客户端退回单色。 */
+function contextUsageParts(value: unknown): ContextUsageParts | undefined {
+  if (!value || typeof value !== 'object') { return undefined; }
+  const data = value as Record<string, unknown>;
+  const inputTokens = finiteNumber(data.inputTokens);
+  const outputTokens = finiteNumber(data.outputTokens);
+  const cachedReadTokens = finiteNumber(data.cachedReadTokens);
+  const cachedWriteTokens = finiteNumber(data.cachedWriteTokens);
+  if (inputTokens === undefined && outputTokens === undefined
+    && cachedReadTokens === undefined && cachedWriteTokens === undefined) {
+    return undefined;
+  }
+  return {
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    cachedReadTokens: cachedReadTokens ?? 0,
+    cachedWriteTokens: cachedWriteTokens ?? 0,
+  };
 }
 
 /** [CUSTOM- Markdown 渲染预设的合法值（设置面板与 setUiPref 共用一处白名单）。 */

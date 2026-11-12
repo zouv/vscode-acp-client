@@ -100,7 +100,7 @@
 | `available_commands_update` | 斜杠命令 / skills 列表 | **✅** |
 | `current_mode_update` | agent 自主切模式 | **✅** |
 | `config_option_update` | 配置项变化 | **✅** |
-| `usage_update` | token 用量 / 模型 | **✅** |
+| `usage_update` | token 用量 / 模型 | **✅** 圆环 + 用量 Tip；本仓 fork 额外带 `_meta["_claude/model"]`、`_meta["_claude/usage"]`（最近一次调用的 input/output/cache 拆分，圆环双色用）与 `_meta["_claude/rateLimit"]` |
 | `session_info_update` | 会话标题等元信息 | **✅** |
 | `subagent_spawned` / `subagent_state_update` | **子会话**派生与状态（draft，PR #1992） | **🟡** 见 §2.5 |
 | `async_task_spawned` / `async_task_progress` / `async_task_state` | 后台异步任务 | **🟡** 面板已有「后台子任务」呈现；可对照补 |

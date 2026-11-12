@@ -282,6 +282,10 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
           <div id="agentMapList" class="agent-map-list"></div>
           <div id="agentMapDetail" class="agent-map-detail" hidden></div>
         </div>
+        <!-- [CUSTOM- 上下文用量 Tip（2026-11-12）：点圆环 #contextMeter 打开。
+             与 #agentMapPanel 同一位置家族（贴输入卡上方），内容全部由 JS 生成；
+             关闭时保持空壳，不渲染也不量布局。 -->
+        <div id="contextTip" class="context-tip" hidden role="dialog" aria-label="Context usage"></div>
         <!-- 一体式输入卡：textarea 与按钮栏合进同一个描边
              容器（原来是"带边框的 textarea + 卡外一行按钮"，中间隔一条缝，看着像两个孤立的
              控件）。焦点环也从 textarea 移到卡片上（:focus-within），见 styles.ts。
@@ -312,7 +316,9 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
                  2026-11-10 移到模型选择器右侧（靠左那一簇）：它现在挂在 #configPickers 里，
                  由 composer.renderPickers 重建选择器时保留，并插到 model picker 之后。 -->
             <div id="configPickers" class="config-pickers"><button id="agentMapBtn" class="agent-map-btn" type="button" title="Agent map" hidden>0 Agents</button></div>
-            <div id="contextMeter" class="context-meter" hidden title="Context usage"></div>
+            <!-- [CUSTOM- 上下文圆环（2026-11-12 起可点）：点开在上方弹出 #contextTip
+                 用量面板。button 而不是 div —— 它现在是一个入口，键盘也要能到达。 -->
+            <button id="contextMeter" class="context-meter" type="button" hidden title="Context usage" aria-haspopup="dialog" aria-expanded="false" aria-label="Context usage"></button>
             <button id="sendStopBtn" class="send-stop send" disabled title="Send" aria-label="Send"></button>
           </div>
         </div>

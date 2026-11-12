@@ -98,6 +98,17 @@ describe('AgentMapStore snapshot', () => {
     expect(store.signature('nope')).toBe('');
   });
 
+  it('totalCostUsd sums every child and stays undefined without a cost', () => {
+    const store = new AgentMapStore();
+    expect(store.totalCostUsd('root')).toBeUndefined();
+    store.upsert('root', { agentId: 'a', parentId: 'root', state: 'running' });
+    store.upsert('root', { agentId: 'b', parentId: 'a', state: 'running' });
+    expect(store.totalCostUsd('root')).toBeUndefined();
+    store.noteUsage('root', 'a', { cost: { amount: 0.25 } });
+    store.noteUsage('root', 'b', { cost: { amount: 0.5 } });
+    expect(store.totalCostUsd('root')).toBe(0.75);
+  });
+
   it('clear drops the whole bucket', () => {
     const store = new AgentMapStore();
     store.upsert('root', { agentId: 'a', parentId: 'root', state: 'running' });

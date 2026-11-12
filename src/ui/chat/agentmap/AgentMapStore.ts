@@ -179,6 +179,24 @@ export class AgentMapStore {
     return this.byParent.get(parentSessionId)?.size ?? 0;
   }
 
+  /**
+   * [CUSTOM- 子 agent 的累计成本（USD）。上下文 Tip 的「子 agent」一行用它；
+   * 扁平表遍历、不建快照 —— meta 推送频率高，克隆整棵树太贵。
+   */
+  totalCostUsd(parentSessionId: string): number | undefined {
+    const bucket = this.byParent.get(parentSessionId);
+    if (!bucket || bucket.size === 0) { return undefined; }
+    let total = 0;
+    let seen = false;
+    for (const node of bucket.values()) {
+      if (typeof node.costUsd === 'number' && Number.isFinite(node.costUsd)) {
+        total += node.costUsd;
+        seen = true;
+      }
+    }
+    return seen ? total : undefined;
+  }
+
   /** Nested snapshot, rebuilt on demand — never stored. */
   snapshot(parentSessionId: string): AgentMapSnapshot {
     const bucket = this.byParent.get(parentSessionId);

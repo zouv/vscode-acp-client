@@ -5617,8 +5617,9 @@ suite('chat panel: the context ring only trusts usage_update', () => {
     const reported = {
       used: 55642, size: 1000000,
       costAmount: 2.6394680000000004, costCurrency: 'USD',
-      // [CUSTOM- 思考 token：当前适配器没发过来，所以是 undefined。
-      thoughtTokens: undefined,
+      // [CUSTOM- 上下文 Tip 的统计字段：此刻还没完成任何轮次。
+      turns: 0,
+      history: [],
     };
     assert.deepStrictEqual(usageOf(harness), reported,
       'the agent-reported context usage is what the ring shows');
@@ -5632,8 +5633,54 @@ suite('chat panel: the context ring only trusts usage_update', () => {
     harness.host.onMessage({ type: 'sendPrompt', sessionId: 's-1', text: 'go' });
     await new Promise(resolve => setTimeout(resolve, 20));
 
-    assert.deepStrictEqual(usageOf(harness), reported,
+    // [CUSTOM- 响应里的 usage 现在落在 lastTurn（Tip 的本轮构成），`used` 仍只由 usage_update 写。
+    // 适配器在轮次激活时重置这个累计器，所以它描述的是本轮；即便如此也不许碰圆环。
+    const after = usageOf(harness) as {
+      used: number; size: number; turns: number;
+      lastTurn?: { inputTokens: number; outputTokens: number };
+    };
+    assert.strictEqual(after.used, 55642,
       'a session-cumulative token total must never be rendered as context-window occupancy');
+    assert.strictEqual(after.size, 1000000);
+    assert.strictEqual(after.turns, 1);
+    assert.deepStrictEqual(after.lastTurn, {
+      inputTokens: 1_840_000, outputTokens: 1000, cachedReadTokens: 0, cachedWriteTokens: 0,
+      costAmount: 2.6394680000000004,
+    });
+  });
+
+  // [CUSTOM- 圆环双色：适配器把最近一次调用的拆分挂在 `_meta["_claude/usage"]` 上，
+  // 宿主转成 camelCase 的 `meta.usage.parts`。缺失时字段不存在（客户端退回单色）。
+  test('the last-call split rides on _claude/usage and reaches meta.usage.parts', () => {
+    const harness = makeHarness('s-1', 'Claude Code');
+    harness.handler.handleUpdate({
+      sessionId: 's-1',
+      update: {
+        sessionUpdate: 'usage_update', used: 100, size: 200,
+        _meta: {
+          '_claude/usage': {
+            inputTokens: 60, outputTokens: 20, cachedReadTokens: 15, cachedWriteTokens: 5,
+          },
+        },
+      },
+    } as never);
+    const usage = usageOf(harness) as { parts?: Record<string, number> };
+    assert.deepStrictEqual(usage.parts, {
+      inputTokens: 60, outputTokens: 20, cachedReadTokens: 15, cachedWriteTokens: 5,
+    });
+  });
+
+  test('an unknown _claude/usage shape is dropped rather than half-filled', () => {
+    const harness = makeHarness('s-1', 'Claude Code');
+    harness.handler.handleUpdate({
+      sessionId: 's-1',
+      update: {
+        sessionUpdate: 'usage_update', used: 100, size: 200,
+        _meta: { '_claude/usage': { nonsense: true } },
+      },
+    } as never);
+    const usage = usageOf(harness) as { parts?: unknown };
+    assert.strictEqual(usage.parts, undefined);
   });
 });
 

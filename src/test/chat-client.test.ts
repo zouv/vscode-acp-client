@@ -62,6 +62,8 @@ import { popoverClient } from '../ui/chat/html/client/popover';
 import { railClient } from '../ui/chat/html/client/rail';
 // [CUSTOM- Agent map 的徽标 + 树面板（按需渲染）。
 import { agentMapClient } from '../ui/chat/html/client/agentMap';
+// [CUSTOM- 上下文用量 Tip（点圆环弹出；按需渲染）。
+import { contextTipClient } from '../ui/chat/html/client/contextTip';
 // [CUSTOM- 宿主侧构建指纹。
 import { buildStamp } from '../utils/BuildInfo';
 
@@ -81,6 +83,13 @@ class StubNode {
   title = '';
   /** [CUSTOM- The composer's textarea and buttons are plain fields. */
   value = '';
+  /** [CUSTOM- 斜杠命令面板用它区分"刚在行首敲下 /"和"正在编辑第一行"。 */
+  selectionStart = 0;
+  selectionEnd = 0;
+  setSelectionRange(start: number, end: number): void {
+    this.selectionStart = start;
+    this.selectionEnd = end;
+  }
   placeholder = '';
   /** [CUSTOM- …and so are the form card's inputs (radio / checkbox / text / number). */
   type = '';
@@ -404,7 +413,7 @@ function loadClient(
   // [CUSTOM- `sessionMenu` joined the list for its own suite: unlike
   // boot, its IIFE runs nothing at load time (init() is called by boot, and here by
   // the test), so loading it costs the record-layer tests nothing.
-  for (const source of [domClient, iconsClient, mermaidClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, detailPaneClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, shortcutsClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient, agentMapClient]) {
+  for (const source of [domClient, iconsClient, mermaidClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, detailPaneClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, shortcutsClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient, agentMapClient, contextTipClient]) {
     new Function('window', 'document', source)(win, doc);
   }
   return { NS, metrics, doc, docListeners, jumps, timers, win };
@@ -1473,7 +1482,9 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     assert.deepStrictEqual(orderOf(els), ['s1', 's3', 's2']);
   });
 
-  test('a draft tab is never a landing mark, and dropping on it means "the end" (201)', () => {
+  // [CUSTOM- 2026-11-12：草稿现在也是落点（它可拖、也可被别的 tab 插到前后）。
+  // 拖到条带最右侧仍然等于"会话排到最后一个会话之后"，草稿自身不被带动。
+  test('a draft tab is a landing mark now, and dropping past it keeps it last (201)', () => {
     const { NS, els } = tabStrip();
     NS.tabs.setSessions([summary('s1'), summary('s2')]);
     NS.tabs.setDrafts([{ draftId: 'd1' }], 'd1');
@@ -1484,10 +1495,50 @@ suite('chat client logic: tab strip (stub DOM)', () => {
 
     tabs[0].dispatch('dragstart', { target: tabs[0], preventDefault: () => {}, dataTransfer: { setData: () => {} } });
     dragOver(els.tabStrip, 10000);
-    assert.ok(!String(draftTab.className).includes('drop-'), 'a draft is not a session — no mark on it');
-    assert.ok(String(tabs[1].className).includes('drop-after'), 'the mark lands on the last SESSION');
+    assert.ok(String(draftTab.className).includes('drop-after'), 'the draft is the last tab, so the mark lands on it');
     dropAt(els.tabStrip, 10000);
     assert.deepStrictEqual(orderOf(els).slice(0, 2), ['s2', 's1'], 'and the drop means "after the last session"');
+  });
+
+  // [CUSTOM- 2026-11-12 用户要求：草稿（New Session）也能拖拽排序，右键"在右侧新建"
+  // 要把草稿插到指定 tab 右边。草稿顺序只在客户端内存（draftOrder / draftAfter），
+  // 不写宿主的 tabOrder —— 刷新后草稿本来就没了。
+  test('draft tabs can be anchored to the right of a session and dragged', () => {
+    const { NS, els } = tabStrip();
+    const posted: Array<Record<string, unknown>> = [];
+    NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.tabs.setSessions([summary('s1'), summary('s2'), summary('s3')]);
+    NS.tabs.setDrafts([{ draftId: 'd1', cwd: null }], null);
+    const order = () => els.tabs.querySelectorAll('.tab').map(t =>
+      t.getAttribute('data-session-id') || t.getAttribute('data-draft-id'));
+    assert.deepStrictEqual(order(), ['s1', 's2', 's3', 'd1'], 'without an anchor a draft stays last');
+
+    NS.tabs.placeDraftAfter('d1', 's1');
+    assert.deepStrictEqual(order(), ['s1', 'd1', 's2', 's3'], 'anchored to the right of s1');
+
+    const tabs = els.tabs.querySelectorAll('.tab');
+    const box = layOut(tabs);
+    // 拖草稿（tabs[1]）到 s2 的右半边 ⇒ 锚点变成 s2。
+    tabs[1].dispatch('dragstart', {
+      target: tabs[1], preventDefault: () => {}, dataTransfer: { setData: () => {} },
+    });
+    dropAt(els.tabStrip, box.mids[2] + 10);
+    assert.deepStrictEqual(order(), ['s1', 's2', 'd1', 's3'], 'the draft follows s2');
+    assert.strictEqual(posted.filter(m => m.type === 'setUiPref').length, 0,
+      'draft order is client-local (not the host tabOrder)');
+  });
+
+  // [CUSTOM- 2026-11-12 用户要求：tab 多时压缩宽度而不是直接横向滚动。
+  // 两级：先隐藏标签文字，仍放不下再隐藏关闭按钮；桩 DOM 没有布局就不加类。
+  test('the strip compacts tab labels, then the close buttons, before scrolling', () => {
+    const { NS, els } = tabStrip();
+    NS.tabs.setSessions([summary('s1')]);
+    assert.strictEqual(els.tabs.className, 'tabs', 'no layout in the stub ⇒ no density class');
+    els.tabs.scrollWidth = 600;
+    els.tabs.clientWidth = 400;
+    NS.tabs.setSessions([summary('s1'), summary('s2')]);
+    assert.ok(String(els.tabs.className).includes('compact'), 'overflowing tabs hide their labels');
+    assert.ok(String(els.tabs.className).includes('tight'), 'still overflowing ⇒ close buttons go too');
   });
 
   test('leaving the strip clears the line but keeps the drag alive (201)', () => {
@@ -3505,19 +3556,27 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
 suite('chat client logic: composer input bar (stub DOM)', () => {
   function composerBar(): {
     NS: Record<string, any>; input: StubNode; sendBtn: StubNode; contextMeter: StubNode;
+    contextTip: StubNode; docListeners: Record<string, Array<(event: any) => void>>;
     attachments: StubNode; steerHint: StubNode; slashPopup: StubNode; slashBtn: StubNode;
     sent: Array<Record<string, unknown>>;
   } {
     const input = new StubNode('textarea');
     const sendBtn = new StubNode('button');
-    const contextMeter = new StubNode('div');
+    // [CUSTOM- 2026-11-12 起这颗圆环是 <button>（点开上下文 Tip）。
+    const contextMeter = new StubNode('button');
+    const contextTip = new StubNode('div');
+    // body.ts 的 #contextTip 初始带 hidden；这里照抄，否则"未点击时是收起"的断言没有意义。
+    contextTip.hidden = true;
+    // 定位祖先是 .composer-inner；Tip 的位置按它和圆环的 rect 算（见 positionTip）。
+    const tipHost = new StubNode('div');
+    tipHost.appendChild(contextTip);
     const attachments = new StubNode('div');
     const slashPopup = new StubNode('div');
     const slashBtn = new StubNode('button');
     // [CUSTOM- 轮次中发不出去时那条说明（#steerHint），以及发出去的消息。
     const steerHint = new StubNode('div');
     const sent: Array<Record<string, unknown>> = [];
-    const { NS } = loadClient({
+    const { NS, docListeners } = loadClient({
       promptInput: input,
       sendStopBtn: sendBtn,
       slashPopup,
@@ -3525,12 +3584,15 @@ suite('chat client logic: composer input bar (stub DOM)', () => {
       attachments,
       configPickers: new StubNode('div'),
       contextMeter,
+      contextTip,
       steerHint,
     });
     NS.bridge.post = (msg: Record<string, unknown>) => { sent.push(msg); };
     NS.bridge.postForSession = (msg: Record<string, unknown>) => { sent.push(msg); };
     NS.composer.init();
-    return { NS, input, sendBtn, contextMeter, attachments, steerHint, slashPopup, slashBtn, sent };
+    // boot 会调它；面板的关闭路径（Escape / 点外面）也在这里绑。
+    NS.contextTip.init();
+    return { NS, input, sendBtn, contextMeter, contextTip, docListeners, attachments, steerHint, slashPopup, slashBtn, sent };
   }
 
   const session = (id: string) => ({
@@ -3728,13 +3790,50 @@ suite('chat client logic: composer input bar (stub DOM)', () => {
     const fill = contextMeter.querySelector('.gauge-fill')!;
     assert.ok(fill, 'the progress arc is rendered');
     // The arc is a plain circle whose dashoffset hides the part not yet reached.
-    assert.strictEqual(fill.getAttribute('stroke-dashoffset'), String(2 * Math.PI * 9 * (1 - 0.45)));
+    // 浮点结果取决于运算顺序（这里实现走 C - promptLen），按近似值断言。
+    assert.ok(Math.abs(Number(fill.getAttribute('stroke-dashoffset'))
+      - 2 * Math.PI * 9 * (1 - 0.45)) < 1e-9);
     assert.strictEqual(fill.getAttribute('stroke-dasharray'), String(2 * Math.PI * 9));
     assert.ok(contextMeter.querySelector('.gauge-spin'), 'the running arc is always in the DOM (CSS shows it)');
     assert.match(contextMeter.title, /45%/, 'the exact numbers live in the tooltip');
 
     NS.composer.setMeta({ availableCommands: [], configOptions: [], usage: { used: 450000, size: 0 } });
     assert.strictEqual(contextMeter.hidden, true, 'no context size ⇒ hide the meter');
+  });
+
+  // [CUSTOM- 圆环双色（2026-11-12）：最近一次调用的 prompt 与 output 用两段弧表示。
+  // 拆分来自 meta.usage.parts（适配器 `_meta["_claude/usage"]`）；没有就退回单色。
+  test('the ring splits into prompt and output arcs when the adapter reports the parts', () => {
+    const { NS, contextMeter } = composerBar();
+    NS.composer.setMeta({
+      availableCommands: [], configOptions: [],
+      usage: {
+        used: 100000, size: 200000,
+        parts: { inputTokens: 60000, outputTokens: 20000, cachedReadTokens: 15000, cachedWriteTokens: 5000 },
+      },
+    });
+    const circumference = 2 * Math.PI * 9;
+    const total = circumference * 0.5;
+    const promptLen = total * 0.8;
+    const outputLen = total * 0.2;
+    const fill = contextMeter.querySelector('.gauge-fill')!;
+    const output = contextMeter.querySelector('.gauge-output')!;
+    assert.ok(output, 'the output arc is drawn');
+    assert.strictEqual(fill.getAttribute('stroke-dasharray'), String(circumference));
+    assert.strictEqual(Number(fill.getAttribute('stroke-dashoffset')),
+      circumference - promptLen, 'the prompt arc stops where output starts');
+    assert.strictEqual(output.getAttribute('stroke-dasharray'),
+      String(outputLen) + ' ' + String(circumference));
+    assert.strictEqual(Number(output.getAttribute('stroke-dashoffset')), -promptLen);
+    assert.match(contextMeter.title, /prompt 80k \/ output 20k/, `got: ${contextMeter.title}`);
+
+    // 适配器不再给拆分（旧版 / 刚压缩完）：退回单色，输出段隐藏。
+    NS.composer.setMeta({
+      availableCommands: [], configOptions: [],
+      usage: { used: 100000, size: 200000 },
+    });
+    assert.strictEqual(contextMeter.querySelector('.gauge-output'), null,
+      'without parts there is no second arc');
   });
 
   test('the running arc lights up only while a turn is in flight', () => {
@@ -3771,10 +3870,15 @@ suite('chat client logic: composer input bar (stub DOM)', () => {
     assert.strictEqual(contextMeter.querySelector('.gauge-spin'), spin);
     assert.strictEqual(contextMeter.classList.contains('running'), true, 'but the class still flips');
 
-    // 数字**真的**变了就必须重画（否则读数会停在上一次）。
+    // [CUSTOM- 数值变化（含流式期间每个 usage_update 的 used 增长）也只更新属性。
+    // 重建 <svg> 会重启动画，而 usage_update 在流式期间每个 delta 都会推一次。
     NS.composer.setMeta({ availableCommands: [], configOptions: [], usage: { used: 900000, size: 1000000 } });
-    assert.notStrictEqual(contextMeter.querySelector('svg'), svg, 'new numbers get a new gauge');
+    assert.strictEqual(contextMeter.querySelector('svg'), svg,
+      'new numbers are attribute updates — the gauge node must survive them too');
+    assert.strictEqual(contextMeter.querySelector('.gauge-spin'), spin);
     assert.strictEqual(contextMeter.querySelector('.gauge-text')!.textContent, '90');
+    assert.ok(Math.abs(Number(contextMeter.querySelector('.gauge-fill')!.getAttribute('stroke-dashoffset'))
+      - 2 * Math.PI * 9 * (1 - 0.9)) < 1e-9, 'the arc still follows the new numbers');
   });
 
   // [CUSTOM- 金额保留两位小数。
@@ -3804,6 +3908,116 @@ suite('chat client logic: composer input bar (stub DOM)', () => {
     });
     assert.ok(!contextMeter.title.includes('USD'), `got: ${contextMeter.title}`);
     assert.ok(!contextMeter.title.includes('NaN'), `got: ${contextMeter.title}`);
+  });
+
+  // [CUSTOM- 上下文 Tip（2026-11-12）：圆环从"只能悬停看一行 tooltip"变成"点开一张图表"。
+  // 数据全部来自 meta.usage（宿主 ContextStats 产出），客户端只渲染、不推断。
+  function tipUsage(): Record<string, unknown> {
+    return {
+      used: 450, size: 1000, turns: 2, model: 'claude-x', costAmount: 1.2,
+      parts: { inputTokens: 300, outputTokens: 20, cachedReadTokens: 120, cachedWriteTokens: 10 },
+      lastTurn: {
+        inputTokens: 10, outputTokens: 5, cachedReadTokens: 100, cachedWriteTokens: 5,
+        costAmount: 0.2,
+      },
+      history: [{ turn: 1, used: 300, size: 1000 }, { turn: 2, used: 450, size: 1000 }],
+      compactions: [1],
+      rateLimits: [{ type: 'five_hour', status: 'allowed', utilization: 0.5 }],
+    };
+  }
+
+  test('clicking the ring opens the context tip with numbers, chart and actions', () => {
+    const { NS, contextMeter, contextTip } = composerBar();
+    NS.composer.setFocus(session('s-1'), { availableCommands: [], configOptions: [], usage: tipUsage() });
+    assert.strictEqual(contextTip.hidden, true, 'closed until asked');
+    contextMeter.dispatch('click', { preventDefault: () => {} });
+    assert.strictEqual(contextTip.hidden, false);
+    assert.strictEqual(contextMeter.getAttribute('aria-expanded'), 'true');
+    assert.strictEqual(contextTip.querySelector('.context-tip-ring-text')!.textContent, '45');
+    assert.match(contextTip.textContent, /450 \/ 1k tokens/);
+    // [CUSTOM- 双色圆环的文字版 + 两个口径的标注：
+    // "last call" = 最近一次调用的拆分；"all calls" = 下面 This turn 的本轮累加。
+    assert.ok(contextTip.querySelector('.gauge-output'), 'the output arc is drawn in the big ring too');
+    assert.match(contextTip.textContent, /last call: prompt 430 · output 20/);
+    assert.match(contextTip.textContent, /all calls/);
+    assert.ok(contextTip.querySelector('.context-tip-line-path'), 'the growth curve is drawn');
+    assert.ok(contextTip.querySelector('.context-tip-compact-line'), 'the compaction mark is drawn');
+    assert.match(contextTip.textContent, /Cache read 100/);
+    assert.match(contextTip.textContent, /1 compaction/);
+    assert.match(contextTip.textContent, /\$1\.20/, 'session cost');
+    assert.match(contextTip.textContent, /\+\$0\.20/, 'last-turn cost is the cumulative delta');
+    assert.match(contextTip.textContent, /5-hour/);
+    assert.match(contextTip.textContent, /50%/);
+  });
+
+  // [CUSTOM- 2026-11-12 用户报：Tip 应该贴着圆环按钮上方，而不是对齐整个输入卡。
+  // 位置是相对定位祖先（.composer-inner）算出来的两个像素值：右缘对齐圆环右缘，
+  // 底边在圆环顶上方 6px。
+  test('the tip is anchored above the ring, not to the whole composer', () => {
+    const { NS, contextMeter, contextTip } = composerBar();
+    NS.composer.setFocus(session('s-1'), { availableCommands: [], configOptions: [], usage: tipUsage() });
+    const host = contextTip.parentNode!;
+    host.rectLeft = 0;
+    host.rectWidth = 800;
+    host.rectBottom = 600;
+    contextMeter.rectLeft = 736;
+    contextMeter.rectWidth = 24;
+    contextMeter.rectTop = 560;
+    contextMeter.rectHeight = 24;
+
+    contextMeter.dispatch('click', { preventDefault: () => {} });
+    assert.strictEqual(contextTip.style.right, '40px', 'the right edge lines up with the ring');
+    assert.strictEqual(contextTip.style.bottom, '46px', 'the bottom sits 6px above the ring');
+  });
+
+  test('the context tip closes on Escape, an outside click and a session switch', () => {
+    const { NS, contextMeter, contextTip, docListeners } = composerBar();
+    NS.composer.setFocus(session('s-1'), { availableCommands: [], configOptions: [], usage: tipUsage() });
+    const openTip = () => {
+      contextMeter.dispatch('click', { preventDefault: () => {} });
+      assert.strictEqual(contextTip.hidden, false);
+    };
+
+    openTip();
+    for (const fn of docListeners.keydown ?? []) {
+      fn({
+        key: 'Escape', target: new StubNode('div'),
+        preventDefault: () => {}, stopPropagation: () => {},
+      });
+    }
+    assert.strictEqual(contextTip.hidden, true, 'Escape closes it');
+    assert.strictEqual(contextMeter.getAttribute('aria-expanded'), 'false');
+
+    openTip();
+    for (const fn of docListeners.click ?? []) { fn({ target: new StubNode('div') }); }
+    assert.strictEqual(contextTip.hidden, true, 'a click outside closes it');
+
+    openTip();
+    NS.composer.setFocus(session('s-2'), { availableCommands: [], configOptions: [], usage: null });
+    assert.strictEqual(contextTip.hidden, true, 'a session without usage clears the tip');
+    assert.strictEqual(contextTip.textContent, '', 'and drops the previous session\'s numbers');
+  });
+
+  test('compact waits for the running turn; both actions post the right messages', () => {
+    const { NS, contextMeter, contextTip, sent } = composerBar();
+    NS.composer.setFocus(session('s-1'), { availableCommands: [], configOptions: [], usage: tipUsage() });
+    NS.composer.setRunning(true);
+    contextMeter.dispatch('click', { preventDefault: () => {} });
+    assert.strictEqual(contextTip.querySelector('.context-tip-compact')!.disabled, true,
+      'the host rejects a second prompt while a turn runs');
+
+    NS.composer.setRunning(false);
+    const compact = contextTip.querySelector('.context-tip-compact')!;
+    assert.strictEqual(compact.disabled, false);
+    contextTip.dispatch('click', { target: compact });
+    assert.deepStrictEqual(sent.filter(m => m.type === 'sendPrompt'),
+      [{ type: 'sendPrompt', sessionId: 's-1', text: '/compact' }]);
+    assert.strictEqual(contextTip.hidden, true, 'the panel closes after asking');
+
+    contextMeter.dispatch('click', { preventDefault: () => {} });
+    const dashboard = contextTip.querySelector('.context-tip-dashboard')!;
+    contextTip.dispatch('click', { target: dashboard });
+    assert.ok(sent.some(m => m.type === 'openDashboard'), 'the dashboard link is a host message');
   });
 
   test('empty text sends only when an attachment is present', () => {
@@ -4012,6 +4226,49 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
     const items = slashPopup.querySelectorAll('.slash-item');
     assert.strictEqual(items.length, 1, 'the command list opens');
     assert.match(items[0].textContent, /compact/);
+  });
+
+  // [CUSTOM- 斜杠面板只看第一行（2026-11-12 用户报）。
+  // 以前它拿整段 value 判"有没有空格"：多行草稿里下面随便哪一行有空格，第一行行首的 '/'
+  // 就永远弹不出面板；而面板真弹出来时，acceptSlash 又会整段覆盖、把下面几行一起丢掉。
+  test('a slash on the first line of a multi-line draft opens the panel and keeps the rest', () => {
+    const { NS, input, slashPopup } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+    NS.composer.setDraftOptions({ draftId: 'd1', ...snapshot() });
+
+    input.value = '/\nsecond line with spaces';
+    input.selectionStart = 1;
+    input.dispatch('input', { target: input });
+    assert.strictEqual(slashPopup.hidden, false, 'the second line must not hide the panel');
+    const item = slashPopup.querySelector('.slash-item')!;
+    assert.match(item.textContent, /compact/);
+
+    item.dispatch('click', { preventDefault: () => {} });
+    assert.strictEqual(input.value, '/compact \nsecond line with spaces',
+      'only the first line is replaced');
+  });
+
+  test('the slash panel stays shut when the caret is on a later line', () => {
+    const { NS, input, slashPopup } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+    NS.composer.setDraftOptions({ draftId: 'd1', ...snapshot() });
+
+    input.value = '/compact\nsecond';
+    input.selectionStart = 10;
+    input.dispatch('input', { target: input });
+    assert.strictEqual(slashPopup.hidden, true);
+  });
+
+  test('typing / at the very start shows every command even if text follows it', () => {
+    const { NS, input, slashPopup } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+    NS.composer.setDraftOptions({ draftId: 'd1', ...snapshot() });
+
+    input.value = '/old line with spaces';
+    input.selectionStart = 1;
+    input.dispatch('input', { target: input });
+    assert.strictEqual(slashPopup.hidden, false, 'the caret right after / means "show the list"');
+    assert.match(slashPopup.textContent, /compact/);
   });
 
   // [CUSTOM- 2026-10-28 用户要求：命令面板打开后，点空白区域要收起（此前只有输入框里按 Esc 能关）。
@@ -7985,7 +8242,7 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
       label: string; disabled?: boolean; run: (event?: unknown) => void;
     }>;
     assert.strictEqual(labels(items),
-      'Rename / Mark as unread / New Session in This Folder / Duplicate / '
+      'Rename / Mark as unread / New Session to the Right / New Session in This Folder / Duplicate / '
       + 'Copy working directory / Copy Session ID / Close');
 
     // 0 Rename：先出面板内输入浮层，提交时才发消息。
@@ -8002,17 +8259,35 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     items[1].run();
     assert.deepStrictEqual(posted[1], { type: 'markUnread', sessionId: 's1' },
       'Mark as unread 只报给宿主，不自己改本地状态');
+
+    // [CUSTOM- 2026-11-12：两个 "New Session" 都变成**本地草稿**，插在被右键的 tab 右边，
+    // 不再直接让宿主建会话（发出首条消息才创建）。
+    const started: Array<string | undefined> = [];
+    const placed: Array<[string, string]> = [];
+    NS.draft = {
+      start: (cwd?: string) => {
+        started.push(cwd);
+        return { draftId: 'd9', cwd: cwd || null };
+      },
+    };
+    NS.tabs.placeDraftAfter = (draftId: string, anchorId: string) => { placed.push([draftId, anchorId]); };
+    const before = posted.length;
     items[2].run();
-    assert.deepStrictEqual(posted[2], { type: 'newSessionInDirectory', sessionId: 's1' },
-      '新会话沿用这个 tab 的目录（目录由宿主从源会话取）');
+    assert.deepStrictEqual(started, [undefined], 'New Session to the Right 使用默认目录');
+    assert.deepStrictEqual(placed, [['d9', 's1']], '草稿插在这个 tab 右边');
+    assert.strictEqual(posted.length, before, '不经过宿主、不建会话');
     items[3].run();
-    assert.deepStrictEqual(posted[3], { type: 'duplicateSession', sessionId: 's1' },
-      '复制会话走 session/fork（保留上下文与消息记录）');
+    assert.deepStrictEqual(started, [undefined, '/work/alpha'], 'New Session in This Folder 只预填目录');
+    assert.strictEqual(posted.length, before, '同样只开草稿，不建会话');
+
     items[4].run();
-    assert.deepStrictEqual(posted[4], { type: 'copy', text: '/work/alpha' },
-      'Copy working directory 拷的是 data-cwd');
+    assert.deepStrictEqual(posted[before], { type: 'duplicateSession', sessionId: 's1' },
+      '复制会话走 session/fork（保留上下文与消息记录）');
     items[5].run();
-    assert.deepStrictEqual(posted[5], { type: 'copy', text: 's1' },
+    assert.deepStrictEqual(posted[before + 1], { type: 'copy', text: '/work/alpha' },
+      'Copy working directory 拷的是 data-cwd');
+    items[6].run();
+    assert.deepStrictEqual(posted[before + 2], { type: 'copy', text: 's1' },
       '复制的是数据上的 sessionId，不是标签文字');
 
     // 已经是未读 ⇒ Mark as unread 置灰；没有 cwd ⇒ Copy working directory 置灰。

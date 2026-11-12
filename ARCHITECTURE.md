@@ -96,7 +96,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/handlers/ElicitationBridge.ts` | 表单请求（AskUserQuestion）的唯一出口，与权限桥同构；`submit` 校验 expected session；`fieldsOf()` 把 JSON Schema 扁平化成五种字段，`optionOf()` 保留选项的 description 与 preview；结算时写回 `summary` + **结构化的 `answers`**（回执卡据此标出所选） | 表单行为 / schema 形状 |
 | `src/handlers/ElicitationHandler.ts` | 表单策略层 + 逐字段弹框兜底 | 弹框兜底行为 |
 | `src/handlers/SessionUpdateHandler.ts` | `session/update` 通知扇出（单订阅者异常隔离） | 流式更新丢事件 |
-| `src/ui/chat/` | Chat 面板子系统（host/surface/transcript + webview）；`markdown.ts` / `content/readHighlight.ts` 管安全渲染与 Read 文件语言推断（后者纯逻辑）；`agentmap/AgentMapStore.ts` 是子 agent 注册表（纯逻辑，禁 import vscode）；webview 右栏 Details 由 `html/client/detailPane.ts` 驱动（§5.58） | 聊天 UI / 渲染 / Agent map / 右栏 Details |
+| `src/ui/chat/` | Chat 面板子系统（host/surface/transcript + webview）；`markdown.ts` / `content/readHighlight.ts` 管安全渲染与 Read 文件语言推断（后者纯逻辑）；`agentmap/AgentMapStore.ts` 是子 agent 注册表（纯逻辑，禁 import vscode）；`usage/ContextStats.ts` 是上下文圆环 / Tip 的统计（纯逻辑，禁 import vscode，见 `arch/chat-panel-input.md` §5.59）；webview 右栏 Details 由 `html/client/detailPane.ts` 驱动（§5.58） | 聊天 UI / 渲染 / Agent map / 上下文用量 / 右栏 Details |
 | `src/ui/chat/shortcuts.ts` | Chat 快捷键默认值、物理键规范化、旧值修复与重复绑定校验；纯逻辑 | 改快捷键格式 / 默认值 / 冲突规则 |
 | `src/ui/chat/ChatPanelHost.ts` | 面板核心（**本仓库最大的文件，用 grep 定位、勿整读**）：记录、协议、标签、权限/表单呈现 | 面板行为 |
 | `src/ui/chat/ChatViewProvider.ts` | 侧边栏 `vac-chat`、编辑区主面板与单面板多标签 Side 的装配/销毁及主双面焦点同步（视图上唯一的消息监听器） | 视图注册 / surface 归属 |
@@ -178,6 +178,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 会话恢复快照 | `globalState`（`ChatPanelHost.saveOpenSessions`） | —— | key `vac.openSessions.v1`；每条 `RecoverableSession` 可带 `app`（写入时的 IDE 标签），与当前环境相同的会在下发前剥掉，只用于标注 |
 | 模型切换诊断 | `SessionManager.noteModelChange` | —— | `model <旧> -> <新> (<source>)`，source = `session-response` / `set-response` / `notification`；只在值真的变化时写 |
 | 用量索引 | `globalStorageUri` 下 `usage-index.json` | —— | 原子写（临时文件 + rename），损坏则重建 |
+| 上下文用量（圆环 / Tip） | 宿主内存 `ChatPanelHost.contextStats` → `meta.usage` → webview | —— | **`used` 只由 `usage_update` 写**；`PromptResponse.usage` 是**本轮**累计（适配器轮次激活时重置），直接记成 `lastTurn`（本轮构成），并给 `history` 追加一个每轮采样点，绝不回写 `used`。`usage.parts`（最近一次调用的 input/output/cache 拆分）来自适配器 `_meta["_claude/usage"]`，圆环据此画「提示 / 输出」双色，缺失退回单色；`rateLimits` 取 `_meta["_claude/rateLimit"]` 每种 type 的最新一份；`subagentCostUsd` 来自 `AgentMapStore.totalCostUsd`；重启 / 重开历史后从 0 重新观察 |
 | agent API key | `SecretStorage`（`auth.ts`） | —— | key `vac.apiKey.<agent 名>`；登出（`vac.logoutAgent`）或被拒时删除；**绝不进 settings.json / 日志** |
 | 迁移提示“不再询问” | `globalState` | —— | key `vac.agentMigrationDismissed.v1` |
 

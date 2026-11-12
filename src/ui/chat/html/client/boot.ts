@@ -1291,6 +1291,8 @@ export const bootClient = `
     if (NS.shortcuts) { NS.shortcuts.init(); }
     // [CUSTOM- Agent map：底栏徽标 + 面板（按需渲染，init 只绑事件）。
     if (NS.agentMap) { NS.agentMap.init(); }
+    // [CUSTOM- 上下文用量 Tip：点圆环弹出（按需渲染，init 只绑事件）。
+    if (NS.contextTip) { NS.contextTip.init(); }
     // [CUSTOM- 2026-10-29：document 级 Escape 放在 init 末尾。浮层（popover/outline/
     // contextMenu/sessionMenu/settingsPanel/elicitation/lightbox）都在 capture 阶段或
     // 用 preventDefault 先消费；composer 只处理"没人消费的 Escape"。

@@ -161,8 +161,12 @@ export function styles(): string {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    /* [CUSTOM- 不参与收缩：tab 多了要让 .tabs 横向滚动，而不是把每个标签挤成省略号。 */
-    flex: 0 0 auto;
+    /* [CUSTOM- 2026-11-12 用户要求：tab 多了**压缩宽度**（浏览器式），而不是立刻出
+       横向滚动条。flex-grow 让少量 tab 均分条带（上限 200px），flex-shrink 让多量 tab
+       一起缩；min-width: 0 是收缩生效的前提（默认 min-width:auto 会卡在内容宽度）。
+       真正的下限由 dot / close 的 flex:0 0 auto 决定；再放不下走 .tabs.compact。 */
+    flex: 1 1 auto;
+    min-width: 0;
     max-width: 200px;
     padding: 4px 6px;
     border: 1px solid transparent;
@@ -197,7 +201,7 @@ export function styles(): string {
     font-weight: 600;
     opacity: 1;
   }
-  .tab-label { overflow: hidden; text-overflow: ellipsis; }
+  .tab-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   /* [CUSTOM- 圆点有**两个独立的信号**（用户指定）：
        · 背景色说"这个会话处在什么状态"；
        · 外面的圈说"它正在做事"。
@@ -307,8 +311,15 @@ export function styles(): string {
   .tab-close {
     border: none; background: transparent; color: inherit; cursor: pointer;
     padding: 0 2px; line-height: 1; opacity: 0.6; font-size: 11px;
+    flex: 0 0 auto;
   }
   .tab-close:hover { opacity: 1; color: var(--vscode-errorForeground); }
+  /* [CUSTOM- 页签密度（2026-11-12）：压缩到标签文字全是省略号仍放不下时，
+     先隐藏文字（只留目录徽标 + 关闭），再放不下连关闭也藏掉；仍然溢出才退回横向滚动。
+     由 tabs.ts 的 updateDensity 按 scrollWidth 实测切换，类是挂在容器 .tabs 上的。 */
+  .tabs.compact .tab { padding: 4px 4px; gap: 4px; justify-content: center; }
+  .tabs.compact .tab-label { display: none; }
+  .tabs.compact.tight .tab-close { display: none; }
   .tab-new {
     flex: 0 0 auto; margin-left: 4px; padding: 2px 8px; cursor: pointer;
     background: transparent; color: var(--vscode-foreground);
@@ -2988,14 +2999,25 @@ export function styles(): string {
     position: relative; flex: 0 0 auto;
     display: inline-flex; align-items: center; justify-content: center;
     width: 24px; height: 24px;
-    color: var(--vscode-descriptionForeground); cursor: default;
+    /* 2026-11-12 起它是 <button>（点开 Tip）：清掉按钮默认外观，只留圆环。 */
+    background: transparent; border: 0; padding: 0; font-family: inherit;
+    color: var(--vscode-descriptionForeground); cursor: pointer;
   }
+  .context-meter:hover { color: var(--vscode-foreground); }
   .context-meter svg { display: block; }
   .gauge-track { fill: none; stroke: var(--vscode-panel-border); stroke-width: 2.5; }
   .gauge-fill {
     fill: none; stroke: var(--vscode-progressBar-background); stroke-width: 2.5;
     stroke-linecap: round;
     /* 起点从 3 点方向挪到 12 点方向，否则进度看起来是"从右边开始长"的。 */
+    transform: rotate(-90deg); transform-origin: 50% 50%;
+  }
+  /* [CUSTOM- 圆环的第二段：最近一次生成的输出 token。固定绿色，不参与 warn/hot
+     阈值换色 —— 阈值语义属于"整体占用"，由提示段继续承担；输出段只是构成拆分。
+     butt 端点：与提示段的 round 端点相接时不叠出一个鼓包。 */
+  .gauge-output {
+    fill: none; stroke: var(--vscode-charts-green, #89d185); stroke-width: 2.5;
+    stroke-linecap: butt;
     transform: rotate(-90deg); transform-origin: 50% 50%;
   }
   .context-meter.warn .gauge-fill { stroke: var(--vscode-charts-yellow); }
@@ -3020,6 +3042,107 @@ export function styles(): string {
   }
   .context-meter.running .gauge-spin { opacity: .9; animation: gauge-spin 1.5s linear infinite; }
   @keyframes gauge-spin { to { transform: rotate(360deg); } }
+
+  /* --- 上下文用量 Tip（2026-11-12）----------------------------------------
+     点圆环弹出；位置与 #agentMapPanel / #slashPopup 同一家族（贴输入卡上方），
+     但它是右对齐的窄面板。内容全部由 contextTip.ts 生成。 */
+  .context-tip {
+    position: absolute; bottom: 100%; right: 0; z-index: 32;
+    width: 336px; max-width: calc(100% - 8px);
+    max-height: min(70vh, 540px); overflow-y: auto;
+    margin-bottom: 4px; padding: 10px 12px 10px;
+    background: var(--vscode-editorSuggestWidget-background, var(--vscode-dropdown-background));
+    border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-dropdown-border));
+    border-radius: 6px; box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0,0,0,0.3));
+    font-size: 0.92em;
+  }
+  .context-tip-head { display: flex; align-items: center; gap: 10px; }
+  .context-tip-ring { position: relative; width: 54px; height: 54px; flex: 0 0 auto; }
+  .context-tip-ring.warn .gauge-fill { stroke: var(--vscode-charts-yellow); }
+  .context-tip-ring.hot .gauge-fill { stroke: var(--vscode-charts-red); }
+  .context-tip-ring-text {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-variant-numeric: tabular-nums; pointer-events: none;
+  }
+  .context-tip-head-main { flex: 1 1 auto; min-width: 0; }
+  .context-tip-title-row { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .context-tip-title { font-weight: 600; }
+  .context-tip-model {
+    color: var(--vscode-descriptionForeground); font-size: 0.85em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .context-tip-line { font-size: 0.92em; font-variant-numeric: tabular-nums; }
+  .context-tip-line.dim { color: var(--vscode-descriptionForeground); font-size: 0.86em; }
+  .context-tip-close {
+    flex: 0 0 auto; align-self: flex-start;
+    background: transparent; color: var(--vscode-descriptionForeground);
+    border: 0; cursor: pointer; font-size: 1.1em; line-height: 1; padding: 0 2px;
+  }
+  .context-tip-close:hover { color: var(--vscode-foreground); }
+  .context-tip-section {
+    margin-top: 8px; padding-top: 6px;
+    border-top: 1px solid var(--vscode-panel-border);
+  }
+  .context-tip-section-title {
+    display: flex; justify-content: space-between; gap: 8px;
+    color: var(--vscode-descriptionForeground); font-size: 0.82em;
+    text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px;
+  }
+  .context-tip-curve { display: block; width: 100%; }
+  .context-tip-guide { stroke: var(--vscode-panel-border); stroke-dasharray: 3 3; stroke-width: 1; }
+  .context-tip-guide-text { fill: var(--vscode-descriptionForeground); font-size: 8px; }
+  .context-tip-empty-text { fill: var(--vscode-descriptionForeground); font-size: 10px; }
+  .context-tip-line-path {
+    fill: none; stroke: var(--vscode-progressBar-background, var(--vscode-charts-blue));
+    stroke-width: 1.5;
+  }
+  .context-tip-area { fill: var(--vscode-progressBar-background, var(--vscode-charts-blue)); opacity: .14; }
+  .context-tip-dot { fill: var(--vscode-progressBar-background, var(--vscode-charts-blue)); }
+  .context-tip-compact-line {
+    stroke: var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground));
+    stroke-dasharray: 2 2; stroke-width: 1;
+  }
+  .context-tip-compact-mark { fill: var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground)); }
+  .context-tip-bar {
+    display: flex; height: 10px; border-radius: 3px; overflow: hidden;
+    background: var(--vscode-panel-border);
+  }
+  .context-tip-bar-part { display: block; height: 100%; }
+  .part-cache-read { background: var(--vscode-charts-blue, #3794ff); }
+  .part-cache-write { background: var(--vscode-charts-purple, #b180d7); }
+  .part-input { background: var(--vscode-charts-green, #89d185); }
+  .part-output { background: var(--vscode-charts-orange, #d18616); }
+  .context-tip-legend {
+    display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px;
+    font-size: 0.82em; color: var(--vscode-descriptionForeground);
+  }
+  .context-tip-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+  .context-tip-swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: 0 0 auto; }
+  .context-tip-cost-row { display: flex; gap: 18px; }
+  .context-tip-cost-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .context-tip-cost-label { color: var(--vscode-descriptionForeground); font-size: 0.8em; }
+  .context-tip-limit { margin-bottom: 6px; }
+  .context-tip-limit:last-child { margin-bottom: 0; }
+  .context-tip-limit-head { display: flex; justify-content: space-between; font-size: 0.88em; }
+  .context-tip-limit-pct { color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+  .context-tip-limit-track {
+    height: 6px; border-radius: 3px; margin-top: 2px;
+    background: var(--vscode-panel-border); overflow: hidden;
+  }
+  .context-tip-limit-fill {
+    height: 100%; background: var(--vscode-progressBar-background, var(--vscode-charts-blue));
+  }
+  .context-tip-limit-fill.warn { background: var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground)); }
+  .context-tip-limit-fill.hot { background: var(--vscode-charts-red, #f14c4c); }
+  .context-tip-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .context-tip-action {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 0; border-radius: 3px; padding: 3px 10px;
+    cursor: pointer; font-family: inherit; font-size: 0.86em;
+  }
+  .context-tip-action:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground); }
+  .context-tip-action:disabled { opacity: .5; cursor: default; }
 
   .attachment-thumb { height: 20px; width: 20px; object-fit: cover; border-radius: 2px; flex: 0 0 auto; cursor: zoom-in; }
 

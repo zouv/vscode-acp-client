@@ -148,12 +148,32 @@ export const contextMenuClient = `
               NS.bridge.postForSession({ type: 'markUnread', sessionId: tab.getAttribute('data-session-id') });
             }
           });
-          // [CUSTOM- 会话 tab 右键：在这个会话的目录里再开一个新会话（目录与额外根目录
-          // 都由宿主从源会话取，客户端不猜）。会话作用域 ⇒ 走 postForSession（守卫按 sessionId 校验）。
+          // [CUSTOM- 2026-11-12 用户要求：在**当前 tab 右侧**开一个 New Session，
+          // 使用默认目录。草稿是客户端本地的页签，不经过宿主建会话。
+          tabItems.push({
+            label: 'New Session to the Right',
+            run: function () {
+              if (!NS.draft || !NS.draft.start) { return; }
+              var draft = NS.draft.start();
+              var anchor = tab.getAttribute('data-session-id');
+              if (draft && anchor && NS.tabs && NS.tabs.placeDraftAfter) {
+                NS.tabs.placeDraftAfter(draft.draftId, anchor);
+              }
+            }
+          });
+          // [CUSTOM- 会话 tab 右键：在这个会话的目录里开一个 New Session。
+          // 2026-11-12 起它**不再直接建会话**：只创建一个预填该目录的草稿（New Session 的
+          // 初始状态），用户发出首条消息时才真正创建 —— 与 "+" 创建的路径完全一致。
           tabItems.push({
             label: 'New Session in This Folder',
             run: function () {
-              NS.bridge.postForSession({ type: 'newSessionInDirectory', sessionId: tab.getAttribute('data-session-id') });
+              if (!NS.draft || !NS.draft.start) { return; }
+              var cwd = tab.getAttribute('data-cwd') || undefined;
+              var draft = NS.draft.start(cwd);
+              var anchor = tab.getAttribute('data-session-id');
+              if (draft && anchor && NS.tabs && NS.tabs.placeDraftAfter) {
+                NS.tabs.placeDraftAfter(draft.draftId, anchor);
+              }
             }
           });
           // [CUSTOM- 复制会话 = 在末尾 fork（不带 messageId），新会话继承源会话的上下文与消息记录。
