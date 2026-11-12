@@ -6,6 +6,9 @@ out/
 .vscode-test/
 .DS_Store
 release/
+# 共享技能目录也叫 release，必须保留入库
+!.claude/skills/release/
+!.claude/skills/release/SKILL.md
 .claude/explore-results/
 
 
