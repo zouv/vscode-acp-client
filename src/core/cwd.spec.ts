@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { pickDefaultCwd } from './cwd';
+import { pickDefaultCwd, preferredWorkspaceFolder } from './cwd';
 
 const dirs = (existing: string[]) => (candidate: string) => existing.includes(candidate);
 
@@ -10,9 +10,7 @@ describe('pickDefaultCwd', () => {
       cwd: '/chosen',
       reason: 'configured',
     });
-  });
-
-  it('falls back to the workspace folder when nothing is configured', () => {
+  });  it('falls back to the workspace folder when nothing is configured', () => {
     expect(pickDefaultCwd('', '/workspace', '/proc', dirs([]))).toEqual({ cwd: '/workspace', reason: 'workspace' });
   });
 
@@ -41,5 +39,20 @@ describe('pickDefaultCwd', () => {
       cwd: '/chosen',
       reason: 'configured',
     });
+  });
+});
+
+describe('preferredWorkspaceFolder (multi-root)', () => {
+  it('uses the active editor folder first', () => {
+    expect(preferredWorkspaceFolder('/b', '/a', ['/a', '/b'])).toBe('/b');
+  });
+
+  it('falls back to the last text editor folder when the active editor is not a text editor', () => {
+    expect(preferredWorkspaceFolder(undefined, '/b', ['/a', '/b'])).toBe('/b');
+  });
+
+  it('falls back to the first workspace folder when no editor folder is known', () => {
+    expect(preferredWorkspaceFolder(undefined, undefined, ['/a', '/b'])).toBe('/a');
+    expect(preferredWorkspaceFolder(undefined, undefined, [])).toBeUndefined();
   });
 });

@@ -654,13 +654,15 @@ export const settingsPanelClient = `
     return wrap;
   }
 
-  /** 自定义模型列表的一行：拖拽手柄 / id / 显示名 / 描述 / 上移下移 / 删除。 */
-  function modelRow(key, list, model) {
+  /** 自定义模型列表的一行：拖拽手柄 / id / 显示名 / 描述 / 删除。 */
+  function modelRow(model) {
     var row = NS.dom.el('div', 'settings-model-row');
     var drag = NS.dom.el('span', 'settings-model-drag', '\\u2807');
-    drag.title = 'Drag to reorder';
+    drag.title = 'Drag to reorder (or focus and press arrow up / down)';
     drag.setAttribute('draggable', 'true');
-    drag.setAttribute('aria-hidden', 'true');
+    drag.setAttribute('tabindex', '0');
+    drag.setAttribute('role', 'button');
+    drag.setAttribute('aria-label', 'Reorder model');
     drag.addEventListener('dragstart', function (event) {
       modelDragRow = row;
       row.className += ' dragging';
@@ -674,6 +676,15 @@ export const settingsPanelClient = `
       removeModelClass(row, 'dragging');
       clearModelDropIndicator();
     });
+    // [CUSTOM- 2026-11-13] 右侧的上移/下移按钮去掉（拖拽已覆盖鼠标路径），
+    // 键盘与无障碍改由手柄的 ↑/↓ 承担。
+    drag.addEventListener('keydown', function (event) {
+      var key = event && event.key;
+      var delta = key === 'ArrowUp' ? -1 : (key === 'ArrowDown' ? 1 : 0);
+      if (!delta) { return; }
+      if (event.preventDefault) { event.preventDefault(); }
+      moveModelRow(row, delta);
+    });
     var id = NS.dom.el('input', 'settings-text-input settings-model-id');
     id.type = 'text';
     id.placeholder = 'model id';
@@ -686,28 +697,10 @@ export const settingsPanelClient = `
     desc.type = 'text';
     desc.placeholder = 'description (optional)';
     desc.value = model && model.description ? String(model.description) : '';
-    var move = NS.dom.el('div', 'settings-model-move');
-    var up = NS.dom.el('button', 'settings-model-move-btn settings-model-up', '\\u2191');
-    up.type = 'button';
-    up.title = 'Move up';
-    up.setAttribute('aria-label', 'Move model up');
-    up.addEventListener('click', function (event) {
-      moveModelRow(row, -1, event && event.currentTarget ? event.currentTarget : up);
-    });
-    var down = NS.dom.el('button', 'settings-model-move-btn settings-model-down', '\\u2193');
-    down.type = 'button';
-    down.title = 'Move down';
-    down.setAttribute('aria-label', 'Move model down');
-    down.addEventListener('click', function (event) {
-      moveModelRow(row, 1, event && event.currentTarget ? event.currentTarget : down);
-    });
-    move.appendChild(up);
-    move.appendChild(down);
     var remove = NS.dom.el('button', 'settings-model-remove', '\\u00d7');
     remove.type = 'button';
     remove.title = 'Remove';
     var changed = function () {
-      syncModelMoveButtons(list);
       queueModelCommit(false);
     };
     id.addEventListener('change', changed);
@@ -721,7 +714,6 @@ export const settingsPanelClient = `
     row.appendChild(id);
     row.appendChild(name);
     row.appendChild(desc);
-    row.appendChild(move);
     row.appendChild(remove);
     return row;
   }
@@ -770,16 +762,7 @@ export const settingsPanelClient = `
     return String(Date.now()) + '-' + Math.random().toString(36).slice(2) + '-' + modelRequestSeq;
   }
 
-  function syncModelMoveButtons(list) {
-    var rows = list.querySelectorAll ? list.querySelectorAll('.settings-model-row') : [];
-    for (var i = 0; i < rows.length; i++) {
-      var buttons = rows[i].querySelectorAll ? rows[i].querySelectorAll('.settings-model-move button') : [];
-      if (buttons[0]) { buttons[0].disabled = i === 0; }
-      if (buttons[1]) { buttons[1].disabled = i === rows.length - 1; }
-    }
-  }
-
-  function moveModelRow(row, delta, button) {
+  function moveModelRow(row, delta) {
     if (!modelCommit || !modelCommit.list) { return; }
     var list = modelCommit.list;
     var rows = list.querySelectorAll ? list.querySelectorAll('.settings-model-row') : [];
@@ -793,21 +776,8 @@ export const settingsPanelClient = `
     } else {
       list.insertBefore(row, reference.nextSibling || null);
     }
-    syncModelMoveButtons(list);
     announceModelMove(row);
     queueModelCommit(false);
-    if (button) {
-      // 移到边界后刚点的按钮会变成 disabled；焦点必须转到同一行仍可用的按钮，
-      // 否则键盘用户会掉到 body 上。
-      var focusTarget = button;
-      if (button.disabled) {
-        var buttons = row.querySelectorAll ? row.querySelectorAll('.settings-model-move button') : [];
-        for (var b = 0; b < buttons.length; b++) {
-          if (!buttons[b].disabled) { focusTarget = buttons[b]; break; }
-        }
-      }
-      if (focusTarget && focusTarget.focus) { focusTarget.focus(); }
-    }
   }
 
   function modelAnnounceName(row) {
@@ -817,7 +787,7 @@ export const settingsPanelClient = `
     return alias || id || 'New model';
   }
 
-  /** 拖拽/按钮排序后的屏幕阅读器播报：具体模型 + 所在序号。 */
+  /** 拖拽/键盘排序后的屏幕阅读器播报：具体模型 + 所在序号。 */
   function announceModelMove(row) {
     var m = modelCommit;
     if (!m || !m.announceEl || !m.list) { return; }
@@ -894,7 +864,6 @@ export const settingsPanelClient = `
       clearModelDropIndicator();
       modelDragRow = null;
       removeModelClass(row, 'dragging');
-      syncModelMoveButtons(list);
       if (oldIndex !== newIndex) {
         announceModelMove(row);
         queueModelCommit(false);
@@ -1007,8 +976,7 @@ export const settingsPanelClient = `
     m.error = null;
     m.pending = null;
     NS.dom.clear(m.list);
-    for (var i = 0; i < models.length; i++) { m.list.appendChild(modelRow(m.key, m.list, models[i])); }
-    syncModelMoveButtons(m.list);
+    for (var i = 0; i < models.length; i++) { m.list.appendChild(modelRow(models[i])); }
     setModelStatus('', '');
     maybeCloseEditor();
   }
@@ -1104,23 +1072,21 @@ export const settingsPanelClient = `
     if (item.type === 'models') {
       // [CUSTOM- 表头 + 右对齐的动作（2026-10-21 排版调整）。
       editor.appendChild(NS.dom.el('div', 'settings-editor-intro',
-        'Model id is sent to the agent; Alias is the label in the picker; Description is its subtitle and tooltip. The agent must support extra models, and new entries become available in newly created or restored sessions. Drag the handle or use the arrow buttons to set the picker order.'));
+        'Model id is sent to the agent; Alias is the label in the picker; Description is its subtitle and tooltip. The agent must support extra models, and new entries become available in newly created or restored sessions. Drag the handle to set the picker order (keyboard: focus it and press arrow up / down).'));
       var head = NS.dom.el('div', 'settings-model-head');
       head.appendChild(NS.dom.el('span', '', ''));
       head.appendChild(NS.dom.el('span', '', 'Model id'));
       head.appendChild(NS.dom.el('span', '', 'Alias'));
       head.appendChild(NS.dom.el('span', '', 'Description'));
-      head.appendChild(NS.dom.el('span', '', 'Order'));
       head.appendChild(NS.dom.el('span', '', ''));
       editor.appendChild(head);
 
       var list = NS.dom.el('div', 'settings-models');
       var rows = Object.prototype.toString.call(item.value) === '[object Array]' ? item.value : [];
       for (var m = 0; m < rows.length; m++) {
-        list.appendChild(modelRow(item.key, list, rows[m]));
+        list.appendChild(modelRow(rows[m]));
       }
       editor.appendChild(list);
-      syncModelMoveButtons(list);
       installModelDrag(list);
 
       var statusEl = NS.dom.el('div', 'settings-model-status');
@@ -1157,9 +1123,8 @@ export const settingsPanelClient = `
       add.type = 'button';
       add.addEventListener('click', function () {
         // 空行只存在于本地：一提交就会被宿主的 normalize 丢掉（那不是"新增失败"）。
-        var row = modelRow(item.key, list, { modelId: '', name: '', description: '' });
+        var row = modelRow({ modelId: '', name: '', description: '' });
         list.appendChild(row);
-        syncModelMoveButtons(list);
         var first = row.querySelector ? row.querySelector('input') : null;
         if (first && first.focus) { first.focus(); }
       });

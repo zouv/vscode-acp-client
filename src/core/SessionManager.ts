@@ -24,7 +24,7 @@ import { AgentConnector, SESSION_CLOSE_TIMEOUT_MS, SESSION_LOAD_TIMEOUT_MS } fro
 import type { AgentManager } from './AgentManager';
 import { forgetApiKey, isAuthRequiredError, runAuthFlow } from './auth';
 import type { ConnectionInfo, ConnectionManager } from './ConnectionManager';
-import { pickDefaultCwd } from './cwd';
+import { pickDefaultCwd, preferredWorkspaceFolder } from './cwd';
 import type { SessionHistoryStore } from './SessionHistoryStore';
 import { PendingSessionState, SessionStore } from './SessionStore';
 import type {
@@ -86,6 +86,14 @@ export class SessionManager extends EventEmitter {
   private historyStore: SessionHistoryStore | null = null;
   private permissionBridge: PermissionBridge | null = null;
   private elicitationBridge: ElicitationBridge | null = null;
+  /**
+   * [CUSTOM- 2026-11-13] Last workspace folder of a text editor the user was in.
+   * `window.activeTextEditor` is undefined while a webview editor (the chat panel
+   * in the editor area) has focus, so the default cwd would otherwise snap back
+   * to the first root. See `preferredWorkspaceFolder`.
+   */
+  private lastEditorFolder: string | undefined;
+  private activeEditorListener: vscode.Disposable | undefined;
 
   constructor(
     private readonly agentManager: AgentManager,
@@ -94,6 +102,10 @@ export class SessionManager extends EventEmitter {
     private readonly recoveryOptions: RecoveryOptions = {},
   ) {
     super();
+    this.noteActiveEditor(vscode.window.activeTextEditor?.document.uri);
+    this.activeEditorListener = vscode.window.onDidChangeActiveTextEditor(
+      editor => this.noteActiveEditor(editor?.document.uri),
+    );
     this.connector = new AgentConnector(agentManager, connectionManager, {
       resolveCwd: () => this.resolveDefaultCwd(),
       onConnected: agentName => this.emit('agent-connected', agentName),
@@ -152,11 +164,11 @@ export class SessionManager extends EventEmitter {
     return this.connector.capabilities(agentName);
   }
 
-  /** `vac.defaultWorkingDirectory`, else the first workspace folder, else `process.cwd()`. */
+  /** `vac.defaultWorkingDirectory`, else the active editor's workspace folder, else the first workspace folder, else `process.cwd()`. */
   resolveDefaultCwd(): string {
     const decision = pickDefaultCwd(
       vscode.workspace.getConfiguration('vac').get<string>('defaultWorkingDirectory'),
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+      preferredWorkspaceFolder(this.activeEditorFolder(), this.lastEditorFolder, this.workspaceFolderPaths()),
       process.cwd(),
       candidate => existsSync(candidate) && statSync(candidate).isDirectory(),
     );
@@ -164,6 +176,21 @@ export class SessionManager extends EventEmitter {
       log(`SessionManager: ignoring vac.defaultWorkingDirectory (${decision.ignoredConfigured})`);
     }
     return decision.cwd;
+  }
+
+  private workspaceFolderPaths(): string[] {
+    return (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath);
+  }
+
+  /** The workspace folder containing the active text editor, if any. */
+  private activeEditorFolder(): string | undefined {
+    const uri = vscode.window.activeTextEditor?.document.uri;
+    return uri ? vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath : undefined;
+  }
+
+  private noteActiveEditor(uri: vscode.Uri | undefined): void {
+    const folder = uri ? vscode.workspace.getWorkspaceFolder(uri) : undefined;
+    if (folder) { this.lastEditorFolder = folder.uri.fsPath; }
   }
 
   // --- Focus & bookkeeping -------------------------------------------------
@@ -379,7 +406,22 @@ export class SessionManager extends EventEmitter {
   async newConversation(agentName?: string): Promise<SessionInfo | null> {
     const target = agentName ?? this.getActiveAgentName();
     if (!target) { return null; }
-    return this.createSession(target, { focus: true });
+    // [CUSTOM- 2026-11-13] The draft page seeds other workspace roots itself;
+    // the command-palette path creates the session without a draft, so apply the
+    // same opt-in default here (vac.autoAddWorkspaceFolders, off by default).
+    const cwd = this.resolveDefaultCwd();
+    const additionalDirectories = this.autoWorkspaceFolders()
+      ? this.workspaceFolderPaths().filter(folder => folder !== cwd)
+      : [];
+    return this.createSession(target, {
+      focus: true,
+      cwd,
+      ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
+    });
+  }
+
+  private autoWorkspaceFolders(): boolean {
+    return vscode.workspace.getConfiguration('vac').get<boolean>('autoAddWorkspaceFolders', false) === true;
   }
 
   /** Closes one session; the agent process and sibling sessions stay alive. */
@@ -1051,6 +1093,8 @@ export class SessionManager extends EventEmitter {
   dispose(): void {
     if (this.disposed) { return; }
     this.disposed = true;
+    this.activeEditorListener?.dispose();
+    this.activeEditorListener = undefined;
     for (const recovery of this.recoveries.values()) { recovery.controller.abort(); }
     this.recoveries.clear();
     this.recoveryBudgets.clear();

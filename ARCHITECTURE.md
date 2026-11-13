@@ -50,6 +50,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 发消息 / 取消 / 轮次中补发 / 轮次状态 | `core/SessionManager.ts`(sendPrompt/cancelTurn/steerPrompt) + `handlers/SessionUpdateHandler.ts` | tree | §2.4 |
 | 聊天 UI（面板行为 / 记录 / 标签页 / 快捷键设置） | `src/ui/chat/**`（入口 `index.ts`；**先读 `arch/chat-panel.md` 顶部的分册导航表**，再按主题只读那一份分册；快捷键见 §2.5；Agent map 见 §5.57；右栏 Details 见 §5.58） | core、dashboard | §2.5 |
 | 编辑区面 / 主双面同步 / 焦点 | `ui/chat/ChatViewProvider.ts` + `ChatEditorPanel.ts` + `ChatSurface.ts` | Side、core 内部 | §2.5 |
+| Chat 面板灰屏 / webview 渲染进程崩溃后的自救 | `ui/chat/ChatViewProvider.ts`(reloadWebviews) + `ChatPanelHost.ts`(reloadSurfaces) + `commands.ts`(vac.reloadWebview) | agent 连接、会话状态 | §2.5 |
 | Side Chat 入口 / fork / 临时生命周期 / 来源标题 / Main-Side 工具栏偏好 | `ui/chat/SideChatPanel.ts` + `ChatPanelHost.ts`(openSide/canSurfaceAccess/projectUiPrefs/commitUiPrefs/postUiPrefs) + `core/SessionManager.ts`(forkSideSession/requestFork) + `html/client/{composer,contextMenu,boot,times,tail,autoExpand,outline}.ts` | 普通历史恢复、Dashboard、Core 会话存储 | §2.3、§2.5、§4；`arch/chat-panel.md` §5.7、`arch/chat-panel-state.md` §5.55、`arch/connection-lifecycle.md` |
 | 权限弹窗 / 表单（AskUserQuestion） | `handlers/PermissionBridge.ts`、`ElicitationBridge.ts` + 客户端 `html/client/{permissionView,permissionDrawer,elicitationView}.ts` | core 编排 | §2.6 |
 | 文件读写 / 终端 / 工具卡片数据 | `handlers/FileSystemHandler.ts`、`TerminalHandler.ts`、`utils/TailBuffer.ts` | 会话编排 | §2.6 |
@@ -81,7 +82,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/core/AgentConnector.ts` | agent 名 ↔ 进程 id；`ensure` 单飞 + AbortController、`cancel` 中止握手并拒绝晚到成功；`enqueue` 每连接控制面串行、执行前检查连接是否仍有效，每个任务有截止（`CONTROL_PLANE_TIMEOUT_MS` 60s / `SESSION_LOAD_TIMEOUT_MS` 300s / `SESSION_CLOSE_TIMEOUT_MS` 15s），超时调用方收到 `DeadlineExceededError`、队列前进，任务拿到的 `expired` 信号用于跳过晚到副作用 | 连接去重 / 取消 / RPC 排队 |
 | `src/core/SessionManager.ts` | 编排器：`connectToAgent`/`createSession`/`newConversation`/`closeSession`/`disconnectAgent`/`ensureConnected`/`sendPrompt`/`steerPrompt`/`cancelTurn`/`setMode`/`setModel`/`setConfigOption`/`listSessions`/`openExistingSession`/`loadSession`/`resumeSession`；`requestFork` 共用 ACP fork，`forkSession` 走普通重放，`forkSideSession` 只注册不聚焦/不写历史；`getMainLiveSessions` 与 `getSessionIdsForAgent` 默认排除 Side。**订阅 `SessionUpdateHandler`**，把 `available_commands_update` / `config_option_update` / `current_mode_update` 落成状态（`applyAvailableCommands`/`applyConfigOptions`/`applyCurrentMode`，会话未注册时进 `PendingSessionState`） | 会话状态机 / Side fork / 新事件 / 能力协商 |
 | `src/core/SessionStore.ts` | 会话索引与焦点；`add` 拒绝不同 agent/连接占用相同 sessionId；`focus` 拒绝 Side，`mostRecentLiveId` 跳过 Side；`PendingSessionState.remove/clear` 清早到缓冲。纯逻辑，禁 import vscode | 索引隔离 / 焦点后继规则 |
-| `src/core/cwd.ts` | `pickDefaultCwd`：每会话工作目录三级链（配置→工作区→进程），配置非法则拒绝并回退。**纯函数** | 默认目录策略 |
+| `src/core/cwd.ts` | `pickDefaultCwd`：每会话工作目录三级链（配置→工作区→进程），配置非法则拒绝并回退；`preferredWorkspaceFolder`：多根下优先活动编辑器的 workspace folder，其次最后编辑过的目录（编辑器区聊天面板激活时 `activeTextEditor` 为空），最后第一个根。**纯函数** | 默认目录策略 |
 | `src/core/auth.ts` / `authError.ts` | `-32000` 判定（`authError.isAuthRequiredError` 只认 code，不匹配消息文本；纯逻辑）+ 交互式认证流程（每连接单飞；过滤 `type:'terminal'`；`_meta['api-key']` 标记的方法由客户端提供 key，存 **SecretStorage**、下次静默重试）；`forgetApiKey` | 认证行为 |
 | `src/core/SessionHistoryStore.ts` | `workspaceState` 会话缓存：按 agent 分桶、容量上限（活跃会话豁免）、`reconcileFromAgent`、目录候选、touch 限频落盘；`additionalDirectories` 随行持久化（`upsertNew(..., dirs)` / `setAdditionalDirectories`），供历史重开时传给 `session/load` | 会话列表丢失 / 缓存策略 / 多根会话重开丢额外根 |
 | `src/core/AcpClientImpl.ts` | ACP Client 门面；携带 sourceAgentId，更新和 fs/terminal/权限/带 sessionId 的表单请求先验证归属再转发 | 客户端能力 / 跨连接隔离 |
@@ -99,7 +100,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `src/ui/chat/` | Chat 面板子系统（host/surface/transcript + webview）；`markdown.ts` / `content/readHighlight.ts` 管安全渲染与 Read 文件语言推断（后者纯逻辑）；`agentmap/AgentMapStore.ts` 是子 agent 注册表（纯逻辑，禁 import vscode）；`usage/ContextStats.ts` 是上下文圆环 / Tip 的统计（纯逻辑，禁 import vscode，见 `arch/chat-panel-usage.md` §5.59）；webview 右栏 Details 由 `html/client/detailPane.ts` 驱动（§5.58） | 聊天 UI / 渲染 / Agent map / 上下文用量 / 右栏 Details |
 | `src/ui/chat/shortcuts.ts` | Chat 快捷键默认值、物理键规范化、旧值修复与重复绑定校验；纯逻辑 | 改快捷键格式 / 默认值 / 冲突规则 |
 | `src/ui/chat/ChatPanelHost.ts` | 面板核心（**本仓库最大的文件，用 grep 定位、勿整读**）：记录、协议、标签、权限/表单呈现 | 面板行为 |
-| `src/ui/chat/ChatViewProvider.ts` | 侧边栏 `vac-chat`、编辑区主面板与单面板多标签 Side 的装配/销毁及主双面焦点同步（视图上唯一的消息监听器） | 视图注册 / surface 归属 |
+| `src/ui/chat/ChatViewProvider.ts` | 侧边栏 `vac-chat`、编辑区主面板与单面板多标签 Side 的装配/销毁及主双面焦点同步（视图上唯一的消息监听器）；`reloadWebviews` 供灰屏自救 | 视图注册 / surface 归属 / 灰屏重载 |
 | `src/ui/chat/ChatEditorPanel.ts` | 编辑区主标签页（第二个 surface） | 编辑区面行为 |
 | `src/ui/chat/SideChatPanel.ts` | `vac-side-chat` 临时面板：每次打开新建 Side tab，成员/引用按 sessionId 隔离，异常只回滚本次 fork；活动 tab 右邻优先后继，源关闭批量清理其子 Side，不注册 serializer | Side 生命周期 |
 | `src/ui/SessionTreeProvider.ts` | Agents 树：agent → 会话（来源 `session/list` 或本地缓存）；刷新已合并节流（50ms） | 树结构 / 右键菜单 |

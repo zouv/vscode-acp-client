@@ -171,7 +171,9 @@ export interface Attachment {
   // 输入框图片：image 附件把字节留在宿主内存，
   // 只有 `path`（合成 id）+ `kind`/`mimeType` 走协议；base64 绝不进 meta（否则每次
   // boot/focus 都重发整张图）。
-  kind?: 'file' | 'image';
+  // [CUSTOM- 2026-11-13] `folder`：'Files or folders' 选进来的目录引用（仍然以
+  // resource_link 发给 agent，客户端只据此换图标并取消点击跳转）。
+  kind?: 'file' | 'image' | 'folder';
   mimeType?: string;
   // [CUSTOM- 引用一个**正在编辑器里看着的文件**时带上选区行区间（1 基、含两端）——
   // 它进 `name`（人看的 tag 上写出来）与资源链接的 `#L12-40` 片段（agent 也看得到）。
@@ -407,10 +409,10 @@ export type ExtToChat =
   // 草稿页与目录选择的应答。
   // 四条都**定向**发给发起请求的那个面（`post(msg, to)` 会绕开合帧队列），
   // 因为它们是"某个文档正在编辑的东西"，广播会让另一个面也长出同一个草稿。
-  | { type: 'directoryChoices'; agentName: string | null; workspaceFolders: string[]; recent: string[]; defaultCwd: string }
+  | { type: 'directoryChoices'; agentName: string | null; workspaceFolders: string[]; recent: string[]; defaultCwd: string; autoAddWorkspaceFolders?: boolean }
   | { type: 'directoryPicked'; path: string | null; purpose?: 'cwd' | 'additionalDirectories' }
-  // [CUSTOM- 'Files or folders' 文件选择器结果（多选文件）。
-  | { type: 'filesPicked'; paths: string[] }
+  // [CUSTOM- 'Files or folders' 选择器结果（多选）。`kind` 缺省 = files（兼容旧客户端）。
+  | { type: 'filesPicked'; paths: string[]; kind?: 'files' | 'folders' }
   // `draftId` 是**相关性 id，不能省**：`createSession` 会连带触发
   // `session-created → sessionsChanged → focus`，靠"收到一个新 focus 就删草稿"
   // 在慢路径/失败路径上会留下孤儿草稿或误删。
@@ -542,8 +544,9 @@ export type ChatToExt =
   // 非会话作用域（草稿页同样要能删），宿主处理完会重发一份 directoryChoices。
   | { type: 'removeRecentDirectory'; path: string }
   | { type: 'pickDirectory'; purpose?: 'cwd' | 'additionalDirectories' }
-  // [CUSTOM- 'Files or folders'：打开文件选择器（多选文件）。
-  | { type: 'pickFiles' }
+  // [CUSTOM- 'Files or folders'：打开文件 / 目录选择器（多选）。`kind` 缺省 = files。
+  // 文件与目录在 Windows 上不能同时选（Electron 会退化成目录选择器），所以由菜单分两次调用。
+  | { type: 'pickFiles'; kind?: 'files' | 'folders' }
   /**
    * [CUSTOM- 草稿页也可能带附件。
    *
@@ -558,6 +561,8 @@ export type ChatToExt =
     configSelections?: Array<{ configId: string; value: string }>;
     images?: Array<{ id: string; name: string; mimeType: string; dataUrl: string }>;
     paths?: string[];
+    // [CUSTOM- 与 `paths` 平行：标记哪些是目录引用（草稿页本地攒的 kind 随首条消息带上）。
+    pathMeta?: Array<{ kind?: 'folder' }>;
     // [CUSTOM- 草稿页显式勾选的额外根目录（additionalDirectories，多根工作区）。
     additionalDirectories?: string[];
   }
@@ -606,9 +611,9 @@ export type ChatToExt =
   | { type: 'detachFile'; sessionId: string; path: string; lineStart?: number; lineEnd?: number }
   // [CUSTOM- Files dropped onto / pasted into the panel. Session
   // scoped, so it MUST be handled after the `verifySession` guard (§5.4 rule 1).
-  // [CUSTOM- `meta` 与 `paths` **按下标平行**：只有"从编辑器当前文件加进来的"那一条
-  // 需要它（显示名带行区间）。拖拽/粘贴那条路照旧只发 paths（缺 = 用 basename）。
-  | { type: 'attachPath'; sessionId: string; paths: string[]; meta?: Array<{ name?: string; lineStart?: number; lineEnd?: number }> }
+  // [CUSTOM- `meta` 与 `paths` **按下标平行**：显示名/行区间只有"从编辑器当前文件
+  // 加进来的"那一条需要；`kind: 'folder'` 标记目录（'Files or folders' 的目录选择器）。
+  | { type: 'attachPath'; sessionId: string; paths: string[]; meta?: Array<{ name?: string; lineStart?: number; lineEnd?: number; kind?: 'folder' }> }
   // 输入框图片：粘贴/拖入的位图无路径，只能把
   // base64 带上。会话作用域（verifySession 守卫之后，同 attachPath）。`id` 由客户端
   // 生成（合成附件 id），宿主用它作附件 `path` 并把字节存进 imageData。

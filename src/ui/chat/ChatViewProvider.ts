@@ -80,6 +80,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.editor.open();
   }
 
+  /**
+   * [CUSTOM- 2026-11-13] 灰屏自救：重载已挂载的聊天面，不碰扩展宿主、ACP 连接
+   * 或正在跑的轮次。返回重载的面数量（0 = 没有任何聊天面打开）。
+   */
+  reloadWebviews(): number {
+    return this.host.reloadSurfaces().length;
+  }
+
   notifyActiveSessionChanged(): void {
     this.syncFocus();
   }

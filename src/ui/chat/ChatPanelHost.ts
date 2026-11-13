@@ -918,6 +918,25 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.pushBoot(surface.key);
   }
 
+  /**
+   * [CUSTOM- 2026-11-13] 灰屏自救：重写各面的 HTML（新 nonce），让已经崩掉的
+   * webview 渲染进程重建文档。宿主状态（转录 / 页签 / 草稿）不受影响；新文档
+   * boot 后照常发 `ready`，由 pushBoot 回全量快照。只重载可见面；一个都不可见时
+   * 才退回全部，避免闪一下另一个正常工作的面。
+   */
+  reloadSurfaces(): SurfaceKey[] {
+    const attached = Array.from(this.surfaces.entries());
+    const visible = attached.filter(([, surface]) => surface.visible);
+    const chosen = visible.length > 0 ? visible : attached;
+    for (const [key, surface] of chosen) {
+      surface.setHtml(renderChatHtml(surface.webview, createNonce(), key, this.mermaidAssetUri(surface.webview)));
+    }
+    if (chosen.length > 0) {
+      log(`${LOG_PREFIX}: reloaded webview surface(s): ${chosen.map(([key]) => key).join(', ')}`);
+    }
+    return chosen.map(([key]) => key);
+  }
+
   detach(): void {
     this.detachSurface('view');
   }
@@ -1011,7 +1030,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   /** Files dropped onto (or pasted into) the panel. */
   private handleAttachPaths(sessionId: string, paths: unknown, meta?: unknown): void {
     if (!Array.isArray(paths)) { return; }
-    const labels = Array.isArray(meta) ? (meta as Array<{ name?: unknown; lineStart?: unknown; lineEnd?: unknown }>) : [];
+    const labels = Array.isArray(meta) ? (meta as Array<{ name?: unknown; lineStart?: unknown; lineEnd?: unknown; kind?: unknown }>) : [];
     const incoming: Attachment[] = [];
     for (let i = 0; i < paths.length; i++) {
       const raw = paths[i];
@@ -1021,7 +1040,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       const lineEnd = typeof m.lineEnd === 'number' ? m.lineEnd : undefined;
       // [CUSTOM- 显示名优先用调用方给的（编辑器那条带行区间），否则 basename。
       const name = typeof m.name === 'string' && m.name.length > 0 ? m.name : basename(raw);
-      incoming.push({ path: raw, name, ...(lineStart ? { lineStart, lineEnd } : {}) });
+      // [CUSTOM- 目录引用（'Files or folders' 的目录选择器）单独标记，客户端据此换图标、
+      // 并取消"点 chip 打开文件"（对目录 openTextDocument 会失败）。
+      const kind = m.kind === 'folder' ? 'folder' as const : undefined;
+      incoming.push({ path: raw, name, ...(kind ? { kind } : {}), ...(lineStart ? { lineStart, lineEnd } : {}) });
     }
     if (incoming.length === 0) { return; }
     this.addAttachments(sessionId, incoming);
@@ -1265,8 +1287,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         void this.handlePickDirectory(from, (msg as { purpose?: 'cwd' | 'additionalDirectories' }).purpose);
         return;
       case 'pickFiles':
-        // [CUSTOM- 'Files or folders'：打开文件选择器（多选文件）。
-        void this.handlePickFiles(from);
+        // [CUSTOM- 'Files or folders'：文件 / 目录选择器（win32 不能同一个对话框里都选）。
+        void this.handlePickFiles(from, (msg as { kind?: 'files' | 'folders' }).kind);
         return;
       case 'createDraftAndSend':
         void this.handleCreateDraftAndSend(
@@ -1278,6 +1300,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           // [CUSTOM- 草稿页攒下的附件（草稿还没有会话，客户端先本地拿着）。
           (msg as { images?: Array<{ id: string; name: string; mimeType: string; dataUrl: string }> }).images ?? [],
           (msg as { paths?: string[] }).paths ?? [],
+          // [CUSTOM- 与 paths 平行：标记草稿里哪些引用是目录。
+          (msg as { pathMeta?: Array<{ kind?: 'folder' }> }).pathMeta ?? [],
           // [CUSTOM- 草稿页显式勾选的额外根目录（多根工作区）。
           (msg as { additionalDirectories?: string[] }).additionalDirectories ?? [],
           from,
@@ -4424,6 +4448,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath),
       recent: await this.recentDirectories(agent),
       defaultCwd: this.sessionManager.resolveDefaultCwd(),
+      // [CUSTOM- 2026-11-13] 多根工作区：由客户端在草稿创建时把其它根种进
+      // additionalDirectories（默认关，见 vac.autoAddWorkspaceFolders）。
+      autoAddWorkspaceFolders: vscode.workspace.getConfiguration('vac').get<boolean>('autoAddWorkspaceFolders', false),
     }, to);
   }
 
@@ -4486,16 +4513,21 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.post({ type: 'directoryPicked', path: picked?.[0]?.fsPath ?? null, purpose }, to);
   }
 
-  /** [CUSTOM- Native file picker — 'Files or folders' 菜单项（多选文件）。 */
-  private async handlePickFiles(to: SurfaceKey): Promise<void> {
+  /** [CUSTOM- Native file / folder picker — 'Files or folders' 菜单项（多选）。 */
+  private async handlePickFiles(to: SurfaceKey, kind?: 'files' | 'folders'): Promise<void> {
+    const folders = kind === 'folders';
     const picked = await vscode.window.showOpenDialog({
-      canSelectFiles: true,
-      canSelectFolders: false,
+      canSelectFiles: !folders,
+      canSelectFolders: folders,
       canSelectMany: true,
-      openLabel: 'Add files',
+      openLabel: folders ? 'Add folder' : 'Add files',
       defaultUri: vscode.Uri.file(this.sessionManager.resolveDefaultCwd()),
     });
-    this.post({ type: 'filesPicked', paths: (picked ?? []).map(uri => uri.fsPath) }, to);
+    this.post({
+      type: 'filesPicked',
+      paths: (picked ?? []).map(uri => uri.fsPath),
+      ...(folders ? { kind: 'folders' as const } : {}),
+    }, to);
   }
 
   /**
@@ -4520,6 +4552,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // [CUSTOM- 草稿页攒的附件：客户端本地拿着（草稿没有会话），随这条消息一起交上来。
     images: Array<{ id: string; name: string; mimeType: string; dataUrl: string }> = [],
     paths: string[] = [],
+    // [CUSTOM- 与 paths 平行：草稿页攒下的目录引用（kind: 'folder'）。
+    pathMeta: Array<{ kind?: 'folder' }> = [],
     // [CUSTOM- 草稿页显式勾选的额外根目录（多根工作区）。
     additionalDirectories: string[] = [],
     to: SurfaceKey = 'view',
@@ -4553,7 +4587,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       for (const image of images) {
         this.handleAttachImage(session.sessionId, image.id, image.name, image.mimeType, image.dataUrl);
       }
-      if (paths.length > 0) { this.handleAttachPaths(session.sessionId, paths); }
+      if (paths.length > 0) { this.handleAttachPaths(session.sessionId, paths, pathMeta); }
 
       // [CUSTOM- 会话一建好就放行界面（清空输入框、把草稿换成真会话、把用户气泡画出来），
       // 不再等模式/模型/推理强度与草稿选择落地 —— 那几发 set_config_option 只属于"首轮必须
@@ -4910,9 +4944,16 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       {
         key: 'vac.defaultWorkingDirectory', group: 'general', type: 'text',
         label: 'Default working directory',
-        description: 'Leave empty to use the current workspace folder.',
+        description: 'Leave empty to use the workspace folder of the active editor (falling back to the first workspace folder).',
         value: config.get<string>('defaultWorkingDirectory') ?? '',
         ...this.configScope('vac.defaultWorkingDirectory', 'ide'),
+      },
+      {
+        key: 'vac.autoAddWorkspaceFolders', group: 'general', type: 'boolean',
+        label: 'Add other workspace folders',
+        description: 'For new sessions, add the other workspace folders as additional working directories (removable on the draft page).',
+        value: config.get<boolean>('autoAddWorkspaceFolders', false),
+        ...this.configScope('vac.autoAddWorkspaceFolders', 'ide'),
       },
       {
         key: 'panel.autoExpandDefault', group: 'chat', type: 'boolean', scope: 'panel',
@@ -5328,6 +5369,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         break;
       case 'vac.defaultWorkingDirectory':
         await this.writeConfigSetting('vac.defaultWorkingDirectory', String(value ?? '').trim(), 'ide');
+        break;
+      case 'vac.autoAddWorkspaceFolders':
+        await this.writeConfigSetting('vac.autoAddWorkspaceFolders', value === true, 'ide');
         break;
       case 'vac.autoApprovePermissions':
         await this.writeConfigSetting(

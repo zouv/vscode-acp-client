@@ -13,6 +13,7 @@ export const CONFIG_SETTING_KEYS: ReadonlySet<string> = new Set([
   'vac.autoConnectOnOpen',
   'vac.restoreSessionsOnOpen',
   'vac.defaultWorkingDirectory',
+  'vac.autoAddWorkspaceFolders',
   'vac.autoApprovePermissions',
   'vac.logTraffic',
   'vac.customModels',

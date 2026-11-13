@@ -1041,6 +1041,7 @@ suite('chat panel: draft page creates the session on first send', () => {
     assert.ok(Array.isArray(reply.recent), 'recent must be an array');
     assert.strictEqual(typeof reply.defaultCwd, 'string');
     assert.ok((reply.defaultCwd as string).length > 0, 'the default must never be empty');
+    assert.strictEqual(reply.autoAddWorkspaceFolders, false, 'auto-add is off by default');
   });
 
   test('connect only ensures the process — it does not create a session', async function () {
@@ -4050,6 +4051,34 @@ suite('chat panel: ui prefs merge ()', () => {
       'the extension resource host is NOT added to script-src');
   });
 
+  test('reloadSurfaces writes a fresh document without touching host state', () => {
+    const harness = makeHarness('s-1');
+    const before = harness.surface.html;
+    harness.surface.sent.length = 0;
+
+    const reloaded = harness.host.reloadSurfaces();
+
+    assert.deepStrictEqual(reloaded, ['view']);
+    assert.notStrictEqual(harness.surface.html, before, 'a new nonce means a new document');
+    assert.ok(harness.surface.html.includes("script-src 'nonce-"), 'the CSP is re-emitted');
+    assert.strictEqual(harness.surface.sent.length, 0, 'reloading neither resets nor re-pushes host state');
+  });
+
+  test('reloadSurfaces only reloads visible surfaces (hidden ones stay untouched)', () => {
+    const harness = makeHarness('s-1');
+    const editor = new RecordingSurface('editor');
+    editor.visibleFlag = false;
+    harness.host.attachSurface(editor, { agentName: harness.agentName, sessionId: 's-1' });
+    const viewBefore = harness.surface.html;
+    const editorBefore = editor.html;
+
+    const reloaded = harness.host.reloadSurfaces();
+
+    assert.deepStrictEqual(reloaded, ['view']);
+    assert.notStrictEqual(harness.surface.html, viewBefore);
+    assert.strictEqual(editor.html, editorBefore, 'the hidden editor document is left alone');
+  });
+
   test('boot always pushes a complete shortcut map even without stored preferences', async () => {
     const harness = makeHarness('s-1');
     harness.surface.sent.length = 0;
@@ -6007,6 +6036,23 @@ suite('chat panel: active editor file → composer reference ()', () => {
     assert.ok(link, '提示里应有 resource_link：' + JSON.stringify(blocks));
     assert.ok(String(link!.uri).endsWith('#L12-40'), '行区间进 uri 片段（agent 也看得到）: ' + link!.uri);
     assert.strictEqual(link!.name, 'DemoFile.cs:12-40');
+  });
+
+  test('attachPath 的 kind: folder 保留为目录附件，普通路径仍是文件', () => {
+    const harness = makeHarness('folder-ref', 'Claude Code');
+    harness.surface.sent.length = 0;
+    harness.host.onMessage({
+      type: 'attachPath', sessionId: 'folder-ref',
+      paths: ['d:/work/src', 'd:/work/src/a.ts'],
+      meta: [{ kind: 'folder' }, {}],
+    });
+    const message = harness.surface.sent.filter(m => m.type === 'attachments').pop() as unknown as
+      { attachments: Array<Record<string, unknown>> };
+    assert.ok(message, '附件广播必须到达客户端');
+    assert.strictEqual(message.attachments[0].kind, 'folder');
+    assert.strictEqual(message.attachments[0].path, 'd:/work/src');
+    assert.strictEqual(message.attachments[1].kind, undefined, '普通路径不写 kind（保持旧形状）');
+    assert.strictEqual(message.attachments[1].path, 'd:/work/src/a.ts');
   });
 });
 

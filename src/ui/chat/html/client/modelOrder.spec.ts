@@ -13,7 +13,7 @@ function option(options: any[]): any {
 }
 
 describe('composer model order', () => {
-  it('puts custom models first in settings order and keeps built-ins stable', () => {
+  it('keeps built-ins in agent order first and appends custom models in settings order', () => {
     const order = load();
     const input = option([
       { value: 'builtin-1', name: 'Builtin 1' },
@@ -23,7 +23,7 @@ describe('composer model order', () => {
     ]);
     const out = order.orderOption(input, [{ modelId: 'custom-a' }, { modelId: 'custom-b' }]);
     expect(out.options.map((entry: any) => entry.value))
-      .toEqual(['custom-a', 'custom-b', 'builtin-1', 'builtin-2']);
+      .toEqual(['builtin-1', 'builtin-2', 'custom-a', 'custom-b']);
     // Input is not mutated.
     expect(input.options.map((entry: any) => entry.value))
       .toEqual(['builtin-1', 'custom-b', 'builtin-2', 'custom-a']);
@@ -35,7 +35,7 @@ describe('composer model order', () => {
       { value: 'x', name: 'X' },
       { value: 'y', name: 'Y' },
     ]), [{ modelId: 'missing' }, { modelId: 'y' }]);
-    expect(out.options.map((entry: any) => entry.value)).toEqual(['y', 'x']);
+    expect(out.options.map((entry: any) => entry.value)).toEqual(['x', 'y']);
   });
 
   it('only reorders within groups and keeps group order/semantics', () => {
@@ -46,7 +46,7 @@ describe('composer model order', () => {
     ]), [{ modelId: 'custom-c' }, { modelId: 'custom-b' }, { modelId: 'custom-d' }]);
     expect(out.options.map((entry: any) => entry.name)).toEqual(['Built-in', 'Custom']);
     expect(out.options[0].options.map((entry: any) => entry.value))
-      .toEqual(['custom-b', 'b1', 'b2']);
+      .toEqual(['b1', 'b2', 'custom-b']);
     expect(out.options[1].options.map((entry: any) => entry.value))
       .toEqual(['custom-c', 'custom-d']);
   });
@@ -77,7 +77,7 @@ describe('composer model order', () => {
       { modelId: '__proto__' },
     ]);
     expect(out.options.map((entry: any) => entry.value))
-      .toEqual(['constructor', '__proto__', 'normal']);
+      .toEqual(['normal', 'constructor', '__proto__']);
     // The rank map is prototype-free.
     const ranks = order.rankMap([{ modelId: '__proto__' }]);
     expect(Object.getPrototypeOf(ranks)).toBeNull();

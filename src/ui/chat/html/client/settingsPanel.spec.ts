@@ -237,33 +237,35 @@ function makePanel(value: any[], overrides: Record<string, unknown> = {}) {
   };
 }
 
+function pressMove(panel: ReturnType<typeof makePanel>, index: number, key: string): void {
+  panel.rows()[index].querySelector('.settings-model-drag')!.dispatch('keydown', { key, preventDefault() {} });
+}
+
 describe('settings panel: custom model ordering', () => {
-  it('renders a drag handle plus accessible move-up/down buttons on every row', () => {
+  it('renders a focusable drag handle and no move buttons on every row', () => {
     const panel = makePanel([{ modelId: 'a', name: 'A' }, { modelId: 'b', name: 'B' }]);
     panel.openEditor();
     const rows = panel.rows();
     expect(rows).toHaveLength(2);
     expect(rows[0].querySelectorAll('.settings-model-drag')).toHaveLength(1);
-    const up = rows[0].querySelectorAll('.settings-model-up');
-    const down = rows[0].querySelectorAll('.settings-model-down');
-    expect(up).toHaveLength(1);
-    expect(down).toHaveLength(1);
-    expect(up[0].getAttribute('aria-label')).toBe('Move model up');
-    expect(down[0].getAttribute('aria-label')).toBe('Move model down');
-    expect(up[0].disabled).toBe(true);
-    expect(down[0].disabled).toBe(false);
-    expect(rows[1].querySelector('.settings-model-down')!.disabled).toBe(true);
+    expect(rows[0].querySelectorAll('.settings-model-move')).toHaveLength(0);
+    expect(rows[0].querySelectorAll('.settings-model-up')).toHaveLength(0);
+    expect(rows[0].querySelectorAll('.settings-model-down')).toHaveLength(0);
+    const handle = rows[0].querySelector('.settings-model-drag')!;
+    expect(handle.getAttribute('tabindex')).toBe('0');
+    expect(handle.getAttribute('role')).toBe('button');
+    expect(handle.getAttribute('aria-label')).toBe('Reorder model');
     expect(panel.elements.settingsSubBody.textContent).toContain('Drag the handle');
     expect(panel.elements.settingsSubBody.textContent).toContain('agent must support extra models');
     expect(panel.elements.settingsSubBody.textContent).toContain('newly created or restored sessions');
   });
 
-  it('moves a row with the keyboard button and posts the new sequence', () => {
+  it('moves a row with arrow keys on the drag handle and posts the new sequence', () => {
     const panel = makePanel([{ modelId: 'a', name: 'A' }, { modelId: 'b', name: 'B' }]);
     panel.openEditor();
     // 输入中的 alias 还没触发 change：移动不能丢它。
     panel.rows()[0].querySelectorAll('input')[1].value = 'A typed';
-    panel.rows()[0].querySelector('.settings-model-down')!.dispatch('click', {});
+    pressMove(panel, 0, 'ArrowDown');
 
     expect(panel.rows().map(row => row.querySelectorAll('input')[0].value)).toEqual(['b', 'a']);
     expect(panel.rows().map(row => row.querySelectorAll('input')[1].value)).toEqual(['B', 'A typed']);
@@ -277,13 +279,10 @@ describe('settings panel: custom model ordering', () => {
     expect(panel.posted[0].requestId.length).toBeGreaterThan(0);
     expect(panel.posted[0].force).toBe(false);
     expect(panel.posted.some(message => message.type === 'setSetting')).toBe(false);
-    // 屏幕阅读器播报具体模型 + 位置；移动后按钮在边界变 disabled，焦点转到同行的另一颗。
+    // 屏幕阅读器播报具体模型 + 位置。
     expect(panel.announce().getAttribute('aria-live')).toBe('polite');
     expect(panel.announce().textContent)
       .toBe('Moved model "A typed" to position 2 of 2.');
-    const movedRow = panel.rows()[1];
-    expect(movedRow.querySelector('.settings-model-down')!.disabled).toBe(true);
-    expect(movedRow.querySelector('.settings-model-up')!.focused).toBe(true);
   });
 
   it('does not save or stay open when nothing changed', () => {
@@ -322,12 +321,12 @@ describe('settings panel: custom model ordering', () => {
   it('serialises consecutive commits and sends the queued one after success', () => {
     const panel = makePanel([{ modelId: 'a', name: 'A' }, { modelId: 'b', name: 'B' }]);
     panel.openEditor();
-    panel.rows()[0].querySelector('.settings-model-down')!.dispatch('click', {});
+    pressMove(panel, 0, 'ArrowDown');
     expect(panel.posted).toHaveLength(1);
     const first = panel.posted[0];
 
     // 第二次排序发生在第一条在途时：只排队，不再发。
-    panel.rows()[0].querySelector('.settings-model-down')!.dispatch('click', {});
+    pressMove(panel, 0, 'ArrowDown');
     expect(panel.posted).toHaveLength(1);
 
     panel.applySync({
@@ -348,7 +347,7 @@ describe('settings panel: custom model ordering', () => {
     const panel = makePanel([{ modelId: 'a', name: 'A' }, { modelId: 'b', name: 'B' }]);
     panel.openEditor();
     panel.rows()[0].querySelectorAll('input')[1].value = 'typed locally';
-    panel.rows()[0].querySelector('.settings-model-down')!.dispatch('click', {});
+    pressMove(panel, 0, 'ArrowDown');
     const first = panel.posted[0];
 
     panel.applySync({
@@ -538,7 +537,7 @@ describe('settings panel: custom model ordering', () => {
   it('keeps both panels open while a save or conflict is unresolved', () => {
     const panel = makePanel([{ modelId: 'a', name: 'A' }, { modelId: 'b', name: 'B' }]);
     panel.openEditor();
-    panel.rows()[0].querySelector('.settings-model-down')!.dispatch('click', {});
+    pressMove(panel, 0, 'ArrowDown');
     const first = panel.posted[0];
 
     panel.NS.settingsPanel.close();
@@ -564,7 +563,7 @@ describe('settings panel: custom model ordering', () => {
   it('Escape during an unresolved save does not hide the panels', () => {
     const panel = makePanel([{ modelId: 'a', name: 'A' }, { modelId: 'b', name: 'B' }]);
     panel.openEditor();
-    panel.rows()[0].querySelector('.settings-model-down')!.dispatch('click', {});
+    pressMove(panel, 0, 'ArrowDown');
     panel.fireDocKey({
       key: 'Escape',
       preventDefault() {},

@@ -9,6 +9,7 @@ docs/**
 .agents/**
 .claude/**
 .github/**
+.runtime/**
 release/**
 AGENTS.md
 ARCHITECTURE.md

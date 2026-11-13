@@ -159,7 +159,8 @@ npm run dev:host      # 编译 + 打开 Extension Development Host
 | `vac.autoApprovePermissions` | `ask` \| `allowAll` | `ask` | 是否自动批准 agent 的权限请求 |
 | `vac.autoConnectOnOpen` | boolean | `true` | 打开聊天面板 0.5 秒后自动连接 |
 | `vac.restoreSessionsOnOpen` | `ask` \| `always` \| `never` | `ask` | 上次窗口关闭时开着的会话怎么处理 |
-| `vac.defaultWorkingDirectory` | string | 空 | 新会话的默认工作目录；留空 = 工作区第一个文件夹 |
+| `vac.defaultWorkingDirectory` | string | 空 | 新会话的默认工作目录；留空 = 活动编辑器所在的 workspace 文件夹（其次最后编辑过的目录，最后第一个文件夹） |
+| `vac.autoAddWorkspaceFolders` | boolean | false | 多根工作区：新会话是否自动把其它 workspace 文件夹加入 `additionalDirectories`（草稿页显示为可删除的 chips） |
 | `vac.logTraffic` | boolean | `true` | 是否记录 ACP 协议流水（落到 `VAC Traffic` 通道与日志文件） |
 | `vac.customModels` | array | `[]` | 追加进 agent 模型列表的模型（经 `_meta.extraModels` 注入） |
 | `vac.dashboard.enabled` | boolean | `true` | 是否扫描本机转录构建用量面板；关掉即停止一切后台扫描 |
@@ -208,6 +209,7 @@ npm run dev:host      # 编译 + 打开 Extension Development Host
 | `VAC: Add Agent Configuration` / `VAC: Remove Agent` | 增删 `vac.agents` 条目 |
 | `VAC: Refresh` / `VAC: Refresh Sessions` / `VAC: Refresh Dashboard` | 刷新各视图 |
 | `VAC: Show Log` / `VAC: Show Protocol Traffic` | 打开 `VAC` / `VAC Traffic` 输出通道 |
+| `VAC: Reload Chat Webview` | 面板灰屏 / 空白时重建 webview 文档；不重启扩展宿主与 agent，正在跑的轮次不受影响 |
 
 </details>
 

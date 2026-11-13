@@ -4324,6 +4324,8 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
       // [CUSTOM- 附件也随这条消息走（草稿上没有会话，宿主收不了会话作用域的
       // attachPath/attachImage）。这里没有附件 ⇒ 两个空数组，字段本身必须在。
       images: [], paths: [],
+      // [CUSTOM- 与 paths 平行：目录引用标记（这里没有）。
+      pathMeta: [],
       // [CUSTOM- 额外根目录（additionalDirectories）默认空。
       additionalDirectories: [],
     }]);
@@ -6415,20 +6417,35 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
     NS.outline = { close: () => { /* stub */ } };
     NS.sessionMenu = { reset: () => { /* stub */ } };
     const picked: Array<{ id: string | null; path: string }> = [];
+    // [CUSTOM- 2026-11-13] Persistent draft object: auto-seeding records a
+    // one-shot flag on it, so a fresh object per `get()` would re-add forever.
+    const draftState: Record<string, any> = {
+      draftId: 'd1', cwd: '', additionalDirectories: [], autoDirsSeeded: false,
+    };
+    const addedDirs: Array<{ id: string; dirs: string[] }> = [];
     NS.draft = {
-      get: (id: string) => ({ draftId: id, cwd: '' }),
+      get: (id: string) => (id === draftState.draftId
+        ? draftState
+        : { draftId: id, cwd: '', additionalDirectories: [], autoDirsSeeded: false }),
       focusedId: () => 'd1',
-      setCwd: (id: string, path: string) => { picked.push({ id, path }); },
+      setCwd: (id: string, path: string) => {
+        picked.push({ id, path });
+        if (id === draftState.draftId) { draftState.cwd = path; }
+      },
+      setAdditionalDirectories: (id: string, dirs: string[]) => {
+        addedDirs.push({ id, dirs });
+        if (id === draftState.draftId) { draftState.additionalDirectories = dirs; }
+      },
       start: (path: string) => { picked.push({ id: null, path }); },
     };
     NS.directoryMenu.init();
     NS.directoryMenu.refresh({ draftId: 'd1' });   // boot 在 focusDraft 时就是这么喂的
     return {
-      NS, els, list, posted, search, clear, picked, docListeners: harness.docListeners,
+      NS, els, list, posted, search, clear, picked, addedDirs, draftState, docListeners: harness.docListeners,
       // 打开抽屉走**真路径**（点标题栏那一格）—— show/toggle 都是私有的。
       open: () => dispatchClick(els.cwdBtn, harness.docListeners),
-      choices: (recent: string[]) => NS.directoryMenu.setChoices({
-        workspaceFolders: ['/ws'], recent, defaultCwd: '/ws',
+      choices: (recent: string[], extra: Record<string, unknown> = {}) => NS.directoryMenu.setChoices({
+        workspaceFolders: ['/ws'], recent, defaultCwd: '/ws', ...extra,
       }),
     };
   }
@@ -6493,6 +6510,32 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
     d.open();
     d.choices(['/recent']);
     assert.ok(d.list.textContent.includes('This session will be created in:'));
+  });
+
+  // [CUSTOM- 2026-11-13] 多根工作区：开关打开时，新建草稿把其它 workspace folders
+  // 自动种进 additionalDirectories（用户可删；只种一次，之后不再回来）。
+  test('autoAddWorkspaceFolders seeds the other roots once, never after the user removed them', () => {
+    const d = drawer();
+    d.choices([], {
+      workspaceFolders: ['/ws', '/other', '/third'],
+      autoAddWorkspaceFolders: true,
+    });
+    assert.deepStrictEqual(d.addedDirs, [{ id: 'd1', dirs: ['/other', '/third'] }],
+      'cwd is adopted first, and the other two roots become additional directories');
+    assert.strictEqual(d.draftState.cwd, '/ws');
+    assert.deepStrictEqual(d.draftState.additionalDirectories, ['/other', '/third']);
+
+    // The user removes them; the next choices refresh must not put them back.
+    d.draftState.additionalDirectories = [];
+    d.choices([], { workspaceFolders: ['/ws', '/other', '/third'], autoAddWorkspaceFolders: true });
+    assert.strictEqual(d.addedDirs.length, 1, 'seeding is one-shot per draft');
+    assert.deepStrictEqual(d.draftState.additionalDirectories, []);
+  });
+
+  test('autoAddWorkspaceFolders off leaves additional directories to the user', () => {
+    const d = drawer();
+    d.choices([], { workspaceFolders: ['/ws', '/other'] });
+    assert.deepStrictEqual(d.addedDirs, []);
   });
 
   test('boot 那条"切草稿/切会话"的路径只在**首次**问一次，之后不再打扰宿主', () => {
@@ -8484,10 +8527,12 @@ suite('chat client logic: 大纲侧栏的开/关按会话记（stub DOM, ）', (
 suite('chat client logic: 引用栏的当前文件格（stub DOM, ）', () => {
   function refBar() {
     const attachments = new StubNode('div');
+    const input = new StubNode('textarea');
+    const sendBtn = new StubNode('button');
     const sent: Array<Record<string, unknown>> = [];
     const { NS } = loadClient({
-      promptInput: new StubNode('textarea'),
-      sendStopBtn: new StubNode('button'),
+      promptInput: input,
+      sendStopBtn: sendBtn,
       slashPopup: new StubNode('div'),
       attachments,
       configPickers: new StubNode('div'),
@@ -8501,7 +8546,7 @@ suite('chat client logic: 引用栏的当前文件格（stub DOM, ）', () => {
       sessionId: 's1', agentName: 'Claude Code', title: null, cwd: '/tmp',
       createdAt: '', running: false, loading: false, unread: false,
     }, null);
-    return { NS, attachments, sent };
+    return { NS, attachments, sent, input, sendBtn };
   }
 
   const FILE = { path: 'd:/work/src/DemoFile.cs', name: 'DemoFile.cs' };
@@ -8588,6 +8633,33 @@ suite('chat client logic: 引用栏的当前文件格（stub DOM, ）', () => {
     assert.strictEqual(h.sent.filter(m => m.type === 'attachPath').length, 0, '草稿不发会话作用域的消息');
     assert.ok(h.attachments.querySelectorAll('.attachment').length >= 1, '本地附件列里有了它');
     assert.strictEqual(chipOf(h.attachments), null, '本地也算已引用 ⇒ 预选格消失（214）');
+  });
+
+  // [CUSTOM- 2026-11-13: 'Files or folders' 的目录分支。
+  test('会话页选目录 ⇒ attachPath 带 kind: folder；目录 chip 不挂 data-path', () => {
+    const h = refBar();
+    h.sent.length = 0;
+    h.NS.composer.setPickedFiles(['d:/work/src'], 'folders');
+    assert.deepStrictEqual(h.sent, [{
+      type: 'attachPath', sessionId: 's1', paths: ['d:/work/src'], meta: [{ kind: 'folder' }],
+    }]);
+
+    h.NS.composer.setAttachments([{ path: 'd:/work/src', name: 'src', kind: 'folder' }]);
+    const chip = h.attachments.querySelectorAll('.attachment')[0];
+    assert.strictEqual(chip.getAttribute('data-path'), null, '目录不参与 openFile（会失败）');
+    assert.strictEqual(chip.title, 'd:/work/src', 'tooltip 仍给出完整路径');
+  });
+
+  test('草稿页选目录 ⇒ 首条消息的 pathMeta 带 kind: folder', () => {
+    const h = refBar();
+    h.NS.composer.setDraft({ draftId: 'd1', cwd: '/tmp' });
+    h.NS.composer.setPickedFiles(['/tmp/assets'], 'folders');
+    h.input.value = 'use this folder';
+    dispatchClick(h.sendBtn, {});
+    const sent = h.sent.find(m => m.type === 'createDraftAndSend') as Record<string, any>;
+    assert.ok(sent, 'draft send reached the host');
+    assert.deepStrictEqual(sent.paths, ['/tmp/assets']);
+    assert.deepStrictEqual(sent.pathMeta, [{ kind: 'folder' }]);
   });
 });
 

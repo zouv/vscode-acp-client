@@ -380,7 +380,14 @@ export const bootClient = `
 
   /** Open a new draft and focus it. 'initialCwd' pre-fills the directory. */
   function startDraft(initialCwd) {
-    var draft = { draftId: 'draft-' + draftSeed + '-' + (++draftSeq), cwd: initialCwd || null, additionalDirectories: [] };
+    var draft = {
+      draftId: 'draft-' + draftSeed + '-' + (++draftSeq),
+      cwd: initialCwd || null,
+      additionalDirectories: [],
+      // [CUSTOM- 2026-11-13] 'vac.autoAddWorkspaceFolders' seeds the other roots
+      // once per draft (the user can remove them afterwards; we must not re-add).
+      autoDirsSeeded: false,
+    };
     drafts.push(draft);
     focusDraft(draft.draftId);
     return draft;
@@ -413,6 +420,17 @@ export const bootClient = `
     var draft = draftById(draftId);
     if (!draft) { return; }
     draft.cwd = cwd || null;
+    // [CUSTOM- 2026-11-13] A directory cannot be both cwd and an additional root;
+    // prune it when the user switches the draft's working directory.
+    var dirs = draft.additionalDirectories || [];
+    var kept = [];
+    for (var i = 0; i < dirs.length; i++) {
+      if (draft.cwd === null || dirs[i] !== draft.cwd) { kept.push(dirs[i]); }
+    }
+    if (kept.length !== dirs.length) {
+      draft.additionalDirectories = kept;
+      if (focusedDraftId === draftId) { NS.composer.setAdditionalDirectories(kept); }
+    }
     if (focusedDraftId === draftId) {
       NS.tabs.setDraftFocus(draft);
       NS.composer.updateDraftCwd(draftId, draft.cwd);
@@ -884,8 +902,10 @@ export const bootClient = `
         break;
 
       case 'filesPicked':
-        // [CUSTOM- 'Files or folders' 的文件选择器结果。
-        if (NS.composer && NS.composer.setPickedFiles) { NS.composer.setPickedFiles(message.paths || []); }
+        // [CUSTOM- 'Files or folders' 的选择器结果（kind 缺省 = files）。
+        if (NS.composer && NS.composer.setPickedFiles) {
+          NS.composer.setPickedFiles(message.paths || [], message.kind);
+        }
         break;
 
       case 'draftResolved':

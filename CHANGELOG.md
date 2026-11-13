@@ -11,7 +11,19 @@
 
 ---
 
-## [未发布]
+## [1.16.0] - 2026-11-13
+
+### 新增
+- 新增命令 **VAC: Reload Chat Webview**：webview 渲染进程崩溃导致 Chat 面板灰屏 / 空白时，只重建聊天 webview 文档，不重启扩展宿主、不杀 agent 进程，正在跑的轮次与转录都不受影响（面板会从宿主状态全量恢复）。该命令同时出现在 Chat 视图标题栏的 `...` 菜单里。
+- 新增设置 **`vac.autoAddWorkspaceFolders`**（默认关闭）：多根工作区下，新会话自动把其它 workspace 文件夹加入 `additionalDirectories`（草稿页显示为可删除的 chips），效果与 `+ → Workspace directories` 相同。
+
+### 变更
+- 设置面板 → Advanced → Custom models：去掉每行右侧的上移 / 下移按钮（左侧拖拽手柄已覆盖鼠标排序）；拖拽手柄现在可聚焦，键盘用户按 ↑ / ↓ 仍可调整顺序。
+- 输入卡 `+` → **Files or folders** 现在分两级：**Add files… / Add folders…**，目录引用会带文件夹图标（Windows 上系统对话框不能同时选文件与目录，因此拆成两项）。
+- 多根工作区的默认工作目录：`vac.defaultWorkingDirectory` 留空时优先取**活动编辑器所在的 workspace 文件夹**，其次取最后编辑过的目录（编辑器区聊天面板激活时 `activeTextEditor` 为空，用这个兜底），最后才回落到第一个文件夹。
+
+### 修复
+- 修复模型选择器里自定义模型排在内置模型前面（如 `Default (recommended)` 被挤到最后）的问题：内置候选保持 agent 顺序在前，自定义模型按 `vac.customModels` 的设置顺序追加在后。
 
 ## [1.15.0] - 2026-11-12
 

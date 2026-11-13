@@ -3441,7 +3441,7 @@ export function styles(): string {
   }
   .settings-json-error { margin-top: 4px; font-size: 0.8em; color: var(--vscode-errorForeground); }
   .settings-model-head, .settings-model-row {
-    display: grid; grid-template-columns: 22px 1.5fr 1fr 1.2fr auto 24px; gap: 6px; align-items: center;
+    display: grid; grid-template-columns: 22px 1.5fr 1fr 1.2fr 24px; gap: 6px; align-items: center;
   }
   .settings-model-head { padding: 0 2px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
   .settings-models {
@@ -3449,7 +3449,7 @@ export function styles(): string {
     flex: 0 1 auto; min-height: 60px; overflow-y: auto;
   }
   .settings-model-row .settings-text-input { width: 100%; }
-  /* [CUSTOM- 拖拽排序：手柄只负责发起拖拽；上移/下移是键盘与无障碍路径。 */
+  /* [CUSTOM- 拖拽排序：手柄负责拖拽；键盘用聚焦手柄后的 ↑/↓（右侧不另放按钮）。 */
   .settings-model-row.dragging { opacity: 0.55; }
   /* 拖动落点：before 画在目标行上沿，after 画在末行下沿。 */
   .settings-model-row.settings-model-drop-before {
@@ -3465,14 +3465,7 @@ export function styles(): string {
   }
   .settings-model-drag:hover { background: var(--vscode-list-hoverBackground); }
   .settings-model-drag:active { cursor: grabbing; }
-  .settings-model-move { display: flex; gap: 2px; }
-  .settings-model-move button {
-    padding: 1px 5px; border: 1px solid transparent; border-radius: 3px; cursor: pointer;
-    font-family: inherit; font-size: 0.85em; line-height: 1.2;
-    background: transparent; color: inherit;
-  }
-  .settings-model-move button:hover:not(:disabled) { background: var(--vscode-list-hoverBackground); }
-  .settings-model-move button:disabled { opacity: 0.35; cursor: default; }
+  .settings-model-drag:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
   .settings-model-status {
     margin: 2px 0; padding: 6px 8px; border-radius: 4px;
     font-size: 0.85em; line-height: 1.4;

@@ -207,13 +207,17 @@ export const composerClient = `
         // 把被点的那个元素摘掉，冒泡到 document 时 contains(event.target) 就变 false、菜单被
         // 「点外面」检查关掉（pitfalls #28 的重演）。stopPropagation 让 document 那条永远收不到。
         event.stopPropagation();
-        var item = event.target && event.target.closest ? event.target.closest('[data-add-action],[data-add-dir]') : null;
+        var item = event.target && event.target.closest ? event.target.closest('[data-add-action],[data-add-dir],[data-add-pick]') : null;
         if (!item) { return; }
         var action = item.getAttribute('data-add-action');
         if (action === 'directories') { addMenuLevel = 1; renderAddMenu(); return; }
-        if (action === 'files') {
+        if (action === 'files') { addMenuLevel = 2; renderAddMenu(); return; }
+        // [CUSTOM- 'Files or folders' 的二级项：文件和目录分开选（win32 不允许同一个
+        // 系统对话框里既选文件又选目录，否则文件选择会被退化成目录选择）。
+        var pick = item.getAttribute('data-add-pick');
+        if (pick) {
           closeAddMenu();
-          NS.bridge.post({ type: 'pickFiles' });
+          NS.bridge.post({ type: 'pickFiles', kind: pick });
           return;
         }
         var path = item.getAttribute('data-add-dir');
@@ -379,6 +383,7 @@ export const composerClient = `
       var pending = draftFiles[state.draft.draftId] || [];
       var draftImages = [];
       var draftPaths = [];
+      var draftPathMeta = [];
       for (var i = 0; i < pending.length; i++) {
         if (pending[i].kind === 'image') {
           draftImages.push({
@@ -387,6 +392,8 @@ export const composerClient = `
           });
         } else {
           draftPaths.push(pending[i].path);
+          // [CUSTOM- 与 paths 平行：目录引用要一路带到宿主（chip 图标 / 不可点击）。
+          draftPathMeta.push(pending[i].kind === 'folder' ? { kind: 'folder' } : {});
         }
       }
       NS.bridge.post({
@@ -401,6 +408,8 @@ export const composerClient = `
         configSelections: draftSelections(),
         images: draftImages,
         paths: draftPaths,
+        // [CUSTOM- 与 paths 平行：目录引用标记（'Files or folders' → Add folders…）。
+        pathMeta: draftPathMeta,
         // [CUSTOM- 草稿页显式勾选的额外根目录（additionalDirectories）。
         additionalDirectories: state.additionalDirectories
       });
@@ -627,11 +636,22 @@ export const composerClient = `
     if (state.draft) { NS.draft.setAdditionalDirectories(state.draft.draftId, list); }
   }
 
-  // [CUSTOM- 'Files or folders' 的文件选择器结果：草稿页本地攒、会话页走 attachPath。
-  function setPickedFiles(paths) {
+  // [CUSTOM- 'Files or folders' 的选择器结果：草稿页本地攒、会话页走 attachPath。
+  // kind === 'folders' 时这些路径是目录，chip 换成文件夹图标且不可点击打开。
+  function setPickedFiles(paths, kind) {
     if (!paths || paths.length === 0) { return; }
-    if (state.draft) { addDraftPaths(paths); }
-    else if (state.sessionId) { NS.bridge.post({ type: 'attachPath', sessionId: state.sessionId, paths: paths }); }
+    var folder = kind === 'folders';
+    if (state.draft) {
+      addDraftPaths(paths, undefined, undefined, folder ? 'folder' : 'file');
+    } else if (state.sessionId) {
+      var message = { type: 'attachPath', sessionId: state.sessionId, paths: paths };
+      if (folder) {
+        var meta = [];
+        for (var i = 0; i < paths.length; i++) { meta.push({ kind: 'folder' }); }
+        message.meta = meta;
+      }
+      NS.bridge.post(message);
+    }
   }
 
   function setAdditionalDirectories(list) {
@@ -676,6 +696,17 @@ export const composerClient = `
     return item;
   }
 
+  /** 'Files or folders' 二级菜单项：选择器类型（files / folders）。 */
+  function addMenuPick(kind, iconKind, label) {
+    var item = NS.dom.el('button', 'picker-item');
+    item.type = 'button';
+    item.setAttribute('data-add-pick', kind);
+    var icon = NS.icons.icon(iconKind, 'chip-icon');
+    if (icon) { item.appendChild(icon); }
+    item.appendChild(NS.dom.el('span', 'add-menu-label', label));
+    return item;
+  }
+
   function renderAddMenu() {
     if (!addMenu) { return; }
     NS.dom.clear(addMenu);
@@ -686,6 +717,18 @@ export const composerClient = `
       if (state.addDirectoriesReadonly) { dirsItem.disabled = true; }
       addMenu.appendChild(dirsItem);
       addMenu.appendChild(addMenuItem('files', 'document', 'Files or folders'));
+      return;
+    }
+    if (addMenuLevel === 2) {
+      // [CUSTOM- 文件与目录分两次选择：Windows 上同时置 canSelectFiles / canSelectFolders
+      // 会让系统对话框只按目录处理（文件选不了）。
+      var pickBack = NS.dom.el('button', 'picker-item');
+      pickBack.type = 'button';
+      pickBack.setAttribute('data-add-dir', '__back__');
+      pickBack.appendChild(NS.dom.el('span', 'add-menu-label', '← Back'));
+      addMenu.appendChild(pickBack);
+      addMenu.appendChild(addMenuPick('files', 'document', 'Add files…'));
+      addMenu.appendChild(addMenuPick('folders', 'folder', 'Add folders…'));
       return;
     }
     // 二级：返回 + 目录列表 + Browse。
@@ -1215,7 +1258,11 @@ export const composerClient = `
         // [CUSTOM- 2026-10-29：文件引用 chip 可点击跳转 —— links.ts 的全局委托按
         // data-path 打开；带行区间时一并带上，宿主会框选。图片不加（不用 openTextDocument
         // 打开二进制）。'×' 会 stopPropagation，避免删除时顺带打开。
-        if (attachment.kind !== 'image' && attachment.path) {
+        // [CUSTOM- 2026-11-13：目录引用也不加 data-path（对目录 openTextDocument 会失败），
+        // 只留 tooltip。
+        if (attachment.kind === 'folder' && attachment.path) {
+          chip.title = attachment.path;
+        } else if (attachment.kind !== 'image' && attachment.path) {
           chip.setAttribute('data-path', attachment.path);
           if (attachment.lineStart) {
             chip.setAttribute('data-line', String(attachment.lineStart));
@@ -1237,7 +1284,8 @@ export const composerClient = `
         } else {
           // [CUSTOM- 文件附件也带图标（与引用栏那一格同一枚 </> 图形）——
           // 用户 2026-10-09 报"已添加引用的文件 tag 左侧没有图标，需要加上"。
-          var fileIcon = NS.icons.icon('file', 'chip-icon');
+          // 目录用文件夹图标，与文件一眼可分。
+          var fileIcon = NS.icons.icon(attachment.kind === 'folder' ? 'folder' : 'file', 'chip-icon');
           if (fileIcon) { chip.appendChild(fileIcon); }
         }
         chip.appendChild(NS.dom.el('span', 'attachment-name', attachment.name));
@@ -1408,7 +1456,7 @@ export const composerClient = `
   }
 
   /** 草稿页收到拖入/粘贴的文件路径（同上）。 */
-  function addDraftPaths(paths, meta, draftId) {
+  function addDraftPaths(paths, meta, draftId, kind) {
     var target = draftId === undefined ? (state.draft ? state.draft.draftId : null) : draftId;
     if (!target || !paths || paths.length === 0) { return false; }
     var list = draftFiles[target] || (draftFiles[target] = []);
@@ -1420,9 +1468,10 @@ export const composerClient = `
       var m = labels[i] || {};
       var label = typeof m.name === 'string' && m.name ? m.name : basenameOf(p);
       // [CUSTOM- 行区间也存下来：同一性（路径 + 区间）要用它判断"这一段加过没有"。
+      // 'folder' 来自目录选择器，影响 chip 图标与点击行为。
       list.push({
-        id: 'file-' + Date.now() + '-' + i, kind: 'file', name: label, path: p,
-        lineStart: m.lineStart, lineEnd: m.lineEnd,
+        id: 'file-' + Date.now() + '-' + i, kind: kind === 'folder' ? 'folder' : 'file',
+        name: label, path: p, lineStart: m.lineStart, lineEnd: m.lineEnd,
       });
     }
     if (state.draft && state.draft.draftId === target) {

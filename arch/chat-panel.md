@@ -36,7 +36,7 @@
 
 | 文件 | 职责 | 何时改它 |
 |---|---|---|
-| `ChatViewProvider.ts` | **侧边栏 `vac-chat` 视图的注册者**，也是视图上**唯一**的 `onDidReceiveMessage` 注册者；同时持有编辑区主面板与一个多标签 `SideChatPanel`，负责主双面焦点同步和统一 dispose | 视图注册 / surface 归属 |
+| `ChatViewProvider.ts` | **侧边栏 `vac-chat` 视图的注册者**，也是视图上**唯一**的 `onDidReceiveMessage` 注册者；同时持有编辑区主面板与一个多标签 `SideChatPanel`，负责主双面焦点同步和统一 dispose；`reloadWebviews` 供灰屏自救 | 视图注册 / surface 归属 / 灰屏重载 |
 | `ChatPanelHost.ts` | 面板的扩展侧宿主：session/update → transcript，用户消息 → SessionManager；markdown 往返、链接白名单、附件。持有 `view` / `editor` / `side` 三个 surface；流式记录可广播，boot/focus/meta/sessionsChanged 按主/Side 定向 | 改面板行为 |
 | `ChatSurface.ts` | 把 `WebviewView` 与 `WebviewPanel` 归一化：`SurfaceKey = 'view' \| 'editor' \| 'side'`，统一 `visible` / `reveal` / `onDidDispose`；`panelSurface(panel, 'side')` 复用同一 adapter | 新增承载方式 |
 | `Outbox.ts` | **022 新增**。流式消息合帧队列：合并「队尾单条同 id 的 append」、首尾相接的 `appendText`（已含于队尾 append 则丢弃）、同条目 `toolUpdate` 后者胜，其余按 FIFO 原样发。顺序不变式 INV-A..E 见 §5.10；规则见 `arch/chat-performance.md`「长会话卡顿第二轮」 | 改合帧策略 / 新增消息类型 |
@@ -60,7 +60,7 @@
 | `html/index.ts` | `renderChatHtml(webview, nonce, surface = 'view')`：外壳 + 样式 + 标记 + 脚本。`surface` 变成 `<body class="surface-view\|surface-editor\|surface-side">`；Side 复用完整聊天骨架，来源横幅在 sessionHeader 与 messageArea 之间 | 装配顺序变更 |
 | `html/shell.ts` / `styles.ts` / `body.ts` | CSP 与文档外壳 / 全部 CSS / 静态标记 | UI 外观 |
 | `html/nonce.ts` | CSP nonce 生成 | — |
-| `html/client/modelOrder.ts` | `orderOption` 依据自定义模型顺序稳定重排 agent 已提供的模型、保留分组与未配置项相对顺序 | 自定义模型排序 |
+| `html/client/modelOrder.ts` | `orderOption` 依据自定义模型顺序稳定重排 agent 已提供的模型：内置项保持 agent 顺序在前，自定义模型按设置顺序追加在后，保留分组结构 | 自定义模型排序 |
 | `html/client/shortcuts.ts` | 当前 Chat webview 的快捷键匹配与分发：`fromEvent` 给设置录制器共用，`onKeyDown` 在 IME/浮层门控后调用 tab/scroll/composer；设置值由宿主 `shortcuts.ts` 规范化并经 `uiPrefs` 下发 | Chat 快捷键 |
 | `html/client/*.ts` | webview 内联客户端 JS，**每个模块是一个字符串**，统一挂到 `window.__vac`。构件：`dom` / `icons` / `links`（链接与文件 chip）/ `boot`（装配入口）/ `tabs` / `transcriptView` / `toolCallView`（记录区，见 §5.16+）/ `rail`（左侧引导条，§5.11）/ `scroll` + `perf`（滚动记忆与长任务看门狗，§5.10/§5.46）；`scroll` 还负责**内层滚动卡片的焦点门控与自动追尾**（§5.53）/ `times`（记录时刻，§5.29）/ `stickyUser`（置顶最近的用户消息，§5.25）/ `outline` + `contextMenu` + `sessionMenu` + `directoryMenu`（大纲与三个右键菜单，§5.9/§5.50）/ `detailPane`（右栏 Details 模式，§5.58）/ `mermaid`（懒加载 tiny、图表/原文切换、主题重渲染，§5.56）/ `permissionView` + `permissionDrawer`（权限卡与抽屉，§5.8/§5.35）/ `elicitationView`（表单，§5.33）/ `lightbox`（图片放大）/ `stateCard`（**连接状态卡**，§5.28）/ `composer`（输入卡，§5.32）/ `autoExpand`（新输出自动展开，按会话 + 卡片类型，2026-10-21）/ `tail`（消息面板自动追尾，2026-10-28，§5.54）/ `settingsPanel`（设置面板，2026-10-21）/ `agentMap`（子 agent 徽标与树面板，§5.57）/ `popover`（面板内非模态确认 / 输入浮层，2026-10-29；会话删除 / 关闭运行中 / 重命名 / 设置破坏性动作共用）。058 新增 `directoryMenu.ts`；097 新增 `lightbox.ts`；102 新增 `stickyUser.ts`；123 新增 `stateCard.ts`（它同时接管了原先散在 `sessionMenu.ts` 与 `boot.ts` 的空态文案和 Connect 按钮）；151 起 `composer.ts` 也接管**草稿页**的输入卡；152 起 `elicitationView.ts` 从"记录里的内联卡"改成**悬浮抽屉**（记录只留一行待答条） | 改前端交互 |
 

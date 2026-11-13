@@ -111,7 +111,7 @@ open，而 `openedLive` 在它 resolve 之后**强制聚焦**——重复点击�
 |---|---|
 | `createSession(agent, {cwd})` | 显式 cwd → 否则 `resolveDefaultCwd()` |
 | `loadSession` / `resumeSession` | 调用方给的 cwd → 否则**本地历史缓存里那条会话自己的 cwd** → 否则 `resolveDefaultCwd()` |
-| `resolveDefaultCwd()` | `vac.defaultWorkingDirectory`（**校验：必须是绝对路径且存在**，否则拒绝并记日志）→ 第一个工作区文件夹 → `process.cwd()` |
+| `resolveDefaultCwd()` | `vac.defaultWorkingDirectory`（**校验：必须是绝对路径且存在**，否则拒绝并记日志）→ **活动编辑器所在的 workspace folder** → **最后编辑过的 workspace folder**（编辑器区聊天面板激活时 `activeTextEditor` 为空）→ 第一个工作区文件夹 → `process.cwd()` |
 | 进程 spawn（`ensureConnected`） | 作为**偏好**传入；只影响首次 spawn，进程在会话间复用 |
 
 **一个被顺带修掉的现网 bug**：历史选择器展示的是 agent 侧 `session/list`（**跨目录**），

@@ -2,7 +2,7 @@
   "name": "vscode-acp-client",
   "displayName": "VAC - Agent Client for VS Code",
   "description": "Chat with Claude Code and Codex inside VS Code through the Agent Client Protocol (ACP): multi-session chat, permissions, forms, usage dashboard.",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "publisher": "zouv",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -132,6 +132,10 @@
         "title": "VAC: Show Protocol Traffic"
       },
       {
+        "command": "vac.reloadWebview",
+        "title": "VAC: Reload Chat Webview"
+      },
+      {
         "command": "vac.setMode",
         "title": "VAC: Set Agent Mode"
       },
@@ -258,6 +262,10 @@
           "when": "view == vac-chat"
         },
         {
+          "command": "vac.reloadWebview",
+          "when": "view == vac-chat"
+        },
+        {
           "command": "vac.restartAgent",
           "when": "view == vac-chat"
         },
@@ -380,7 +388,12 @@
         "vac.defaultWorkingDirectory": {
           "type": "string",
           "default": "",
-          "description": "Default working directory for agent sessions. Leave empty to use the current workspace folder."
+          "description": "Default working directory for agent sessions. Leave empty to use the workspace folder of the active editor (falling back to the first workspace folder)."
+        },
+        "vac.autoAddWorkspaceFolders": {
+          "type": "boolean",
+          "default": false,
+          "description": "When a new session starts, add the other workspace folders as additional working directories (the same mechanism as the '+' menu's Workspace directories). They appear as removable chips on the draft page. Off by default: the agent can only reach the session's working directory."
         },
         "vac.logTraffic": {
           "type": "boolean",

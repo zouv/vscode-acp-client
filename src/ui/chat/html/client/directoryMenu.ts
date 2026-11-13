@@ -287,6 +287,22 @@ export const directoryMenuClient = `
     if (draft && !draft.cwd && choices && choices.defaultCwd && NS.draft) {
       NS.draft.setCwd(draftId, choices.defaultCwd);
     }
+    // [CUSTOM- 2026-11-13] Multi-root workspaces: when vac.autoAddWorkspaceFolders
+    // is on, seed the OTHER workspace folders as this draft's additional roots.
+    // Once per draft only — the user can remove them, and we must not put them
+    // back on the next choices refresh. Existing user additions win.
+    if (draft && choices && choices.autoAddWorkspaceFolders === true && draft.autoDirsSeeded !== true) {
+      draft.autoDirsSeeded = true;
+      var existing = draft.additionalDirectories || [];
+      if (existing.length === 0 && NS.draft && NS.draft.setAdditionalDirectories) {
+        var folders = choices.workspaceFolders || [];
+        var others = [];
+        for (var i = 0; i < folders.length; i++) {
+          if (folders[i] !== draft.cwd) { others.push(folders[i]); }
+        }
+        if (others.length > 0) { NS.draft.setAdditionalDirectories(draftId, others); }
+      }
+    }
     if (open) { render(); }
   }
 

@@ -13,18 +13,18 @@
 
 ## 状态快照
 
-- **最近更新**：2026-11-12
-- **整体状态**：v1.15.0 已发布（GitHub Release 附 `vscode-acp-client-1.15.0.vsix`）：上下文用量 Tip（含双色圆环）、页签右键 New Session to the Right、New Session in This Folder 改为草稿、草稿页签拖拽排序、页签压缩。自动验证全绿；真机验收待做。
+- **最近更新**：2026-11-13
+- **整体状态**：v1.16.0 已发布（GitHub Release 附 `vscode-acp-client-1.16.0.vsix`）：Webview 灰屏自救命令、多根工作区默认 cwd 与 `vac.autoAddWorkspaceFolders`、Files or folders 支持目录、Custom models 行内箭头移除、模型菜单内置/自定义排序修正。自动验证全绿；真机验收待做。
 - **当前分支（必填）**：`main`；提交与 tag 已推送到 `origin/main`。
-- **最后验证状态**（2026-11-12，v1.15.0）：`typecheck` / `lint` / `check-webview-client`（39 个客户端模块）✅；unit **404 / 49 文件** ✅；真实宿主 **825 passing** ✅。适配器 fork：`lint` ✅，改动的两个 `_meta` 用例通过；该仓库另有 164 个既有的 Windows 路径/快照失败（stash 验证过与本次改动无关）。
+- **最后验证状态**（2026-11-13，v1.16.0）：`typecheck` / `lint` / `check-webview-client`（39 个客户端模块）✅；unit **407 / 49 文件** ✅；真实宿主 **832 passing** ✅。
 
 ## 当前任务（In Progress）
 
-- **v1.15.0 真机验收**（自动验证已过，按 `docs/03-验收清单.md` 与下列重点）：
-  1. 上下文 Tip：长会话看增长曲线与压缩 ▼；流式中反复开关不闪；深/浅色主题；`/compact` 运行中置灰；订阅账号看额度条、API Key 账号确认隐藏。
-  2. 圆环双色：需要先让本机适配器缓存刷新（`globalStorage/agents/` 删缓存或等 7 天），否则退回单色（不会报错）。
-  3. 页签：右键 New Session to the Right / in This Folder 只开草稿；草稿拖拽与"右侧插入"；十几个 tab 时压缩/隐藏标题/隐藏关闭的逐级降级。
-  4. 输入卡：多行草稿第一行输入 `/` 弹命令面板；选中命令保留其余行。
+- **v1.16.0 真机验收**（自动验证已过，按 `docs/03-验收清单.md` 与下列重点）：
+  1. `VAC: Reload Chat Webview`：模拟灰屏后只重建面板，agent 与在跑轮次不断；视图标题栏 `...` 菜单可达。
+  2. 多根工作区：在 B 目录编辑文件后新建会话，cwd 落到 B；`vac.autoAddWorkspaceFolders` 打开后草稿页出现其它根 chips，可删除且刷新后不回填。
+  3. 模型菜单：`Default (recommended)` 等内置项在前，自定义模型按设置顺序在后；Custom models 行内无上下按钮，手柄可聚焦并用 ↑/↓ 排序。
+  4. 输入卡 `+ → Files or folders`：Add folders… 可选目录，chip 为文件夹图标且不可点击打开；草稿首条消息带目录引用。
 - **待验收（最多 5 条）**：
   1. Chat 交互：Tail / Jump / 中键 / 卡片焦点 / Tab 五色 / 目录抽屉。
   2. Markdown / Mermaid / 代码高亮 / 两个搜索框 / Cards 大纲。
@@ -36,6 +36,12 @@
 ## 待归档暂存区（仅本轮未归档的完成项）
 
 - （无。）
+
+## 多根工作区（已实现）
+
+- 默认 cwd：`vac.defaultWorkingDirectory` → 活动编辑器所在 workspace folder → 最后编辑过的目录（编辑器区聊天面板激活时兜底）→ 第一个根。见 `SessionManager.resolveDefaultCwd` / `cwd.ts:preferredWorkspaceFolder`。
+- 新设置 `vac.autoAddWorkspaceFolders`（默认关）：草稿创建时把其它 workspace 文件夹种进 `additionalDirectories`，显示为可删除 chips；只种一次，用户删掉后不再回填。走的是既有 `--add-dir` 通道（与官方 Claude 扩展一致）。
+- 仍未做：历史缓存 / 磁盘补扫 / Agents 树仍只按第一个根扫描；如需聚合全部根，另做（见 ROADMAP/下一步）。
 
 ## 进行中（半成品 / 未提交）
 

@@ -141,6 +141,13 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
 
     'vac.showLog': () => getOutputChannel().show(),
     'vac.showTraffic': () => getTrafficChannel().show(),
+    // [CUSTOM- 2026-11-13] 灰屏自救：只重建 webview 文档，扩展宿主与 agent 进程不动，
+    // 正在跑的轮次不受影响（宿主状态会在新文档 ready 后全量重发）。
+    'vac.reloadWebview': () => {
+      if (chat.reloadWebviews() === 0) {
+        void vscode.window.showInformationMessage('VAC chat is not open.');
+      }
+    },
 
     'vac.setMode': async (modeId?: string) => {
       const id = sessions.getActiveSessionId();

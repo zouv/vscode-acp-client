@@ -3,7 +3,8 @@
 // 设置面板只重排 `vac.customModels`；agent 的内置模型顺序、分组结构都不归它管。
 // 因此这里只做「稳定的局部重排」：
 // · 只作用于 `category === 'model'` 的 select 选项；
-// · 自定义模型排在对应位置（按设置列表顺序），不在设置列表里的模型保持 agent 原顺序；
+// · agent 内置模型（不在设置列表里）保持 agent 原顺序、排在前面；
+// · 自定义模型按设置列表顺序排在它们后面（适配器也是把 extraModels 追加在内置模型之后）；
 // · 分组条目（`entry.options`）不被摊平或跨组搬动，只在组内重排 —— 分组语义不破；
 // · 设置里有、agent 当前候选里没有的 id 直接忽略（不凭空造菜单项）。
 export const modelOrderClient = `
@@ -33,16 +34,17 @@ export const modelOrderClient = `
     return false;
   }
 
+  /** 未配置的（agent 内置）返回 -1：它们保持原顺序并排在有 rank 的自定义模型前面。 */
   function rankOf(ranks, value) {
     var key = String(value);
-    return Object.prototype.hasOwnProperty.call(ranks, key) ? ranks[key] : Number.MAX_SAFE_INTEGER;
+    return Object.prototype.hasOwnProperty.call(ranks, key) ? ranks[key] : -1;
   }
 
   function isGroup(entry) {
     return !!entry && Object.prototype.toString.call(entry.options) === '[object Array]';
   }
 
-  /** 稳定排序：有 rank 的按 rank，没 rank 的保持原相对顺序并排在后面。 */
+  /** 稳定排序：内置模型保持原相对顺序在前，自定义模型按 rank 排在后面。 */
   function sortEntries(entries, ranks) {
     var indexed = [];
     for (var i = 0; i < entries.length; i++) { indexed.push({ entry: entries[i], index: i }); }

@@ -160,6 +160,11 @@ chip 加 —— 真链接给代码图标会误导）。实测：`caretTop 85 / c
   宿主的 `attachments` 回复一到，`+` 自己变 `×`（pitfall #19 的老规矩）。
 - **点 `+` 的路径**：会话页发 `attachPath`（新增 `meta`，与 `paths` 下标平行，带显示名与行区间）；
   草稿页走 193 的本地列表（`addDraftPaths(paths, meta)`）—— 草稿没有会话，会话作用域的消息会被宿主丢掉。
+- **`+` → Files or folders（2026-11-13）**：二级菜单分 **Add files… / Add folders…** 两次发
+  `pickFiles {kind}`（Windows 上同一个系统对话框不能既选文件又选目录，同时置两个标志会让文件选择
+  退化成目录选择）。目录以 `Attachment.kind: 'folder'` 经 `attachPath.meta` / `createDraftAndSend.pathMeta`
+  一路带上；chip 用文件夹图标且**不挂 `data-path`**（对目录 `openTextDocument` 会失败），发送时仍是
+  `resource_link`。
 - **点 `×`**：会话页 `detachFile`；草稿页就地删本地那份。
 - **tag 本体可点**（`data-path` → 既有的 `openFile` 通道，与记录里的文件 chip 一致）。
 - **行区间**：`readActiveFileFrom(editor)` 把 0 基行号换成 1 基，并处理"拖到下一行行首不算那一行"
