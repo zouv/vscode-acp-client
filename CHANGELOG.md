@@ -11,6 +11,11 @@
 
 ---
 
+## [1.16.1] - 2026-11-13
+
+### 修复
+- 修复设置面板写入 `vac.*` 配置时键被重复加上 section 前缀（如 `vac.vac.autoAddWorkspaceFolders`）导致 “not a registered configuration” 的问题；`inspect` / `update` / 清除层现在统一使用相对键，`vac.autoConnectOnOpen` 等既有设置一并修复。
+
 ## [1.16.0] - 2026-11-13
 
 ### 新增

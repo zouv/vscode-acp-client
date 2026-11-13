@@ -20,8 +20,18 @@ export const CONFIG_SETTING_KEYS: ReadonlySet<string> = new Set([
   'vac.agents',
 ]);
 
+/**
+ * [CUSTOM- 2026-11-13] VS Code scopes `getConfiguration('vac').inspect/update`
+ * keys to the section: passing the full key turns `vac.foo` into `vac.vac.foo`
+ * ("not a registered configuration"). Our setting items and the global config
+ * file use full keys, so translate at the VS Code API boundary only.
+ */
+export function configurationKey(key: string): string {
+  return key.startsWith('vac.') ? key.slice('vac.'.length) : key;
+}
+
 export function resolveSetting(key: string, defaultScope: 'global' | 'ide'): SettingSource {
-  const inspect = vscode.workspace.getConfiguration('vac').inspect(key);
+  const inspect = vscode.workspace.getConfiguration('vac').inspect(configurationKey(key));
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const layers: SettingLayerInfo[] = [
     {
@@ -55,7 +65,7 @@ export async function writeSetting(key: string, value: unknown, target: SettingW
     throw new Error('Workspace settings need an open folder.');
   }
   await vscode.workspace.getConfiguration('vac').update(
-    key,
+    configurationKey(key),
     value,
     target === 'workspace' ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global,
   );
@@ -70,7 +80,7 @@ export async function clearSettingLayer(
     return;
   }
   await vscode.workspace.getConfiguration('vac').update(
-    key,
+    configurationKey(key),
     undefined,
     layer === 'workspace' ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global,
   );

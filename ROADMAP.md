@@ -38,6 +38,7 @@ Recently used 条数可配、tab/目录提示分色、Markdown 渲染预设。�
 **v1.14.1（2026-11-10）**：Mermaid 稳定性与页签拖拽修复——修复图表/原文切换与双击工具栏空白导致的 webview 渲染进程崩溃（灰屏），Diagram/Source 固定靠右；重启后待恢复页签可拖拽、其余页签可插入其排序；Agents 徽标移到模型选择器右侧。明细见 `CHANGELOG [1.14.1]`。
 **v1.15.0（2026-11-12）**：上下文用量 Tip（点圆环弹出图表：增长曲线 / 本轮 token 构成 / 费用 / 额度 / `/compact` 与 Dashboard 入口，圆环按提示与输出双色）、页签右键「New Session to the Right」、New Session in This Folder 改为预填目录的草稿、草稿页签可拖拽排序、页签多时按浏览器方式压缩宽度。明细见 `CHANGELOG [1.15.0]`。
 **v1.16.0（2026-11-13）**：Webview 灰屏自救命令（只重建面板，不动扩展宿主与在跑轮次）、多根工作区默认 cwd 跟随活动编辑器 + `vac.autoAddWorkspaceFolders`（默认关）、输入卡 Files or folders 支持目录、Custom models 移除行内上下按钮并保留手柄键盘排序、模型菜单内置项与自定义模型顺序修正。明细见 `CHANGELOG [1.16.0]`。
+**v1.16.1（2026-11-13）**：修复设置面板写入 `vac.*` 配置时键被重复加 section 前缀（“not a registered configuration”）。明细见 `CHANGELOG [1.16.1]`。
 
 ---
 

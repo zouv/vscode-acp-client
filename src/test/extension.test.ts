@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
+import { configurationKey, resolveSetting } from '../config/SettingScope';
+
 const EXTENSION_ID = 'zouv.vscode-acp-client';
 
 const COMMANDS = [
@@ -24,6 +26,7 @@ const COMMANDS = [
   'vac.restartAgent',
   'vac.logoutAgent',
   'vac.refreshDashboard',
+  'vac.reloadWebview',
 ];
 
 suite('extension', () => {
@@ -49,11 +52,22 @@ suite('extension', () => {
 
   test('declares the documented settings', () => {
     const config = vscode.workspace.getConfiguration('vac');
-    for (const key of ['agents', 'autoApprovePermissions', 'defaultWorkingDirectory', 'logTraffic']) {
+    for (const key of ['agents', 'autoApprovePermissions', 'defaultWorkingDirectory', 'autoAddWorkspaceFolders', 'logTraffic']) {
       assert.notStrictEqual(config.get(key), undefined, `vac.${key} has no default`);
     }
     const agents = config.get<Record<string, { command: string }>>('agents') ?? {};
     assert.ok(agents['Claude Code'], 'Claude Code is not configured by default');
     assert.ok(agents['Codex CLI'], 'Codex CLI is not configured by default');
+  });
+
+  // [CUSTOM- 2026-11-13] Regression: `getConfiguration('vac').inspect/update`
+  // prefixes the section itself, so passing the full key produced
+  // `vac.vac.autoAddWorkspaceFolders` ("not a registered configuration").
+  test('setting panel keys are scoped to the vac section exactly once', () => {
+    assert.strictEqual(configurationKey('vac.autoAddWorkspaceFolders'), 'autoAddWorkspaceFolders');
+    assert.strictEqual(configurationKey('agents'), 'agents');
+    const source = resolveSetting('vac.autoAddWorkspaceFolders', 'ide');
+    const defaultLayer = source.layers.find(layer => layer.layer === 'default');
+    assert.strictEqual(defaultLayer?.value, false, 'the package.json default is visible (no double prefix)');
   });
 });

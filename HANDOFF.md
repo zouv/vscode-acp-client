@@ -14,13 +14,14 @@
 ## 状态快照
 
 - **最近更新**：2026-11-13
-- **整体状态**：v1.16.0 已发布（GitHub Release 附 `vscode-acp-client-1.16.0.vsix`）：Webview 灰屏自救命令、多根工作区默认 cwd 与 `vac.autoAddWorkspaceFolders`、Files or folders 支持目录、Custom models 行内箭头移除、模型菜单内置/自定义排序修正。自动验证全绿；真机验收待做。
+- **整体状态**：v1.16.1 已发布（GitHub Release 附 `vscode-acp-client-1.16.1.vsix`，修复设置面板写入 `vac.*` 时重复加 section 前缀的问题）。v1.16.0 的 Webview 灰屏自救、多根工作区、目录附件、模型菜单排序等功能不变；真机验收待做。
 - **当前分支（必填）**：`main`；提交与 tag 已推送到 `origin/main`。
-- **最后验证状态**（2026-11-13，v1.16.0）：`typecheck` / `lint` / `check-webview-client`（39 个客户端模块）✅；unit **407 / 49 文件** ✅；真实宿主 **832 passing** ✅。
+- **最后验证状态**（2026-11-13，v1.16.1）：`typecheck` / `lint` / `check-webview-client`（39 个客户端模块）✅；unit **407 / 49 文件** ✅；真实宿主 **833 passing** ✅。
 
 ## 当前任务（In Progress）
 
-- **v1.16.0 真机验收**（自动验证已过，按 `docs/03-验收清单.md` 与下列重点）：
+- **v1.16.1 真机验收**（自动验证已过，按 `docs/03-验收清单.md` 与下列重点）：
+  0. 设置 → General → Add other workspace folders：勾选后不再报 “not a registered configuration”，并写入 User Settings；`vac.autoConnectOnOpen` 等旧设置同样可写。
   1. `VAC: Reload Chat Webview`：模拟灰屏后只重建面板，agent 与在跑轮次不断；视图标题栏 `...` 菜单可达。
   2. 多根工作区：在 B 目录编辑文件后新建会话，cwd 落到 B；`vac.autoAddWorkspaceFolders` 打开后草稿页出现其它根 chips，可删除且刷新后不回填。
   3. 模型菜单：`Default (recommended)` 等内置项在前，自定义模型按设置顺序在后；Custom models 行内无上下按钮，手柄可聚焦并用 ↑/↓ 排序。
