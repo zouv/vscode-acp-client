@@ -409,6 +409,9 @@ export class TranscriptStore {
       description?: string | null;
       state?: SubagentEntry['state'];
       canCancel?: boolean;
+      /** Whether THIS update carried the labels (an announcement), as opposed
+       *  to them being backfilled from the caller's own registry. */
+      announced?: boolean;
     },
   ): { entry: SubagentEntry; created: boolean } | null {
     const t = this.sessions.get(sessionId);
@@ -424,6 +427,16 @@ export class TranscriptStore {
       t.touched = ++this.clock;
       return { entry: existing, created: false };
     }
+    // [CUSTOM- A state-only patch (the replay's end-of-history sweep) must not
+    // resurrect a card the 500-entry cap already evicted: it would land at the
+    // bottom of the transcript, far from where the child ran, and without the
+    // title its announcement carried ("Sub-agent · unnamed"). Only an update that
+    // announces the child or shows it working creates a card — labels backfilled
+    // by the caller do not count as an announcement.
+    const announced = update.announced
+      ?? (typeof update.title === 'string' || typeof update.description === 'string');
+    const active = update.state === 'running' || update.state === 'requires_action';
+    if (!announced && !active && update.canCancel !== true) { return null; }
     const entry = this.append<SubagentEntry>(sessionId, s => ({
       id: this.nextEntryId(s),
       kind: 'subagent',

@@ -14,18 +14,19 @@
 ## 状态快照
 
 - **最近更新**：2026-11-13
-- **整体状态**：v1.16.1 已发布（GitHub Release 附 `vscode-acp-client-1.16.1.vsix`，修复设置面板写入 `vac.*` 时重复加 section 前缀的问题）。v1.16.0 的 Webview 灰屏自救、多根工作区、目录附件、模型菜单排序等功能不变；真机验收待做。
-- **当前分支（必填）**：`main`；提交与 tag 已推送到 `origin/main`。
-- **最后验证状态**（2026-11-13，v1.16.1）：`typecheck` / `lint` / `check-webview-client`（39 个客户端模块）✅；unit **407 / 49 文件** ✅；真实宿主 **833 passing** ✅。
+- **整体状态**：v1.16.2 已发布（GitHub Release 附 `vscode-acp-client-1.16.2.vsix`），修复重开长会话时记录区底部堆出成片 `Sub-agent · unnamed` / Idle 卡片的问题。v1.16.1 的设置面板 `vac.*` 重复前缀修复、v1.16.0 的 Webview 灰屏自救、多根工作区、目录附件、模型菜单排序等功能不变；真机验收待做。
+- **当前分支（必填）**：`main`；v1.16.2 发布提交与 tag 由本轮发布流程推送。
+- **最后验证状态**（2026-11-13，v1.16.2）：`typecheck` / `lint` / `check-webview-client`（39 个客户端模块）✅；unit **409 / 49 文件** ✅；真实宿主 **834 passing** ✅；`npm run vsix` 打包成功（`release/vscode-acp-client-1.16.2.vsix`）。
 
 ## 当前任务（In Progress）
 
-- **v1.16.1 真机验收**（自动验证已过，按 `docs/03-验收清单.md` 与下列重点）：
+- **v1.16.1 / v1.16.2 真机验收**（自动验证已过，按 `docs/03-验收清单.md` 与下列重点）：
   0. 设置 → General → Add other workspace folders：勾选后不再报 “not a registered configuration”，并写入 User Settings；`vac.autoConnectOnOpen` 等旧设置同样可写。
   1. `VAC: Reload Chat Webview`：模拟灰屏后只重建面板，agent 与在跑轮次不断；视图标题栏 `...` 菜单可达。
   2. 多根工作区：在 B 目录编辑文件后新建会话，cwd 落到 B；`vac.autoAddWorkspaceFolders` 打开后草稿页出现其它根 chips，可删除且刷新后不回填。
   3. 模型菜单：`Default (recommended)` 等内置项在前，自定义模型按设置顺序在后；Custom models 行内无上下按钮，手柄可聚焦并用 ↑/↓ 排序。
   4. 输入卡 `+ → Files or folders`：Add folders… 可选目录，chip 为文件夹图标且不可点击打开；草稿首条消息带目录引用。
+  5. Sub-agent 卡片复活修复：重开历史长会话（如 `0e9ecf39-a848-408a-98df-cba1bac4b5ca`），记录区底部不应再出现成片 `Sub-agent · unnamed` / Idle 卡；仍在跑的 sub-agent 仍应带标题显示。
 - **待验收（最多 5 条）**：
   1. Chat 交互：Tail / Jump / 中键 / 卡片焦点 / Tab 五色 / 目录抽屉。
   2. Markdown / Mermaid / 代码高亮 / 两个搜索框 / Cards 大纲。
@@ -54,7 +55,7 @@
 
 ## 下一步（Next Steps）
 
-1. `npm run dev:host`，按「当前任务」的 4 条重点做真机验收。
+1. `npm run dev:host`，按「当前任务」的 5 条重点做真机验收。
 2. 验收发现问题时在 `CHANGELOG.md` 的 `[未发布]` 记录修复并补测试。
 3. 继续 `ROADMAP.md` 的 P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
 

@@ -6484,6 +6484,43 @@ suite('chat panel: sub-agent child sessions', () => {
     assert.strictEqual(cards(harness).length, 1, 'still exactly one card');
   });
 
+  // [CUSTOM- 重现用户现场：长会话回放会把 500 条窗口外的卡片挤掉，回放结尾
+  // 再对每个子 agent 发一遍只带 state 的更新 —— 不能因此把卡片「复活」成一堆
+  // 无标题的 idle 卡（截图中会话底部那一片 Sub-agent · unnamed）。
+  test('the end-of-replay state sweep does not recreate an evicted card', async () => {
+    const { harness } = harnessWithManager();
+    announce(harness, 'child-1');
+    await waitFor(() => cards(harness).length === 1, 'the first card');
+    for (let i = 0; i < 500; i++) {
+      harness.handler.handleUpdate({
+        sessionId: 'parent',
+        update: {
+          sessionUpdate: 'tool_call', toolCallId: `t${i}`, title: 'Read', kind: 'read',
+          status: 'completed', content: [],
+        },
+      } as never);
+    }
+    harness.surface.sent.length = 0;
+    harness.handler.handleUpdate({
+      sessionId: 'parent',
+      update: { sessionUpdate: 'subagent_update', sessionId: 'child-1', state: { state: 'idle' } },
+    } as never);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.strictEqual(cards(harness).length, 0, 'an evicted card is not recreated by a state-only sweep');
+
+    // A child that is still working is shown again — with the labels the agent
+    // map remembered from the announcement.
+    harness.handler.handleUpdate({
+      sessionId: 'parent',
+      update: {
+        sessionUpdate: 'subagent_update', sessionId: 'child-1',
+        capabilities: { cancel: {} }, state: { state: 'running' },
+      },
+    } as never);
+    await waitFor(() => cards(harness).length === 1, 'the working child to be shown again');
+    assert.strictEqual(cards(harness)[0].title, 'story_editor');
+  });
+
   test('cancelSubagent cancels exactly that child session', async () => {
     const { harness, manager } = harnessWithManager();
     announce(harness, 'child-1');

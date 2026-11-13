@@ -46,3 +46,35 @@ describe('prose merge isolation by sub-agent origin', () => {
     expect(childThought?.origin).toBe('child-1');
   });
 });
+
+describe('sub-agent cards and the entry cap', () => {
+  // The replay of a long session announces each child, then sweeps every child
+  // with state-only updates at the end. If the 500-entry cap evicted a card in
+  // between, those sweeps used to recreate it at the bottom of the transcript —
+  // a stack of anonymous "Sub-agent · unnamed" cards after reopening a session.
+  it('does not resurrect a card evicted by the cap from a state-only update', () => {
+    const transcripts = store();
+    transcripts.ensureSession('parent', 'Claude Code');
+    const announced = transcripts.upsertSubagent('parent', {
+      subagentSessionId: 'child-1', title: 'Explore the repo', state: 'running',
+    });
+    expect(announced?.created).toBe(true);
+
+    for (let i = 0; i < 500; i++) { transcripts.appendUser('parent', `message ${i}`); }
+    expect(transcripts.snapshot('parent')!.entries.some(e => e.kind === 'subagent')).toBe(false);
+
+    const sweep = transcripts.upsertSubagent('parent', { subagentSessionId: 'child-1', state: 'idle' });
+    expect(sweep).toBeNull();
+    expect(transcripts.snapshot('parent')!.entries.some(e => e.kind === 'subagent')).toBe(false);
+  });
+
+  it('still creates a card for a child that is working, even without labels', () => {
+    const transcripts = store();
+    transcripts.ensureSession('parent', 'Claude Code');
+    const result = transcripts.upsertSubagent('parent', {
+      subagentSessionId: 'child-1', state: 'running',
+    });
+    expect(result?.created).toBe(true);
+    expect(result?.entry.state).toBe('running');
+  });
+});

@@ -112,7 +112,7 @@
 | 权限/表单归属（子会话） | `PermissionBridge.setSessionResolver` / `ElicitationBridge.setSessionResolver` + `ChatPanelHost` 构造器注册 | `Pending` 同时保留原始 id（撤销/取消用）与 `panelSessionId`（记录锚点）；`cancelSession` / `hasPendingFor` 双匹配 |
 | 面板内确认/输入浮层 | `html/client/popover.ts` 的 `NS.popover.confirm` / `prompt` | 非模态；删除/关闭运行中/重命名/设置破坏性动作共用；`settingAction` 的 `confirm` 文案由宿主 `SettingItem` 提供 |
 | 表单字段扁平化 | `ElicitationBridge.fieldsOf` / `optionOf` | JSON Schema → 五种字段；选项的 description 与 preview 都保留 |
-| sub-agent 子会话 / 取消子会话 | `ChatPanelHost.onSessionUpdate` 的 `subagent_update` 分支 + `subagentParents`（**仅** `SUBAGENT_TRANSCRIPT_KINDS` 内的 tool_call / message / thought / subagent_update 别名回父会话，子会话的 usage/plan/标题/模式/配置一律丢弃）、`SessionManager.cancelSubagent` | draft 能力；卡片由 `TranscriptStore.upsertSubagent` 建；并行子会话的正文字段按 `origin` 隔离合帧 |
+| sub-agent 子会话 / 取消子会话 | `ChatPanelHost.onSessionUpdate` 的 `subagent_update` 分支 + `subagentParents`（**仅** `SUBAGENT_TRANSCRIPT_KINDS` 内的 tool_call / message / thought / subagent_update 别名回父会话，子会话的 usage/plan/标题/模式/配置一律丢弃）、`SessionManager.cancelSubagent` | draft 能力；卡片由 `TranscriptStore.upsertSubagent` 建；并行子会话的正文字段按 `origin` 隔离合帧；**只带 state 的更新不得复活被 500 条窗口淘汰的卡**（标签回填自 Agent map，`announced:false`），否则重开长会话底部堆出 `Sub-agent · unnamed` |
 
 ### 2.7 侧边栏树（`src/ui/SessionTreeProvider.ts`）
 

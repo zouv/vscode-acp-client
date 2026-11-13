@@ -181,6 +181,13 @@
 **2026-11-09 起**：子会话的 `usage_update` / `tool_call(_update)` 在**被丢弃之前**还会喂给
 Agent map 注册表（§5.57）——那只用于徽标与树面板，不改变上面任何一条转录规则。
 
+**卡片与 500 条记录窗口**（2026-11-13）：`TranscriptStore.upsertSubagent` 只在更新**本身携带身份**
+（`title` / `description`，即宣告）或子 agent 仍在工作（running / requires_action / 可取消）时新建卡片；
+只带 state 的尾部扫描（回放的 `finish` / `currentStates`）**不得把已被 `MAX_ENTRIES_PER_SESSION`
+淘汰的卡「复活」到记录末尾**——否则重开长会话会在底部堆出一片 `Sub-agent · unnamed` / Idle 卡。
+确实需要重建（子 agent 仍然活着）时，标签由 `AgentMapStore` 保留的宣告信息回填，并用 `announced: false`
+明确告诉 store「这次更新本身不是宣告」。
+
 ### 5.7 主双面与临时 Side surface（CUSTOM-20260924-019）
 
 **为什么必须新建面板**：侧边栏的 `webview` 视图**无法被拖进编辑区**，VS Code 也没有对应的声明式开关；

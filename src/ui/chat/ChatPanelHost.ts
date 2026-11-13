@@ -2415,12 +2415,20 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           lastToolName: typeof mapMeta?.lastToolName === 'string' ? mapMeta.lastToolName : undefined,
         });
         this.agentMapSoon(this.rootSubagentSession(outerSessionId));
+        // [CUSTOM- A state-only update can arrive after the 500-entry cap evicted
+        // the card its announcement created. The agent map still remembers the
+        // labels, so a card that is created now (the child still runs) is not
+        // anonymous.
+        const known = this.agentMaps.get(this.rootSubagentSession(outerSessionId), childId);
+        const hasLabels = typeof data.title === 'string' || typeof data.description === 'string';
         const result = this.transcripts.upsertSubagent(sessionId, {
           subagentSessionId: childId,
-          title: typeof data.title === 'string' ? data.title : undefined,
-          description: typeof data.description === 'string' ? data.description : undefined,
+          title: typeof data.title === 'string' ? data.title : known?.title,
+          description: typeof data.description === 'string' ? data.description : known?.description,
           state,
           canCancel: !!caps && typeof caps === 'object' && caps.cancel !== undefined && caps.cancel !== null,
+          // Backfilled labels must not make a state-only sweep look like an announcement.
+          announced: hasLabels,
         });
         if (!result) { return; }
         if (result.created) {
