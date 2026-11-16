@@ -167,7 +167,7 @@ const SCOPED_UI_PREF_KEYS = [
 const MAIN_SCOPED_UI_PREF_KEYS = [...SCOPED_UI_PREF_KEYS, 'tabOrder'] as const;
 const GLOBAL_UI_PREF_KEYS = [
   'autoExpandKinds', 'autoExpandToolHeight', 'autoExpandThoughtHeight',
-  'flatTools', 'composerMaxWidth', 'inputMaxHeight', 'sendKey',
+  'flatTools', 'findAllCards', 'composerMaxWidth', 'inputMaxHeight', 'sendKey',
   'defaultModelByAgent', 'defaultEffortByAgent', 'recentDirectoryLimit', 'historyDisplayLimit',
   'markdownStyle',
   'shortcuts',
@@ -215,6 +215,7 @@ function defaultPanelUiPrefs(): UiPrefs {
     autoExpandToolHeight: 360,
     autoExpandThoughtHeight: 240,
     flatTools: false,
+    findAllCards: false,
     composerMaxWidth: 720,
     inputMaxHeight: 320,
     sendKey: 'enter',
@@ -315,7 +316,7 @@ const SIDE_MESSAGE_TYPES = new Set([
   'ready', 'sendPrompt', 'cancelTurn', 'cancelSubagent',
   'requestAgentMap', 'stopAgent',
   'permissionAnswer', 'elicitationAnswer', 'renderMarkdown',
-  'copy', 'clientLog', 'openLink', 'openFile', 'setUiPref',
+  'copy', 'clientLog', 'openLink', 'openFile', 'openDirectory', 'setUiPref',
   'detachFile', 'attachPath', 'attachImage', 'setMode', 'setModel',
   'setConfigOption', 'needToolView', 'resyncEntry', 'openTerminal', 'sideFocus', 'sideClose',
 ]);
@@ -1300,8 +1301,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           // [CUSTOM- 草稿页攒下的附件（草稿还没有会话，客户端先本地拿着）。
           (msg as { images?: Array<{ id: string; name: string; mimeType: string; dataUrl: string }> }).images ?? [],
           (msg as { paths?: string[] }).paths ?? [],
-          // [CUSTOM- 与 paths 平行：标记草稿里哪些引用是目录。
-          (msg as { pathMeta?: Array<{ kind?: 'folder' }> }).pathMeta ?? [],
+          // [CUSTOM- 与 paths 平行：标记草稿里哪些引用是目录，以及显示名/行区间。
+          (msg as { pathMeta?: Array<{ kind?: 'folder'; name?: string; lineStart?: number; lineEnd?: number }> }).pathMeta ?? [],
           // [CUSTOM- 草稿页显式勾选的额外根目录（多根工作区）。
           (msg as { additionalDirectories?: string[] }).additionalDirectories ?? [],
           from,
@@ -1429,6 +1430,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           : clampExpandHeight(autoExpandThoughtHeight, 240);
         if (thoughtHeight !== undefined) { next.autoExpandThoughtHeight = thoughtHeight; }
         if (flatTools !== undefined) { next.flatTools = flatTools === true; }
+        // [CUSTOM- 2026-11-16] 记录区搜索的 All cards 勾选：全局偏好（Main/Side 共用）。
+        const findAllCards = (msg as { findAllCards?: unknown }).findAllCards;
+        if (findAllCards !== undefined) { next.findAllCards = findAllCards === true; }
         const width = composerMaxWidth === undefined
           ? previous.composerMaxWidth
           : clampNumber(composerMaxWidth, 360, 1200, 720);
@@ -1525,10 +1529,21 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         );
         return;
       }
+      // [CUSTOM- 会话 tab 右键「Open working directory」：交给系统的文件管理器
+      // （与设置里的 Open log / agent cache 同一个出口）。路径没带或不存在时只记日志，
+      // 不去猜"用户到底想打开哪个目录"。
+      case 'openDirectory': {
+        const path = ((msg as { path?: unknown }).path ?? '').toString().trim();
+        if (!path) { return; }
+        void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path))
+          .then(undefined, (e: unknown) => {
+            log(`${LOG_PREFIX}: could not open directory ${path}: ${String(e)}`);
+          });
+        return;
+      }
       case 'executeCommand':
         log(`${LOG_PREFIX}: ignoring webview executeCommand (no allowlist yet)`);
         return;
-
       default:
         break;
     }
@@ -4560,8 +4575,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // [CUSTOM- 草稿页攒的附件：客户端本地拿着（草稿没有会话），随这条消息一起交上来。
     images: Array<{ id: string; name: string; mimeType: string; dataUrl: string }> = [],
     paths: string[] = [],
-    // [CUSTOM- 与 paths 平行：草稿页攒下的目录引用（kind: 'folder'）。
-    pathMeta: Array<{ kind?: 'folder' }> = [],
+    // [CUSTOM- 与 paths 平行：草稿页攒下的目录引用（kind: 'folder'）与显示名/行区间。
+    pathMeta: Array<{ kind?: 'folder'; name?: string; lineStart?: number; lineEnd?: number }> = [],
     // [CUSTOM- 草稿页显式勾选的额外根目录（多根工作区）。
     additionalDirectories: string[] = [],
     to: SurfaceKey = 'view',

@@ -482,9 +482,17 @@ export const bootClient = `
   }
 
   /** The first message was accepted: retire the tab (the session now exists). */
-  function resolveDraft(draftId) {
+  function resolveDraft(draftId, sessionId) {
     var draft = draftById(draftId);
-    if (draft) { drafts.splice(drafts.indexOf(draft), 1); }
+    if (draft) {
+      // [CUSTOM- 2026-11-16] 草稿可能被用户拖到中间；新会话必须继承那个位置，
+      // 否则第一次出现在 tabOrder 里时会被当"未知会话"追加到末尾（用户报的"又跳到最后"）。
+      // 必须在 drafts.splice **之前**算视觉位置。
+      if (sessionId && NS.tabs && NS.tabs.adoptDraftPosition) {
+        NS.tabs.adoptDraftPosition(draftId, sessionId);
+      }
+      drafts.splice(drafts.indexOf(draft), 1);
+    }
     if (focusedDraftId === draftId) { focusedDraftId = null; }
     // 'focus' normally arrived first (the host focuses the new session), which
     // already moved the composer to it — this is the safety net.
@@ -660,6 +668,8 @@ export const bootClient = `
         if (NS.shortcuts) { NS.shortcuts.applyPrefs(message); }
         // [CUSTOM- 历史抽屉的显示上限：设置面板改动后同步刷新已打开的列表。
         if (NS.sessionMenu && NS.sessionMenu.applyPrefs) { NS.sessionMenu.applyPrefs(message); }
+        // [CUSTOM- 记录区搜索的 "All cards" 勾选（跨面板持久化，新会话沿用）。
+        if (NS.find && NS.find.applyPrefs) { NS.find.applyPrefs(message); }
         applyMarkdownStyle(message.markdownStyle);
         break;
 
@@ -909,7 +919,8 @@ export const bootClient = `
         break;
 
       case 'draftResolved':
-        resolveDraft(message.draftId);
+        // [CUSTOM- 2026-11-16] 带上 sessionId：草稿的位置要转交给这个新会话。
+        resolveDraft(message.draftId, message.sessionId);
         break;
 
       // [CUSTOM- 草稿页的配置项/命令快照（回复 composer 发的 listDraftOptions）。
@@ -1258,6 +1269,9 @@ export const bootClient = `
     if (NS.popover) { NS.popover.install(); }
     // [CUSTOM- 图片点击放大（lightbox）。
     if (NS.lightbox) { NS.lightbox.install(); }
+    // [CUSTOM- 记录区搜索（Ctrl/Cmd+F）：Ctrl+F 打开、Enter/Shift+Enter 前后跳、
+    // 搜索结果用 CSS Custom Highlight 上色。
+    if (NS.find) { NS.find.init(); }
     // [CUSTOM- 最近一条用户消息悬浮置顶。
     if (NS.stickyUser) { NS.stickyUser.init(); }
     // [CUSTOM-

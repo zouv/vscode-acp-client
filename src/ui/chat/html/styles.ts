@@ -1046,6 +1046,51 @@ export function styles(): string {
   }
   .jump-latest:hover { background: var(--vscode-button-hoverBackground); }
 
+  /* [CUSTOM- 2026-11-16] 记录区搜索条（Ctrl/Cmd+F）。悬在消息列右上角，
+     与 .jump-latest 同为绝对定位覆盖层；z-index 高于置顶卡与 jump 按钮。 */
+  .find-bar {
+    position: absolute; top: 6px; right: calc(var(--vac-scrollbar-w, 0px) + 10px);
+    display: flex; align-items: center; gap: 4px;
+    padding: 4px 6px; border-radius: 4px;
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+    border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+    box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
+    font-size: 0.9em; z-index: 8;
+  }
+  .find-input {
+    width: 180px; min-width: 90px;
+    padding: 2px 5px; border-radius: 2px;
+    color: var(--vscode-input-foreground);
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, transparent);
+    font-family: inherit; font-size: inherit;
+  }
+  .find-input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+  .find-count {
+    min-width: 54px; text-align: right; opacity: 0.8;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .find-scope {
+    display: flex; align-items: center; gap: 3px;
+    white-space: nowrap; cursor: pointer; opacity: 0.9;
+  }
+  .find-scope input { margin: 0; accent-color: var(--vscode-button-background); }
+  .find-btn {
+    padding: 0 4px; border: none; border-radius: 3px;
+    background: transparent; color: inherit; cursor: pointer;
+    font-family: inherit; font-size: 1em; line-height: 1.4;
+  }
+  .find-btn:hover { background: var(--vscode-toolbar-hoverBackground); }
+  /* 高亮走 CSS Custom Highlight API（findBar.ts 里注册的伪名）；不往 DOM 里插节点，
+     因此流式渲染的重建不会把它们抹掉。当前命中用 find-current 覆盖普通命中。 */
+  ::highlight(vac-find) {
+    background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+  }
+  ::highlight(vac-find-current) {
+    background-color: var(--vscode-editor-findMatchBackground, rgba(168, 172, 148, 1));
+    color: var(--vscode-editor-findMatchForeground, #000);
+  }
+
   /* [CUSTOM- 空态居中：它原来是 #messages 的**兄弟**，而 .message-area 是 flex 行、
      #messages 是 flex: 1 —— 自由空间被它吃光，margin: auto 没有可分配的余量可分，
      于是空态被顶到最右边（面板越宽越明显；窄侧边栏里看不出来，所以一直没被发现）。
@@ -1408,7 +1453,7 @@ export function styles(): string {
     bottom: var(--vac-composer-h, 0px);
     width: min(100% - 16px, var(--vac-composer-max, 720px));
     max-height: min(70vh, 560px);
-    z-index: 9;                       /* 高于底栏（8），低于右键菜单（60）与图片浮层（90） */
+    z-index: 9;                       /* 高于底栏（8），低于右键菜单（100）与图片浮层（90） */
     display: flex; flex-direction: column;
     background: var(--vscode-editor-background);
     border: 1px solid var(--vscode-inputValidation-infoBorder, var(--vscode-panel-border));
@@ -3168,7 +3213,9 @@ export function styles(): string {
      取代 Chromium 的原生菜单：它提供的 Cut/Paste 在这里没有意义，而 Copy 复制的是
      **选区**（右键时通常没有选区）⇒ 表现为"点了没反应"。位置由 JS 按光标与视口边界算。 */
   .ctx-menu {
-    position: fixed; z-index: 60;
+    /* [CUSTOM- 2026-11-17] 必须高于图片放大层（90）与通用浮层（95）：右键菜单在
+       大图上是**唯一**的「Copy image」入口，压在浮层下面就会表现成"右键没反应"。 */
+    position: fixed; z-index: 100;
     min-width: 150px; padding: 3px 0;
     background: var(--vscode-menu-background, var(--vscode-dropdown-background));
     color: var(--vscode-menu-foreground, var(--vscode-dropdown-foreground));

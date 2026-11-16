@@ -393,7 +393,22 @@ export const composerClient = `
         } else {
           draftPaths.push(pending[i].path);
           // [CUSTOM- 与 paths 平行：目录引用要一路带到宿主（chip 图标 / 不可点击）。
-          draftPathMeta.push(pending[i].kind === 'folder' ? { kind: 'folder' } : {});
+          // [CUSTOM- 2026-11-17] 普通文件的**显示名与行区间**也必须带过去：草稿首条消息
+          // 以前只传 kind，宿主据 meta 重建附件时就把"引用文件的一段"退化成整个文件
+          // （用户报的"新建 Session 首条消息丢行区间"）。后续消息走 attachPath，那条路本来
+          // 就带 name/lineStart/lineEnd，所以第二个消息正常。
+          var pathMeta = {};
+          if (pending[i].kind === 'folder') {
+            // 目录引用与 attachPath 的目录分支保持同一形状（宿主自己取 basename 作显示名）。
+            pathMeta.kind = 'folder';
+          } else {
+            if (pending[i].name) { pathMeta.name = pending[i].name; }
+            if (pending[i].lineStart) {
+              pathMeta.lineStart = pending[i].lineStart;
+              pathMeta.lineEnd = pending[i].lineEnd || pending[i].lineStart;
+            }
+          }
+          draftPathMeta.push(pathMeta);
         }
       }
       NS.bridge.post({
@@ -766,6 +781,19 @@ export const composerClient = `
 
   // --- Slash commands ------------------------------------------------------
 
+  /**
+   * [CUSTOM- 命令 token 的结束位置：第一行里第一个空白（空格 / Tab）处。
+   * 命令只由 '/' 到第一个空白之间那段决定；**空白之后是正文/参数，不参与过滤**
+   * （2026-11-16 用户要求：光标右侧已有文字时不该把命令列表搅乱）。
+   */
+  function commandTokenEnd(line) {
+    for (var i = 1; i < line.length; i++) {
+      var code = line.charCodeAt(i);
+      if (code === 32 || code === 9) { return i; }
+    }
+    return line.length;
+  }
+
   function currentQuery() {
     var value = input.value;
     if (value.length === 0 || value.charAt(0) !== '/') { return null; }
@@ -779,10 +807,15 @@ export const composerClient = `
     if (typeof caret === 'number' && caret > 0 && value.slice(0, caret).indexOf('\\n') !== -1) {
       return null;
     }
+    // [CUSTOM- 2026-11-16] 命令 token 以空白为界。空白之后的文字（参数 / 旧正文）
+    // 不再参与过滤；光标已经越过 token 进入参数区时才收起列表。
+    var tokenEnd = commandTokenEnd(firstLine);
+    if (typeof caret === 'number' && caret > tokenEnd) { return null; }
     // 刚在第一行行首敲下 '/'：先给全部命令，别拿后面的旧文字当过滤词。
     if (typeof caret === 'number' && caret === 1) { return ''; }
-    if (firstLine.indexOf(' ') !== -1) { return null; }
-    return firstLine.slice(1).toLowerCase();
+    // 只取光标左侧的 token 部分：右侧同一 token 里的字符是"待保留的旧文字"。
+    var end = typeof caret === 'number' ? Math.min(caret, tokenEnd) : tokenEnd;
+    return firstLine.slice(1, end).toLowerCase();
   }
 
   function updateSlashPopup() {
@@ -843,14 +876,21 @@ export const composerClient = `
   function acceptSlash() {
     var cmd = state.slashMatches[state.slashIndex];
     if (!cmd) { hideSlash(); return; }
-    // [CUSTOM- 只替换第一行：面板允许在"第一行是 /query、下面还有草稿"时弹出
-    // （见 currentQuery），整段覆盖会把下面几行一起丢掉。
+    // [CUSTOM- 只替换第一行的**命令 token**：面板允许在"第一行是 /query、后面还有文字/
+    // 多行草稿"时弹出（见 currentQuery），整行覆盖会把同一行右侧与下面几行一起丢掉。
+    // [CUSTOM- 2026-11-16] token 以第一个空白为界：空白后的参数/正文原样保留
+    // （insertion 自带一个空格，所以从 tail 里去掉一个分隔空白，避免出现双空格）。
     var value = input.value;
     var insertion = '/' + cmd.name + ' ';
     if (value.charAt(0) === '/') {
       var lineEnd = value.indexOf('\\n');
-      var rest = lineEnd === -1 ? '' : value.slice(lineEnd);
-      input.value = insertion + rest;
+      var firstLine = lineEnd === -1 ? value : value.slice(0, lineEnd);
+      var restLines = lineEnd === -1 ? '' : value.slice(lineEnd);
+      var tokenEnd = commandTokenEnd(firstLine);
+      var tail = firstLine.slice(tokenEnd);
+      var first = tail.charCodeAt(0);
+      if (first === 32 || first === 9) { tail = tail.slice(1); }
+      input.value = insertion + tail + restLines;
       if (input.setSelectionRange) { input.setSelectionRange(insertion.length, insertion.length); }
     } else {
       input.value = insertion;

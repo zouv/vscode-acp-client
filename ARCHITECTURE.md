@@ -60,6 +60,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 打包 / 发布 | `scripts/build.mjs`、`.vscodeignore`、`package.json(scripts)` | 全部业务代码 | §6 |
 | 图标 / 品牌资源（侧边栏、插件徽标、编辑区标签页） | `scripts/make-icon.mjs`（唯一几何源）+ `resources/` + `package.json(icon, viewsContainers)` + `ui/chat/ChatEditorPanel.ts(iconPath)` | 全部业务代码 | §6 |
 | 记录区滚轮 / 中键被卡片内的滚动条打断 / 流式卡片不跟到最后一行 | `html/client/scroll.ts` 的 `setActive` / `reclaimActive`（左键焦点门控与失效回收）+ `nearestVertScroller`（只认 `INNER_SCROLL_SELECTOR`）/ `firstInnerScroller(card, skipCharts)`（标题栏兜底，跳过正文内嵌的 `.mermaid-chart`；只有点中滚动区本身才聚焦）/ `nearestHorizScroller`（独立横向几何）+ document `wheel`（capture / 非 passive；纵向按焦点路由、斜向按轴分流，纯横向 / Shift 放行）+ `pressLabel`（原生滚动条不参与聚焦）+ `guardMiddleAutoScroll` / `restoreMiddleGuard`（完整纵横候选链临时 `overflow:clip`）+ `flushTails` / `isLiveCard`（自动追尾）；样式 `.messages .scroll-active` 与自动展开单纵向视口（`styles.ts`） | core、协议 | §2.5 → `arch/chat-panel-state.md` §5.53 |
+| **记录区搜索**（Ctrl/Cmd+F、命中高亮、前后跳、All cards 范围） | `html/client/findBar.ts`（范围遍历 + CSS Custom Highlight API）+ `scroll.ts`(`jumpToOffset`) + `body.ts`(`#findBar`) + `styles.ts`(`.find-bar` / `::highlight`) + `protocol.ts`/`ChatPanelHost.ts`(`findAllCards` UI 偏好) | core、工具卡数据层 | §2.5 → `arch/chat-panel.md` §5.1 |
 | **记录区布局 / 观感**（折叠形状、占几行、有没有重复内容） | `scripts/preview-records.mjs`（真 Chromium 无头截图，**自己看，别推理**）＋ `html/styles.ts` | core、tree、协议代码 | §5 |
 
 > 定位优先级：**函数名 grep > 本表**。表过期时以代码为准并顺手订正本表。

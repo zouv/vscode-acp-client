@@ -162,6 +162,23 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
            仍在自己那层的中心 W/2，于是偏 S/2（240px 的侧栏就是 120px）。锚到列上，两者按
            构造是同一条中线。 -->
       <button id="jumpToLatest" class="jump-latest" hidden>↓ Jump to latest</button>
+      <!-- [CUSTOM- 2026-11-16] 记录区搜索条（Ctrl/Cmd+F）。悬在消息列右上角，
+           不随 #messages 滚动；默认只搜对话正文，勾上 All cards 才覆盖工具卡。 -->
+      <div id="findBar" class="find-bar" hidden role="search" aria-label="Find in messages">
+        <input id="findInput" class="find-input" type="text" placeholder="Find in messages..."
+               aria-label="Find in messages" spellcheck="false" autocomplete="off">
+        <span id="findCount" class="find-count" aria-live="polite"></span>
+        <label class="find-scope" title="Include tool cards and their output">
+          <input id="findAllCards" type="checkbox">
+          <span>All cards</span>
+        </label>
+        <button id="findPrev" class="find-btn" type="button" title="Previous match (Shift+Enter)"
+                aria-label="Previous match">↑</button>
+        <button id="findNext" class="find-btn" type="button" title="Next match (Enter)"
+                aria-label="Next match">↓</button>
+        <button id="findClose" class="find-btn" type="button" title="Close (Escape)"
+                aria-label="Close search">×</button>
+      </div>
     </div>
     <!-- [CUSTOM- 右侧常驻大纲栏：钉住模式下显示，是 .messages-column 的 flex 兄弟
          （103 前是 #messages 的兄弟——那段距离只差一层不占尺寸的包装）。

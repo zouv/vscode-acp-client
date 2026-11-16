@@ -1171,6 +1171,29 @@ export const scrollClient = `
   function isPinned() { return pinned; }
 
   /**
+   * [CUSTOM- 2026-11-16] Jump to an absolute scroll offset (record search).
+   *
+   * Same semantics as jumpTo(node) — the user is deliberately leaving the bottom,
+   * so Tail is cancelled and the "Jump to latest" affordance appears — but the
+   * target is a pixel offset because a find match is a Range, not an element.
+   */
+  function jumpToOffset(top) {
+    if (!container) { return; }
+    var target = Number(top);
+    if (!isFinite(target)) { return; }
+    var max = Math.max(0, container.scrollHeight - container.clientHeight);
+    if (target < 0) { target = 0; }
+    if (target > max) { target = max; }
+    cancelTail('scroll');
+    pinned = false;
+    showJump();
+    restoreTarget = null;
+    writeTop(target);
+    recompute();
+    logScrollState('jumpToOffset', true);
+  }
+
+  /**
    * [CUSTOM- Tail 的运行时开关（2026-10-28）。'immediate' 才是"用户点了按钮 ⇒ 立刻到底"；
    * 换会话时由 tail.setFocus 用 false 调进来，位置交给 restore（它可能记着用户读到的中间位置）。
    */
@@ -1325,6 +1348,8 @@ export const scrollClient = `
     jumpToLatest: jumpToLatest,
     jumpToTop: jumpToTop,
     jumpTo: jumpTo,
+    // [CUSTOM- 记录区搜索的命中位置是一个 Range，没有节点可交给 jumpTo。
+    jumpToOffset: jumpToOffset,
     isPinned: isPinned,
     // [CUSTOM- 几何写入方（输入卡 / 表单抽屉 / 权限抽屉）改完高度后喊一声。
     // 这三个变量都进 #messages 的 padding-bottom，是这个 bug 的第一嫌疑：它们变了而视口判定

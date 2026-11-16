@@ -559,6 +559,9 @@ export const sessionMenuClient = `
     query = '';
     if (searchEl) { searchEl.value = ''; }
     syncSearchClear();
+    // [CUSTOM- 2026-11-16] 打开历史列表即聚焦搜索框（与目录抽屉同一条交互规则）。
+    // 列表内容是异步回来的，焦点不需要等它。
+    if (searchEl && searchEl.focus) { searchEl.focus(); }
     // [CUSTOM- Ask the ADDRESS BAR for the filter's default directory. The
     // host cannot guess it: a draft's directory is client-local (058), and even for a
     // session it is the button up there — not the host's bookkeeping — that says which

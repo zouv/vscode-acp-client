@@ -13,26 +13,26 @@
 
 ## 状态快照
 
-- **最近更新**：2026-11-13
-- **整体状态**：v1.16.2 已发布（GitHub Release 附 `vscode-acp-client-1.16.2.vsix`），修复重开长会话时记录区底部堆出成片 `Sub-agent · unnamed` / Idle 卡片的问题。v1.16.1 的设置面板 `vac.*` 重复前缀修复、v1.16.0 的 Webview 灰屏自救、多根工作区、目录附件、模型菜单排序等功能不变；真机验收待做。
-- **当前分支（必填）**：`main`；v1.16.2 发布提交与 tag 由本轮发布流程推送。
-- **最后验证状态**（2026-11-13，v1.16.2）：`typecheck` / `lint` / `check-webview-client`（39 个客户端模块）✅；unit **409 / 49 文件** ✅；真实宿主 **834 passing** ✅；`npm run vsix` 打包成功（`release/vscode-acp-client-1.16.2.vsix`）。
+- **最近更新**：2026-11-16
+- **整体状态**：v1.17.0 已发布（GitHub Release 附 `vscode-acp-client-1.17.0.vsix`）。本轮包含记录区搜索、页签 Open working directory、草稿页签位置继承、图片右键复制、两个搜索框自动聚焦、斜杠命令 token 规则，以及草稿首条消息行区间修复；自动验证已过，**真机验收待做**。
+- **当前分支（必填）**：`main`（工作区改动未提交）。
+- **最后验证状态**（2026-11-17）：`typecheck` / `lint` / `check-webview-client`（40 个客户端模块）✅；unit **412 / 49 文件** ✅；真实宿主 **842 passing / 0 failing** ✅。另用真 Chromium（`preview-records` 生成的页面）验证了：Ctrl+F 打开/聚焦、默认范围 3 条 / All cards 4 条、CSS 高亮注册成功、两个抽屉打开即聚焦搜索框、图片放大层右键菜单在浮层之上（z-index 100）且 Copy image 能走到 ClipboardItem 写入。
 
 ## 当前任务（In Progress）
 
-- **v1.16.1 / v1.16.2 真机验收**（自动验证已过，按 `docs/03-验收清单.md` 与下列重点）：
-  0. 设置 → General → Add other workspace folders：勾选后不再报 “not a registered configuration”，并写入 User Settings；`vac.autoConnectOnOpen` 等旧设置同样可写。
-  1. `VAC: Reload Chat Webview`：模拟灰屏后只重建面板，agent 与在跑轮次不断；视图标题栏 `...` 菜单可达。
-  2. 多根工作区：在 B 目录编辑文件后新建会话，cwd 落到 B；`vac.autoAddWorkspaceFolders` 打开后草稿页出现其它根 chips，可删除且刷新后不回填。
-  3. 模型菜单：`Default (recommended)` 等内置项在前，自定义模型按设置顺序在后；Custom models 行内无上下按钮，手柄可聚焦并用 ↑/↓ 排序。
-  4. 输入卡 `+ → Files or folders`：Add folders… 可选目录，chip 为文件夹图标且不可点击打开；草稿首条消息带目录引用。
-  5. Sub-agent 卡片复活修复：重开历史长会话（如 `0e9ecf39-a848-408a-98df-cba1bac4b5ca`），记录区底部不应再出现成片 `Sub-agent · unnamed` / Idle 卡；仍在跑的 sub-agent 仍应带标题显示。
+- **本轮 6 项交互改进的真机验收**（改动与自动验证见下）：
+  1. 会话页签右键 **Open working directory**：在系统文件管理器中打开 cwd；无 cwd 时置灰。
+  2. 拖拽 **New Session** 草稿页签后发送首条消息，新会话页签留在草稿原位置，不再跳到最后。
+  3. 记录区 **Ctrl/Cmd+F** 搜索：只搜消息卡片；Enter / Shift+Enter 前后跳；命中滚动到视口并高亮；**All cards** 勾选状态持久化（新会话沿用）。默认仅对话正文。
+  4. 图片放大层右键 **Copy image**：写入 PNG 到剪贴板（Clipboard API，失败有 clientLog）。
+  5. 打开工作目录抽屉 / 会话历史列表时自动聚焦搜索框。
+  6. 斜杠命令列表按第一个空格截断 token；命令 token 右侧 / 空格后的文字不干扰过滤；选中命令只替换 token、保留行内其它文字。
 - **待验收（最多 5 条）**：
-  1. Chat 交互：Tail / Jump / 中键 / 卡片焦点 / Tab 五色 / 目录抽屉。
-  2. Markdown / Mermaid / 代码高亮 / 两个搜索框 / Cards 大纲。
-  3. Side Chat 与主会话 scope 隔离、来源标题、关闭 / Reload / Reset。
-  4. 快捷键 Alt+A/E/I/P/N 与设置录制 / 冲突 / IME。
-  5. Codex 真机：命令输出、模式 / 模型、API Key、Log Out、Dashboard 用量。
+  1. 真机 webview 里 Ctrl+F 是否被 VS Code 自身快捷键截走；高亮在流式输出期间是否自动跟随。
+  2. Windows 剪贴板右键复制图片在真实面板里是否成功（浏览器需要文档焦点 + Clipboard 权限）。
+  3. 页签拖拽 + 首条消息的组合（含“新建到右侧”入口）位置是否正确。
+  4. 目录抽屉 / 历史列表打开后直接打字是否能过滤（焦点是否真的落在输入框）。
+  5. 斜杠命令：行首 `/c` + 右侧旧正文、以及光标进入参数区后列表收起。
 - 历史验收细节见 `docs/03-验收清单.md`；更早的会话记录查 git log。
 
 ## 待归档暂存区（仅本轮未归档的完成项）

@@ -84,6 +84,26 @@ export const contextMenuClient = `
   function itemsFor(target) {
     var sideSurface = !!(document.body && document.body.classList
       && document.body.classList.contains('surface-side'));
+    // [CUSTOM- 2026-11-16] 图片放大层：右键给「Copy image / Close」。
+    // 原生的「复制图片」被这套自定义菜单接管后不可达，用户点开大图后没有办法把图片
+    // 放进剪贴板。复制实现在 lightbox.copy（canvas → PNG → Clipboard API + 兜底）。
+    var lightbox = target && target.closest ? target.closest('.image-lightbox') : null;
+    if (lightbox) {
+      return [
+        {
+          label: 'Copy image',
+          run: function () {
+            if (NS.lightbox && NS.lightbox.copy) { NS.lightbox.copy(); }
+          }
+        },
+        {
+          label: 'Close',
+          run: function () {
+            if (NS.lightbox && NS.lightbox.close) { NS.lightbox.close(); }
+          }
+        }
+      ];
+    }
     // 三个上下文专属格。它们**必须**排在通用清单之前：
     // 这几处右键时通常没有选区，通用的 'Copy selection' 只会灰着（"有个 Copy 但点不动"——用户报的
     // 就是它），而用户要的拷贝内容与"选区"根本不是一回事：
@@ -186,6 +206,14 @@ export const contextMenuClient = `
         }
         // [CUSTOM- 2026-10-29] Copy working directory：没有 cwd 的会话置灰。
         var tabCwd = tab.getAttribute('data-cwd') || '';
+        // [CUSTOM- 2026-11-16] Open working directory：交给宿主的 revealFileInOS，
+        // 在系统文件管理器里打开这个会话的目录。与 Copy working directory 同一份 cwd。
+        tabItems.push({
+          label: 'Open working directory',
+          disabled: !tabCwd,
+          disabledTitle: 'This session has no working directory',
+          run: function () { NS.bridge.post({ type: 'openDirectory', path: tabCwd }); }
+        });
         tabItems.push({
           label: 'Copy working directory',
           disabled: !tabCwd,

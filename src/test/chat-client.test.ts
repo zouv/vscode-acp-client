@@ -56,6 +56,8 @@ import { bootClient } from '../ui/chat/html/client/boot';
 import { scrollClient } from '../ui/chat/html/client/scroll';
 // [CUSTOM- 右键菜单按上下文给项（含置顶悬浮卡那条路）。
 import { contextMenuClient } from '../ui/chat/html/client/contextMenu';
+// [CUSTOM- 记录区搜索（Ctrl/Cmd+F）：范围过滤 + 命中计数。
+import { findBarClient } from '../ui/chat/html/client/findBar';
 // [CUSTOM- 面板内通用浮层（确认 / 输入）：替代宿主 modal / InputBox。
 import { popoverClient } from '../ui/chat/html/client/popover';
 // [CUSTOM- 圆点量测的读写分离。
@@ -413,7 +415,7 @@ function loadClient(
   // [CUSTOM- `sessionMenu` joined the list for its own suite: unlike
   // boot, its IIFE runs nothing at load time (init() is called by boot, and here by
   // the test), so loading it costs the record-layer tests nothing.
-  for (const source of [domClient, iconsClient, mermaidClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, detailPaneClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, shortcutsClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient, agentMapClient, contextTipClient]) {
+  for (const source of [domClient, iconsClient, mermaidClient, linksClient, toolCallViewClient, transcriptViewClient, permissionViewClient, permissionDrawerClient, outlineClient, detailPaneClient, sessionMenuClient, directoryMenuClient, composerClient, tabsClient, timesClient, tailClient, autoExpandClient, shortcutsClient, settingsPanelClient, perfClient, stickyUserClient, elicitationViewClient, stateCardClient, contextMenuClient, popoverClient, agentMapClient, contextTipClient, findBarClient]) {
     new Function('window', 'document', source)(win, doc);
   }
   return { NS, metrics, doc, docListeners, jumps, timers, win };
@@ -3548,6 +3550,19 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     assert.ok(tree.chip.querySelector('.picker-label')!.textContent.includes('alpha'),
       '手动选的目录过滤不被回执重置');
   });
+
+  // [CUSTOM- 2026-11-16 用户要求：打开历史列表时就聚焦搜索框。
+  test('opening the history list puts the caret in the search box', () => {
+    let focused = 0;
+    const original = StubNode.prototype.focus;
+    StubNode.prototype.focus = function () { focused += 1; };
+    try {
+      openedPicker();
+      assert.strictEqual(focused, 1, 'the search input is focused on open');
+    } finally {
+      StubNode.prototype.focus = original;
+    }
+  });
 });
 
 // [CUSTOM- 输入区四项优化里可落到桩 DOM 测的三条逻辑：上下文计量、
@@ -4269,6 +4284,40 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
     input.dispatch('input', { target: input });
     assert.strictEqual(slashPopup.hidden, false, 'the caret right after / means "show the list"');
     assert.match(slashPopup.textContent, /compact/);
+  });
+
+  // [CUSTOM- 2026-11-16 用户报：第一行行首输入命令时，光标**右侧**的旧文字会搅乱列表。
+  // 规则：命令 token 到第一个空白为止；空白之后的文字是参数/正文，不参与过滤。
+  test('the command filter stops at the first space, even when text follows the caret', () => {
+    const { NS, input, slashPopup } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+    NS.composer.setDraftOptions({ draftId: 'd1', ...snapshot() });
+
+    input.value = '/c old words with spaces';
+    input.selectionStart = 2;
+    input.dispatch('input', { target: input });
+    assert.strictEqual(slashPopup.hidden, false, 'trailing argument text must not hide the list');
+    assert.match(slashPopup.textContent, /compact/, 'the query is /c, not /c old words...');
+
+    // 光标进入参数区（越过第一个空白）才收起。
+    input.value = '/compact some argument';
+    input.selectionStart = 12;
+    input.dispatch('input', { target: input });
+    assert.strictEqual(slashPopup.hidden, true, 'the caret is in the argument part now');
+  });
+
+  test('accepting a command replaces its token and keeps the rest of the line', () => {
+    const { NS, input, slashPopup } = draftComposer();
+    NS.composer.setDraft(draft('d1'));
+    NS.composer.setDraftOptions({ draftId: 'd1', ...snapshot() });
+
+    input.value = '/c old words';
+    input.selectionStart = 2;
+    input.dispatch('input', { target: input });
+    slashPopup.querySelector('.slash-item')!.dispatch('click', { preventDefault: () => {} });
+    assert.strictEqual(input.value, '/compact old words',
+      'the command token is replaced; the argument text after it survives');
+    assert.strictEqual(input.selectionStart, '/compact '.length, 'the caret lands after the command');
   });
 
   // [CUSTOM- 2026-10-28 用户要求：命令面板打开后，点空白区域要收起（此前只有输入框里按 Esc 能关）。
@@ -6474,6 +6523,20 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
       '新用过的目录（Browse 选的）出现在「Recently used」里');
   });
 
+  // [CUSTOM- 2026-11-16 用户要求：打开目录抽屉时就聚焦搜索框。
+  test('opening the directory drawer puts the caret in the search box', () => {
+    const d = drawer();
+    let focused = 0;
+    const original = d.search.focus;
+    d.search.focus = () => { focused += 1; };
+    try {
+      d.open();
+      assert.strictEqual(focused, 1, 'the search input is focused on open');
+    } finally {
+      d.search.focus = original;
+    }
+  });
+
   test('「Recently used」行右侧的删除：本地立刻拿掉，并请宿主持久化', () => {
     const d = drawer();
     d.open();
@@ -8100,6 +8163,29 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     return items.map(i => i.label).join(' / ');
   }
 
+  // [CUSTOM- 2026-11-16] 放大层右键：复制图片 / 关闭。
+  test('the image lightbox offers Copy image and Close', () => {
+    const { NS } = withEntry();
+    const overlay = new StubNode('div');
+    overlay.className = 'image-lightbox';
+    const image = new StubNode('img');
+    image.className = 'image-lightbox-img';
+    overlay.appendChild(image);
+
+    let copied = 0;
+    let closed = 0;
+    NS.lightbox = {
+      copy: () => { copied += 1; },
+      close: () => { closed += 1; },
+    };
+    const items = NS.contextMenu.itemsFor(image) as Array<{ label: string; run: () => void }>;
+    assert.strictEqual(labels(items), 'Copy image / Close');
+    items[0].run();
+    items[1].run();
+    assert.strictEqual(copied, 1);
+    assert.strictEqual(closed, 1);
+  });
+
   test('a record node offers Copy message', () => {
     const { NS, posted } = withEntry();
     const record = new StubNode('div');
@@ -8286,7 +8372,7 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     }>;
     assert.strictEqual(labels(items),
       'Rename / Mark as unread / New Session to the Right / New Session in This Folder / Duplicate / '
-      + 'Copy working directory / Copy Session ID / Close');
+      + 'Open working directory / Copy working directory / Copy Session ID / Close');
 
     // 0 Rename：先出面板内输入浮层，提交时才发消息。
     items[0].run();
@@ -8327,13 +8413,16 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     assert.deepStrictEqual(posted[before], { type: 'duplicateSession', sessionId: 's1' },
       '复制会话走 session/fork（保留上下文与消息记录）');
     items[5].run();
-    assert.deepStrictEqual(posted[before + 1], { type: 'copy', text: '/work/alpha' },
-      'Copy working directory 拷的是 data-cwd');
+    assert.deepStrictEqual(posted[before + 1], { type: 'openDirectory', path: '/work/alpha' },
+      'Open working directory 把 data-cwd 交给宿主，由宿主用文件管理器打开');
     items[6].run();
-    assert.deepStrictEqual(posted[before + 2], { type: 'copy', text: 's1' },
+    assert.deepStrictEqual(posted[before + 2], { type: 'copy', text: '/work/alpha' },
+      'Copy working directory 拷的是 data-cwd');
+    items[7].run();
+    assert.deepStrictEqual(posted[before + 3], { type: 'copy', text: 's1' },
       '复制的是数据上的 sessionId，不是标签文字');
 
-    // 已经是未读 ⇒ Mark as unread 置灰；没有 cwd ⇒ Copy working directory 置灰。
+    // 已经是未读 ⇒ Mark as unread 置灰；没有 cwd ⇒ 打开/复制工作目录置灰。
     const unreadTab = new StubNode('button');
     unreadTab.className = 'tab';
     unreadTab.setAttribute('data-session-id', 's2');
@@ -8342,6 +8431,7 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     unreadTab.appendChild(unreadDot);
     const unreadItems = NS.contextMenu.itemsFor(unreadDot) as Array<{ label: string; disabled?: boolean }>;
     assert.strictEqual(unreadItems.find(i => i.label === 'Mark as unread')!.disabled, true);
+    assert.strictEqual(unreadItems.find(i => i.label === 'Open working directory')!.disabled, true);
     assert.strictEqual(unreadItems.find(i => i.label === 'Copy working directory')!.disabled, true);
 
     const draft = new StubNode('button');
@@ -8359,7 +8449,7 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     tab.setAttribute('data-session-id', 'side-1');
     tab.setAttribute('data-cwd', '/work/main');
     const items = NS.contextMenu.itemsFor(tab) as Array<{ label: string }>;
-    assert.strictEqual(labels(items), 'Copy working directory / Copy Session ID / Close');
+    assert.strictEqual(labels(items), 'Open working directory / Copy working directory / Copy Session ID / Close');
   });
 
   test('历史列表行：右键也给 Archive / Delete / Rename（键盘用户的入口）', () => {
@@ -8660,6 +8750,23 @@ suite('chat client logic: 引用栏的当前文件格（stub DOM, ）', () => {
     assert.ok(sent, 'draft send reached the host');
     assert.deepStrictEqual(sent.paths, ['/tmp/assets']);
     assert.deepStrictEqual(sent.pathMeta, [{ kind: 'folder' }]);
+  });
+
+  // [CUSTOM- 2026-11-17 用户报：新建 Session 的首条消息只留下文件引用，行区间丢了；
+  // 第二条消息正常。原因是草稿的 pathMeta 以前只带 kind，宿主据它重建附件时拿不到
+  // name/lineStart/lineEnd。首条消息必须和后续 attachPath 携带同一组字段。
+  test('草稿页引用编辑器选区 ⇒ 首条消息的 pathMeta 带显示名与行区间', () => {
+    const h = refBar();
+    h.NS.composer.setDraft({ draftId: 'd1', cwd: '/tmp' });
+    h.NS.composer.setActiveFile({ ...FILE, lineStart: 12, lineEnd: 40 });
+    dispatchClick(toggleOf(h.attachments), {});
+    h.input.value = 'read these lines';
+    dispatchClick(h.sendBtn, {});
+    const sent = h.sent.find(m => m.type === 'createDraftAndSend') as Record<string, any>;
+    assert.ok(sent, 'draft send reached the host');
+    assert.deepStrictEqual(sent.paths, [FILE.path]);
+    assert.deepStrictEqual(sent.pathMeta,
+      [{ name: 'DemoFile.cs:12-40', lineStart: 12, lineEnd: 40 }]);
   });
 });
 
@@ -9265,6 +9372,104 @@ suite('chat client logic: auto-expand new output (stub DOM)', () => {
     NS.autoExpand.setFocus('A');
     NS.autoExpand.applyPrefs(prefs);
     assert.strictEqual(posted.filter(m => m.type === 'setUiPref').length, 1);
+  });
+});
+
+suite('chat client logic: find in messages (stub DOM, 2026-11-16)', () => {
+  function harness(): any {
+    const bar = new StubNode('div');
+    bar.className = 'find-bar';
+    bar.hidden = true;
+    const input = new StubNode('input');
+    input.className = 'find-input';
+    const count = new StubNode('span');
+    count.className = 'find-count';
+    const all = new StubNode('input');
+    all.type = 'checkbox';
+    const prev = new StubNode('button');
+    const next = new StubNode('button');
+    const close = new StubNode('button');
+    bar.appendChild(input);
+    bar.appendChild(count);
+    bar.appendChild(all);
+    bar.appendChild(prev);
+    bar.appendChild(next);
+    bar.appendChild(close);
+
+    const messages = new StubNode('div');
+    messages.className = 'messages';
+    const user = new StubNode('div');
+    user.className = 'entry entry-user';
+    user.appendChild(makeText('Hello world, hello again') as unknown as StubNode);
+    const assistant = new StubNode('div');
+    assistant.className = 'entry entry-assistant';
+    assistant.appendChild(makeText('assistant reply') as unknown as StubNode);
+    const tool = new StubNode('div');
+    tool.className = 'entry entry-tool';
+    tool.appendChild(makeText('secret tool hello') as unknown as StubNode);
+    messages.appendChild(user);
+    messages.appendChild(assistant);
+    messages.appendChild(tool);
+
+    const h = loadClient({
+      findBar: bar, findInput: input, findCount: count, findAllCards: all,
+      findPrev: prev, findNext: next, findClose: close, messages,
+    });
+    h.NS.find.init();
+    return { ...h, bar, input, count, all, messages };
+  }
+
+  function runDeferred(h: ReturnType<typeof harness>) {
+    h.timers.filter((timer: any) => timer.delay === 120).forEach((timer: any) => timer.fn());
+  }
+
+  test('Ctrl+F opens the bar, focuses the input and searches dialogue prose only', () => {
+    const h = harness();
+    let focused = 0;
+    h.input.focus = () => { focused += 1; };
+    const event = {
+      key: 'f', code: 'KeyF', ctrlKey: true,
+      preventDefault: () => {}, stopPropagation: () => {},
+    };
+    h.docListeners['keydown'].forEach((listener: (event: any) => void) => listener(event));
+
+    assert.strictEqual(h.bar.hidden, false, 'the bar opens');
+    assert.strictEqual(focused, 1, 'the caret goes to the search input');
+
+    h.input.value = 'hello';
+    h.input.dispatch('input', { target: h.input });
+    runDeferred(h);
+    assert.strictEqual(h.count.textContent, '1/2',
+      'user + assistant prose match; the tool card is out of scope by default');
+
+    h.all.checked = true;
+    h.all.dispatch('change', { target: h.all });
+    assert.strictEqual(h.count.textContent, '1/3', 'All cards includes the tool output');
+  });
+
+  test('Enter / Shift+Enter move through matches and Escape closes the bar', () => {
+    const h = harness();
+    h.NS.find.open();
+    h.input.value = 'hello';
+    h.input.dispatch('input', { target: h.input });
+    runDeferred(h);
+    assert.strictEqual(h.count.textContent, '1/2');
+
+    h.input.dispatch('keydown', {
+      key: 'Enter', preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.strictEqual(h.count.textContent, '2/2', 'Enter goes to the next match');
+
+    h.input.dispatch('keydown', {
+      key: 'Enter', shiftKey: true, preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.strictEqual(h.count.textContent, '1/2', 'Shift+Enter goes back');
+
+    h.input.dispatch('keydown', {
+      key: 'Escape', preventDefault: () => {}, stopPropagation: () => {},
+    });
+    assert.strictEqual(h.bar.hidden, true, 'Escape closes it');
+    assert.strictEqual(h.count.textContent, '');
   });
 });
 

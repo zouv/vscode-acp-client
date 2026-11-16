@@ -7139,7 +7139,7 @@ suite('chat panel: Side Chat surface isolation', () => {
       outlineOpenBySession: {}, outlineOpenDefault: false, outlineTab: 'messages',
       autoExpandBySession: {}, autoExpandDefault: false,
       autoExpandKinds: ['thought', 'tool'], autoExpandToolHeight: 360, autoExpandThoughtHeight: 240,
-      flatTools: false, composerMaxWidth: 720, inputMaxHeight: 320, sendKey: 'enter',
+      flatTools: false, findAllCards: false, composerMaxWidth: 720, inputMaxHeight: 320, sendKey: 'enter',
       defaultModelByAgent: {}, defaultEffortByAgent: {}, recentDirectoryLimit: 8, historyDisplayLimit: 0,
       markdownStyle: 'editor',
       shortcuts: defaultShortcutMap(),

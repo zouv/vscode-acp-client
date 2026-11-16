@@ -234,6 +234,9 @@ export interface UiPrefs {
   autoExpandThoughtHeight?: number;
   // [CUSTOM- 子代理工具卡紧跟父卡分组显示（true = 平铺）。默认 undefined = 分组。
   flatTools?: boolean;
+  // [CUSTOM- 2026-11-16] 记录区搜索的默认范围：false/缺省 = 只搜对话正文，
+  // true = 连工具卡（命令输出、diff、JSON 细节）一起搜。跨面板持久化、新会话沿用。
+  findAllCards?: boolean;
   // [CUSTOM- 输入卡最大宽度 / 输入框最大高度（px）。0/undefined = 用 CSS 默认值。
   composerMaxWidth?: number;
   inputMaxHeight?: number;
@@ -383,7 +386,7 @@ export type ExtToChat =
   // [CUSTOM- 大纲钉住/宽度偏好，随 boot 一起带回（跨窗口重载存活）。
   // [CUSTOM- 外加 tab 栏的手工顺序（同一条记录）。
   // [CUSTOM- 外加 Times 的按会话记录 + 默认值（同一条记录）。
-  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; outlineTab?: 'messages' | 'cards'; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; historyDisplayLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things'; shortcuts?: ShortcutMap }
+  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; outlineTab?: 'messages' | 'cards'; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; findAllCards?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; historyDisplayLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things'; shortcuts?: ShortcutMap }
   // [CUSTOM- 设置面板的数据（回复 getSettings，也在每次 setSetting 之后重发）。宿主是唯一写者。
   | { type: 'settings'; items: SettingItem[] }
   // [CUSTOM- 自定义模型变了（设置面板保存 / VS Code 设置里改）：输入卡的模型菜单要立刻换
@@ -483,7 +486,7 @@ export type ChatToExt =
   // （与 tabOrder 同一形态 —— 顺序与开关都是"一整张表"，逐条 delta 反而要宿主维护版本）。
   // [CUSTOM- 快捷键**不走这里**：只能经设置面板的 `panel.shortcut.<action>` 写入，
   // 由宿主做非法值与重复键校验；setUiPref 不得覆盖 shortcuts。
-  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; outlineTab?: 'messages' | 'cards'; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things' }
+  | { type: 'setUiPref'; outlineMode?: 'popup' | 'sidebar'; outlineWidth?: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; outlineTab?: 'messages' | 'cards'; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; findAllCards?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things' }
   // [CUSTOM- 设置面板：宿主是唯一写者（配置项写 VS Code 设置，面板项写 UiPrefs）。
   | { type: 'getSettings' }
   | { type: 'setSetting'; key: string; value: unknown }
@@ -562,7 +565,9 @@ export type ChatToExt =
     images?: Array<{ id: string; name: string; mimeType: string; dataUrl: string }>;
     paths?: string[];
     // [CUSTOM- 与 `paths` 平行：标记哪些是目录引用（草稿页本地攒的 kind 随首条消息带上）。
-    pathMeta?: Array<{ kind?: 'folder' }>;
+    // [CUSTOM- 2026-11-17] 同时带显示名与行区间 —— 首条消息的"引用文件的一段"与后续
+    // attachPath 走同一条宿主重建路径，少了这两个字段就只剩整文件引用。
+    pathMeta?: Array<{ kind?: 'folder'; name?: string; lineStart?: number; lineEnd?: number }>;
     // [CUSTOM- 草稿页显式勾选的额外根目录（additionalDirectories，多根工作区）。
     additionalDirectories?: string[];
   }
@@ -629,6 +634,9 @@ export type ChatToExt =
   // [CUSTOM- 2026-10-29：引用标签的跳转。`endLine` 有值时宿主框选整段行区间；
   // `sessionId` 可选 —— 草稿页还没有会话，点引用标签也要能打开文件（相对路径回退工作区）。
   | { type: 'openFile'; sessionId?: string; path: string; line?: number; endLine?: number }
+  // [CUSTOM- 会话 tab 右键「Open working directory」：在系统文件管理器中打开该会话的 cwd。
+  // **非会话作用域**（只带一个路径），所以必须在 verifySession 守卫之前处理。
+  | { type: 'openDirectory'; path: string }
   | { type: 'openTerminal'; sessionId: string; terminalId: string }
   | { type: 'copy'; text: string }
   // webview 控制台 → 扩展侧输出通道的日志桥。

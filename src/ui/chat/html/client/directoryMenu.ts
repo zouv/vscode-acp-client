@@ -258,6 +258,9 @@ export const directoryMenuClient = `
     query = '';
     if (searchEl) { searchEl.value = ''; }
     syncSearchClear();
+    // [CUSTOM- 2026-11-16] 打开抽屉即聚焦搜索框：用户来这里的下一步通常是输入目录名，
+    // 少一次点击/一次 Tab。放在 refresh 之前——焦点不依赖候选数据（它可能还在路上）。
+    if (searchEl && searchEl.focus) { searchEl.focus(); }
     closeOtherDrawers();
     refresh(currentDraft());
   }

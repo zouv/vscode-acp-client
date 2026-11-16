@@ -35,6 +35,9 @@ import { contextMenuClient } from './contextMenu';
 // [CUSTOM- 通用浮层（确认 / 输入）：非模态，替代面板内触发的宿主 modal 与 InputBox。
 import { popoverClient } from './popover';
 import { lightboxClient } from './lightbox';
+// [CUSTOM- 2026-11-16] 消息面板内搜索（Ctrl/Cmd+F）：只读 #messages，高亮用
+// CSS Custom Highlight API；加载期不碰 DOM，init 由 boot 调。
+import { findBarClient } from './findBar';
 import { stickyUserClient } from './stickyUser';
 // [CUSTOM- 记录区「Times」开关的状态机（按会话记 + 一个默认值）。与 stateCard 同类：
 // 加载期不碰 DOM，全部由 boot 的 init() 驱动，因此能在桩 DOM 里被单独加载。
@@ -93,6 +96,8 @@ const MODULES: ReadonlyArray<string> = [
   popoverClient,
   // [CUSTOM- 图片点击放大（lightbox），独立模块、boot 里 install。
   lightboxClient,
+  // [CUSTOM- 消息面板搜索（Ctrl/Cmd+F）；init 由 boot 调，可在桩里单独驱动。
+  findBarClient,
   // [CUSTOM- 最近一条已滚出视口的用户消息，克隆到消息区顶部。
   stickyUserClient,
   // [CUSTOM- Times 开关（它 apply 时要重渲染置顶副本，所以排在 stickyUser 之后）。

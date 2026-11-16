@@ -138,8 +138,52 @@ function restore(sessionId: string) {
   return { sessionId, agentName: 'Claude Code', title: sessionId, cwd: 'C:/work' };
 }
 
-describe('chat tabs: activateRelative', () => {
-  it('moves through live sessions in tabModels order and wraps both ways', () => {
+describe('chat tabs: draft position becomes the session position', () => {
+  it('inserts the session created from a dragged draft at the draft slot', () => {
+    const { tabs, bridge } = createClient();
+    tabs.setSessions([session('a'), session('b'), session('c')]);
+    tabs.setDrafts([{ draftId: 'd1', cwd: null }], 'd1');
+    tabs.placeDraftAfter('d1', 'a');   // drag / "New Session to the Right"
+    bridge.post.mockClear();
+
+    expect(tabs.adoptDraftPosition('d1', 'fresh')).toBe(true);
+    expect(bridge.post).toHaveBeenCalledWith({
+      type: 'setUiPref', tabOrder: ['a', 'fresh', 'b', 'c'],
+    });
+  });
+
+  it('builds a complete order instead of appending an unknown session', () => {
+    const { tabs, bridge } = createClient();
+    tabs.setSessions([session('a'), session('b')]);
+    tabs.setDrafts([{ draftId: 'd1', cwd: null }], 'd1');
+    tabs.placeDraftAfter('d1', null);  // no anchor = end of the strip
+    bridge.post.mockClear();
+
+    expect(tabs.adoptDraftPosition('d1', 'fresh')).toBe(true);
+    expect(bridge.post).toHaveBeenCalledWith({
+      type: 'setUiPref', tabOrder: ['a', 'b', 'fresh'],
+    });
+  });
+
+  it('keeps the remembered slot of a closed session', () => {
+    const { tabs, bridge } = createClient();
+    // 'b' is closed but still in the persisted order (so reopening it keeps its slot).
+    tabs.applyPrefs({ tabOrder: ['a', 'b', 'c'] });
+    tabs.setSessions([session('a'), session('c')]);
+    tabs.setDrafts([{ draftId: 'd1', cwd: null }], 'd1');
+    tabs.placeDraftAfter('d1', 'a');
+    bridge.post.mockClear();
+
+    expect(tabs.adoptDraftPosition('d1', 'fresh')).toBe(true);
+    // The live strip is a, [draft], c. 'fresh' goes before c while 'b' keeps the
+    // slot it had in the persisted order (it reopens next to a, before fresh).
+    expect(bridge.post).toHaveBeenCalledWith({
+      type: 'setUiPref', tabOrder: ['a', 'b', 'fresh', 'c'],
+    });
+  });
+});
+
+describe('chat tabs: activateRelative', () => {  it('moves through live sessions in tabModels order and wraps both ways', () => {
     const { tabs, bridge } = createClient();
     const a = session('a');
     const b = session('b');

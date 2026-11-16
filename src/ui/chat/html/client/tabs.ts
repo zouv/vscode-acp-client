@@ -824,6 +824,71 @@ export const tabsClient = `
   }
 
   /**
+   * [CUSTOM- 2026-11-16] 草稿的首条消息发出后，用**这个草稿当前所在的视觉位置**
+   * 给新会话在 tabOrder 里占位。
+   *
+   * 草稿是纯客户端 tab，不在宿主的 tabOrder 里；新会话（有 sessionId 之后）第一次出现时
+   * 这段顺序里没有它 ⇒ tabModels 把它当"未知"追加到末尾。用户看到的就是"我明明把
+   * New Session 拖到中间了，发出第一条消息它又跳到最后"。
+   *
+   * 做法：按当前视觉顺序列出所有**非草稿** tab，找到草稿两侧的邻居；把新 sessionId
+   * 插到这两个邻居之间，**同时保留 tabOrder 里已有的 id**（包括当前没有打开的会话 ——
+   * 它们的位置要留给以后重新打开时用）。视觉顺序里还没进 tabOrder 的会话按原顺序补进去。
+   * 必须在草稿被移除**之前**调用（resolveDraft 的第一行）。
+   */
+  function adoptDraftPosition(draftId, sessionId) {
+    if (!draftId || !sessionId) { return false; }
+    var sideTabs = state.sessions.length > 0 && !!state.sessions[0].sideChat;
+    if (sideTabs) { return false; }
+    var models = tabModels();
+    var at = -1;
+    var i;
+    for (i = 0; i < models.length; i++) {
+      if (models[i].kind === 'draft' && models[i].id === draftId) { at = i; break; }
+    }
+    if (at < 0) { return false; }
+
+    // Visible (non-draft) order, and where the draft sits among it.
+    var visible = [];
+    var pos = 0;
+    for (i = 0; i < models.length; i++) {
+      if (models[i].kind === 'draft') { continue; }
+      if (i < at) { pos++; }
+      if (models[i].id !== sessionId) { visible.push(models[i].id); }
+    }
+
+    // Start from the persisted order (closed sessions included), then append any
+    // visible session that was never dragged / persisted.
+    var next = [];
+    var seen = {};
+    for (i = 0; i < tabOrder.length; i++) {
+      var id = tabOrder[i];
+      if (!id || id === sessionId || seen[id]) { continue; }
+      seen[id] = true;
+      next.push(id);
+    }
+    for (i = 0; i < visible.length; i++) {
+      if (seen[visible[i]]) { continue; }
+      seen[visible[i]] = true;
+      next.push(visible[i]);
+    }
+
+    var right = pos < visible.length ? visible[pos] : null;
+    var left = pos > 0 ? visible[pos - 1] : null;
+    var insertAt;
+    if (right && next.indexOf(right) >= 0) { insertAt = next.indexOf(right); }
+    else if (left && next.indexOf(left) >= 0) { insertAt = next.indexOf(left) + 1; }
+    else if (pos === 0) { insertAt = 0; }
+    else { insertAt = next.length; }
+    next.splice(insertAt, 0, sessionId);
+
+    tabOrder = next;
+    // 先落盘再重渲染（与 dropOn 同一条规矩）：即使这一帧渲染失败，顺序也已经交上去了。
+    NS.bridge.post({ type: 'setUiPref', tabOrder: next });
+    return true;
+  }
+
+  /**
    * [CUSTOM- 落点容器是整条标签栏：dragover / drop / dragleave 都挂在它身上。
    * 每个 tab 自己只留 dragstart（谁被拖）与 dragend（拖动结束归位清理）。
    */
@@ -1348,7 +1413,9 @@ export const tabsClient = `
     // [CUSTOM- 快捷键懒恢复的完结结果（宿主 'restoreFinished' 消息消费）。
     finishRestore: finishRestore,
     // [CUSTOM- 右键菜单「在右侧新建 Session」：把刚创建的草稿插到指定 tab 右边。
-    placeDraftAfter: placeDraftAfter
+    placeDraftAfter: placeDraftAfter,
+    // [CUSTOM- 草稿首条消息建出真会话后，按草稿原来的位置给它占位（见函数注释）。
+    adoptDraftPosition: adoptDraftPosition
   };
 })(window.__vac = window.__vac || {});
 `;
