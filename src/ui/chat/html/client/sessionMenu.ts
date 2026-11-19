@@ -41,6 +41,7 @@ export const sessionMenuClient = `
   // [CUSTOM- Working-directory filter.
   var filterChip = null;
   var filterMenu = null;
+  var restoreBtn = null;
   var menuOpen = false;
   // [CUSTOM- Free-text filter over the rows already in the client. The directory
   // filter keeps its own meaning; the two are combined with AND.
@@ -121,6 +122,35 @@ export const sessionMenuClient = `
     return out;
   }
 
+  /**
+   * [CUSTOM- 目录菜单按字母序（用户要求）。宿主已经按名称排过一次，但补充扫描 / 未来
+   * 来源可能在某些路径上绕过它；客户端再排一次是幂等的。'Unknown folder' 永远留在最后。
+   */
+  function sortedOptions() {
+    var options = menuOptions();
+    var dirs = [];
+    var tail = [];
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].key === UNKNOWN_KEY) { tail.push(options[i]); } else { dirs.push(options[i]); }
+    }
+    dirs.sort(function (a, b) {
+      var la = String(optionLabel(a)).toLowerCase();
+      var lb = String(optionLabel(b)).toLowerCase();
+      if (la < lb) { return -1; }
+      if (la > lb) { return 1; }
+      return 0;
+    });
+    return dirs.concat(tail);
+  }
+
+  /** The current session directory's candidate (the host marks it 'current'). */
+  function currentOption() {
+    for (var i = 0; i < dirOptions.length; i++) {
+      if (dirOptions[i].current) { return dirOptions[i]; }
+    }
+    return null;
+  }
+
   /** The option the filter is currently on, or null for "all folders". */
   function activeOption() {
     var options = menuOptions();
@@ -162,6 +192,19 @@ export const sessionMenuClient = `
   // [CUSTOM- How many rows the history drawer renders after filtering (0 = all).
   // The cap is a VIEW cap only: lastMessage.sessions keeps every loaded row.
   var historyDisplayLimit = 0;
+  // [CUSTOM- Drawer width in px (user setting; the CSS max-width keeps it inside
+  // a narrow panel). Matches the host's default in ChatPanelHost.
+  var historyWidth = 600;
+
+  function normalizeHistoryWidth(value) {
+    var n = Number(value);
+    if (!isFinite(n)) { return 600; }
+    return Math.max(320, Math.min(1200, Math.round(n)));
+  }
+
+  function applyHistoryWidth() {
+    if (drawer && drawer.style) { drawer.style.width = historyWidth + 'px'; }
+  }
 
   function normalizeHistoryDisplayLimit(value) {
     var n = Number(value);
@@ -188,6 +231,13 @@ export const sessionMenuClient = `
     if (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) {
       var n = Number(value);
       if (isFinite(n)) { historyDisplayLimit = normalizeHistoryDisplayLimit(n); }
+    }
+    // A width change must visibly apply even while the drawer is closed (it opens
+    // at the new width next time); a missing field keeps the current value.
+    var width = message && message.historyWidth;
+    if (typeof width === 'number' || (typeof width === 'string' && width.trim() !== '')) {
+      var w = Number(width);
+      if (isFinite(w)) { historyWidth = normalizeHistoryWidth(w); applyHistoryWidth(); }
     }
     if (canRefreshList(open, pending, lastMessage)) { renderList(lastMessage); }
   }
@@ -227,6 +277,27 @@ export const sessionMenuClient = `
       ? (option.cwd ? option.cwd + '\\n' : '') + plural(option.count) + ' here'
       : 'Filter the list by working directory';
     filterChip.setAttribute('aria-expanded', menuOpen ? 'true' : 'false');
+    renderRestore();
+  }
+
+  /**
+   * [CUSTOM- 目录选择右侧的「还原」：当前筛的不是地址栏那个会话目录时出现，
+   * 点一下回到它。没有 'current' 标记（地址栏没有目录）时无法还原，按钮隐藏。
+   */
+  function renderRestore() {
+    if (!restoreBtn) { return; }
+    var current = currentOption();
+    // 'askedCwd' is the directory the address bar showed. Without it there is no
+    // user-visible "current session directory" to restore to (the host's fallback
+    // mark is a guess, not what the user sees) — so the button stays hidden.
+    var show = !!askedCwd && !!current && filterKey !== current.key;
+    restoreBtn.hidden = !show;
+    if (show) {
+      restoreBtn.title = current.cwd
+        ? 'Show sessions in ' + current.cwd
+        : 'Show sessions in the current folder';
+      restoreBtn.setAttribute('aria-label', restoreBtn.title);
+    }
   }
 
   function makeFilterRow(option, label, countText) {
@@ -251,7 +322,7 @@ export const sessionMenuClient = `
     NS.dom.clear(filterMenu);
     var total = (lastMessage && lastMessage.sessions ? lastMessage.sessions.length : 0);
     filterMenu.appendChild(makeFilterRow(null, 'All folders', total ? plural(total) : ''));
-    var options = menuOptions();
+    var options = sortedOptions();
     for (var i = 0; i < options.length; i++) {
       var option = options[i];
       filterMenu.appendChild(makeFilterRow(option, optionLabel(option), plural(option.count)));
@@ -732,6 +803,7 @@ export const sessionMenuClient = `
     drawer = NS.dom.qs('history');
     filterChip = NS.dom.qs('historyFilter');
     filterMenu = NS.dom.qs('historyFilterMenu');
+    restoreBtn = NS.dom.qs('historyRestore');
     searchEl = NS.dom.qs('historySearch');
     searchClearEl = NS.dom.qs('historySearchClear');
     if (searchEl) {
@@ -767,6 +839,21 @@ export const sessionMenuClient = `
         toggleFilterMenu();
       });
     }
+    if (restoreBtn) {
+      // The icon is decorative; the tooltip/aria-label (set in renderRestore) carries
+      // the meaning. Same visual family as the chip it sits next to.
+      var restoreIcon = NS.icons && NS.icons.icon ? NS.icons.icon('restore', 'filter-icon') : null;
+      if (restoreIcon) { NS.dom.clear(restoreBtn); restoreBtn.appendChild(restoreIcon); }
+      else { restoreBtn.textContent = 'Current'; }
+      restoreBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var current = currentOption();
+        if (current) { applyFilter(current.key); }
+      });
+    }
+    // The default width applies even before a uiPrefs reply arrives.
+    applyHistoryWidth();
     // The on/off preference survives a reload of this webview (the same mechanism
     // Times / Sub-agents use). The DIRECTORY deliberately does not — see show().
     // [CUSTOM- Only an EXPLICIT 'All folders' (false) turns it off now;

@@ -175,6 +175,43 @@ export const directoryMenuClient = `
     return path.indexOf('/') >= 0 || path.indexOf('\\\\') >= 0;
   }
 
+  /**
+   * Identity for "is this exact directory already listed". Mirrors the host's
+   * 'directoryKey' closely enough for a UI convenience: separators unified, trailing
+   * separators dropped (a lone root survives), case folded. The host remains the
+   * authority for the real filter keys.
+   */
+  function pathKey(path) {
+    var s = String(path || '').replace(/^\\s+|\\s+$/g, '');
+    var unified = s.split('\\\\').join('/');
+    while (unified.length > 1 && unified.charAt(unified.length - 1) === '/') {
+      unified = unified.slice(0, -1);
+    }
+    return unified.toLowerCase();
+  }
+
+  function listsPath(paths, path) {
+    var key = pathKey(path);
+    for (var i = 0; i < paths.length; i++) {
+      if (pathKey(paths[i]) === key) { return true; }
+    }
+    return false;
+  }
+
+  /** The "adopt the typed path" row shared by the no-result and result states. */
+  function useQueryRow(path) {
+    var use = NS.dom.el('button', 'outline-item', 'Use this directory');
+    use.type = 'button';
+    use.setAttribute('data-cwd-use-query', '');
+    use.setAttribute('title', path);
+    use.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      applyPath(path);
+    });
+    return use;
+  }
+
   function render() {
     if (!drawer) { return; }
     NS.dom.clear(headEl);
@@ -185,25 +222,16 @@ export const directoryMenuClient = `
     var folders = filteredPaths((choices && choices.workspaceFolders) || []);
     var recent = filteredPaths((choices && choices.recent) || []);
     var draft = currentDraft();
+    var direct = directPath();
+    var directUsable = !!query && looksLikeDirectoryPath(direct);
+    var candidates = folders.concat(recent);
 
-    if (query && folders.length === 0 && recent.length === 0) {
+    if (query && candidates.length === 0) {
       var shown = query.length > 80 ? query.slice(0, 80) + '\\u2026' : query;
       listEl.appendChild(NS.dom.el('div', 'outline-group', 'No directories match "' + shown + '"'));
       // [CUSTOM- 搜索没命中时，用户手里往往已经有一个候选目录（从资源管理器复制来的）。
       // 除了清空搜索，再给一条"就用这个目录"：直接把它作为本会话（或新草稿）的工作目录。
-      var direct = directPath();
-      if (looksLikeDirectoryPath(direct)) {
-        var use = NS.dom.el('button', 'outline-item', 'Use this directory');
-        use.type = 'button';
-        use.setAttribute('data-cwd-use-query', '');
-        use.setAttribute('title', direct);
-        use.addEventListener('click', function (event) {
-          event.preventDefault();
-          event.stopPropagation();
-          applyPath(direct);
-        });
-        listEl.appendChild(use);
-      }
+      if (directUsable) { listEl.appendChild(useQueryRow(direct)); }
       var clear = NS.dom.el('button', 'outline-item', 'Clear search');
       clear.type = 'button';
       clear.setAttribute('data-clear-cwd-search', '');
@@ -214,6 +242,10 @@ export const directoryMenuClient = `
         if (searchEl && searchEl.focus) { searchEl.focus(); }
       });
       listEl.appendChild(clear);
+    } else if (directUsable && !listsPath(candidates, direct)) {
+      // [CUSTOM- 有结果、但搜到的不是用户输入的那个目录（例如输入 /old、结果只有
+      // /old/project）：同样把输入当作候选目录给出来，而不是逼用户先清空搜索。
+      listEl.appendChild(useQueryRow(direct));
     }
 
     if (draftId) {

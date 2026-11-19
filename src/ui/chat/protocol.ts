@@ -252,6 +252,9 @@ export interface UiPrefs {
   // [CUSTOM- 历史会话抽屉最多显示几条（0–10000，默认 0 = 不限）。只截断**显示**，
   // 目录/搜索筛选后的全部已载数据仍留在 `lastMessage.sessions`，改上限即时重绘。
   historyDisplayLimit?: number;
+  // [CUSTOM- 历史会话抽屉的宽度（px，默认 600）。面板比它窄时按 `max-width` 收缩；
+  // 设置面板可调，跨面板共享。
+  historyWidth?: number;
   // [CUSTOM- 「Tail」（消息面板自动追尾，2026-10-28）：与 Times 同一形态 ——
   // tailBySession 记用户在那个会话里最后的开关状态，tailDefault 是没有记录的会话的默认值
   // （默认 **true**：不开按钮时也照旧自动跟到最后一条）。滚轮/滚动条一旦改变用户阅读进度，
@@ -386,7 +389,7 @@ export type ExtToChat =
   // [CUSTOM- 大纲钉住/宽度偏好，随 boot 一起带回（跨窗口重载存活）。
   // [CUSTOM- 外加 tab 栏的手工顺序（同一条记录）。
   // [CUSTOM- 外加 Times 的按会话记录 + 默认值（同一条记录）。
-  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; outlineTab?: 'messages' | 'cards'; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; findAllCards?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; historyDisplayLimit?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things'; shortcuts?: ShortcutMap }
+  | { type: 'uiPrefs'; outlineMode: 'popup' | 'sidebar'; outlineWidth: number; tabOrder?: string[]; timesBySession?: Record<string, boolean>; timesDefault?: boolean; tailBySession?: Record<string, boolean>; tailDefault?: boolean; outlineOpenBySession?: Record<string, boolean>; outlineOpenDefault?: boolean; outlineTab?: 'messages' | 'cards'; autoExpandBySession?: Record<string, boolean>; autoExpandDefault?: boolean; autoExpandKinds?: string[]; autoExpandToolHeight?: number; autoExpandThoughtHeight?: number; flatTools?: boolean; findAllCards?: boolean; composerMaxWidth?: number; inputMaxHeight?: number; sendKey?: 'enter' | 'ctrlEnter'; defaultModelByAgent?: Record<string, string>; defaultEffortByAgent?: Record<string, string>; recentDirectoryLimit?: number; historyDisplayLimit?: number; historyWidth?: number; markdownStyle?: 'editor' | 'github' | 'obsidian' | 'typora' | 'atom' | 'minimal' | 'things'; shortcuts?: ShortcutMap }
   // [CUSTOM- 设置面板的数据（回复 getSettings，也在每次 setSetting 之后重发）。宿主是唯一写者。
   | { type: 'settings'; items: SettingItem[] }
   // [CUSTOM- 自定义模型变了（设置面板保存 / VS Code 设置里改）：输入卡的模型菜单要立刻换

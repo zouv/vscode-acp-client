@@ -169,6 +169,7 @@ const GLOBAL_UI_PREF_KEYS = [
   'autoExpandKinds', 'autoExpandToolHeight', 'autoExpandThoughtHeight',
   'flatTools', 'findAllCards', 'composerMaxWidth', 'inputMaxHeight', 'sendKey',
   'defaultModelByAgent', 'defaultEffortByAgent', 'recentDirectoryLimit', 'historyDisplayLimit',
+  'historyWidth',
   'markdownStyle',
   'shortcuts',
 ] as const;
@@ -223,6 +224,7 @@ function defaultPanelUiPrefs(): UiPrefs {
     defaultEffortByAgent: {},
     recentDirectoryLimit: 8,
     historyDisplayLimit: 0,
+    historyWidth: 600,
     markdownStyle: 'editor',
     shortcuts: defaultShortcutMap(),
   };
@@ -4213,6 +4215,20 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     return Math.max(0, Math.min(ChatPanelHost.HISTORY_DISPLAY_LIMIT_MAX, Math.round(n)));
   }
 
+  /** 历史抽屉宽度（px）：默认 600，空/非法也落回默认。 */
+  private static readonly DEFAULT_HISTORY_WIDTH = 600;
+  private static readonly HISTORY_WIDTH_MIN = 320;
+  private static readonly HISTORY_WIDTH_MAX = 1200;
+
+  private static clampHistoryWidth(value: unknown): number {
+    if (value === undefined || value === null
+      || (typeof value === 'string' && value.trim() === '')) {
+      return ChatPanelHost.DEFAULT_HISTORY_WIDTH;
+    }
+    return clampNumber(value, ChatPanelHost.HISTORY_WIDTH_MIN,
+      ChatPanelHost.HISTORY_WIDTH_MAX, ChatPanelHost.DEFAULT_HISTORY_WIDTH);
+  }
+
   /** 回放预渲染 markdown 的每片条数（一次几百条会变成宿主线程上的长任务）。 */
   private static readonly PREFILL_BATCH = 40;
   /** Upper bound on how stale the tab strip may be while a reply streams. */
@@ -5012,23 +5028,6 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
           { value: 'ctrlEnter', label: 'Ctrl/Cmd+Enter' },
         ],
       },
-      {
-        key: 'panel.recentDirectoryLimit', group: 'chat', type: 'number', scope: 'panel',
-        label: 'Recently used directories',
-        description: `How many recent directories the picker offers (${ChatPanelHost.RECENT_DIRECTORIES_MIN}–${ChatPanelHost.RECENT_DIRECTORIES_MAX}; 0 hides the group).`,
-        value: ChatPanelHost.clampRecentDirectories(prefs.recentDirectoryLimit),
-        min: ChatPanelHost.RECENT_DIRECTORIES_MIN,
-        max: ChatPanelHost.RECENT_DIRECTORIES_MAX,
-      },
-      {
-        key: 'panel.historyDisplayLimit', group: 'chat', type: 'number', scope: 'panel',
-        label: 'Sessions in history list',
-        description: `How many sessions the history drawer shows after filtering (0–${ChatPanelHost.HISTORY_DISPLAY_LIMIT_MAX}; 0 shows all).`,
-        value: ChatPanelHost.clampHistoryDisplayLimit(prefs.historyDisplayLimit),
-        min: 0,
-        max: ChatPanelHost.HISTORY_DISPLAY_LIMIT_MAX,
-        step: 1,
-      },
       ...this.defaultAgentItems(prefs),
       ...SHORTCUT_ACTIONS.map((action): SettingItem => ({
         key: 'panel.shortcut.' + action,
@@ -5114,6 +5113,32 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         label: 'Expanded reasoning height (px)',
         description: 'For auto-expanded cards; 0 = no limit, taller reasoning scrolls inside the block.',
         value: prefs.autoExpandThoughtHeight ?? 240,
+      },
+      {
+        key: 'panel.recentDirectoryLimit', group: 'appearance', type: 'number', scope: 'panel',
+        label: 'Recently used directories',
+        description: `How many recent directories the picker offers (${ChatPanelHost.RECENT_DIRECTORIES_MIN}–${ChatPanelHost.RECENT_DIRECTORIES_MAX}; 0 hides the group).`,
+        value: ChatPanelHost.clampRecentDirectories(prefs.recentDirectoryLimit),
+        min: ChatPanelHost.RECENT_DIRECTORIES_MIN,
+        max: ChatPanelHost.RECENT_DIRECTORIES_MAX,
+      },
+      {
+        key: 'panel.historyDisplayLimit', group: 'appearance', type: 'number', scope: 'panel',
+        label: 'Sessions in history list',
+        description: `How many sessions the history drawer shows after filtering (0–${ChatPanelHost.HISTORY_DISPLAY_LIMIT_MAX}; 0 shows all).`,
+        value: ChatPanelHost.clampHistoryDisplayLimit(prefs.historyDisplayLimit),
+        min: 0,
+        max: ChatPanelHost.HISTORY_DISPLAY_LIMIT_MAX,
+        step: 1,
+      },
+      {
+        key: 'panel.historyWidth', group: 'appearance', type: 'number', scope: 'panel',
+        label: 'History list width (px)',
+        description: `Width of the history drawer (${ChatPanelHost.HISTORY_WIDTH_MIN}–${ChatPanelHost.HISTORY_WIDTH_MAX}); it shrinks to fit a narrower panel.`,
+        value: ChatPanelHost.clampHistoryWidth(prefs.historyWidth),
+        min: ChatPanelHost.HISTORY_WIDTH_MIN,
+        max: ChatPanelHost.HISTORY_WIDTH_MAX,
+        step: 10,
       },
       {
         key: 'vac.logTraffic', group: 'advanced', type: 'boolean',
@@ -5264,6 +5289,16 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       } else if (entry && entry.value !== undefined) {
         const id = String(entry.value);
         out.push({ value: id, label: names.get(id) || String(entry.name ?? id) });
+      }
+    }
+    // [CUSTOM- 快照来自上一次会话，可能早于用户配置自定义模型（extraModels 只在
+    // session/new 时注入）。新会话一定会带上它们，所以这里也补进候选——否则刚配好的模型
+    // 无法设为默认值，看起来就像设置没生效。
+    if (category === 'model') {
+      for (const model of this.customModels()) {
+        const id = String(model.modelId || '').trim();
+        if (!id || out.some(item => item.value === id)) { continue; }
+        out.push({ value: id, label: model.name || id });
       }
     }
     return out.length > 1 ? out : null;
@@ -5444,6 +5479,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         this.patchUiPrefs({
           historyDisplayLimit: ChatPanelHost.clampHistoryDisplayLimit(value),
         });
+        break;
+      case 'panel.historyWidth':
+        this.patchUiPrefs({ historyWidth: ChatPanelHost.clampHistoryWidth(value) });
         break;
       case 'panel.markdownStyle':
         this.patchUiPrefs({ markdownStyle: resolveMarkdownStyle(value) });

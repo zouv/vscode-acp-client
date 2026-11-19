@@ -1056,9 +1056,14 @@ export const composerClient = `
     }
     // [CUSTOM- 设置面板里的自定义模型顺序即菜单顺序：只重排 agent 现有的模型候选项，
     // 不在设置列表里的内置模型保持 agent 原顺序，分组结构（entry.options）保持。
+    // [CUSTOM- 草稿页额外补上"刚配置、快照里还没有"的自定义模型：'session/new' 会用
+    // '_meta.extraModels' 注入它们，而草稿候选来自上一次会话的快照（可能更早）。
     var shown = option;
-    if (option.category === 'model' && NS.modelOrder && NS.modelOrder.orderOption) {
-      shown = NS.modelOrder.orderOption(option, state.customModels);
+    if (option.category === 'model' && NS.modelOrder) {
+      if (state.draft && NS.modelOrder.withCustomModels) {
+        shown = NS.modelOrder.withCustomModels(option, state.customModels);
+      }
+      if (NS.modelOrder.orderOption) { shown = NS.modelOrder.orderOption(shown, state.customModels); }
     }
     var options = shown.options || [];
     for (var i = 0; i < options.length; i++) {

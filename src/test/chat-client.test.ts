@@ -3044,12 +3044,13 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
   // them in order and it is obvious. pitfalls #25.)
 
   /** Mirrors the #history drawer in body.ts — if that markup changes, follow it here. */
-  function historyDrawer(): { elements: Record<string, StubNode>; drawer: StubNode; chip: StubNode; menu: StubNode; list: StubNode; search: StubNode; clear: StubNode } {
+  function historyDrawer(): { elements: Record<string, StubNode>; drawer: StubNode; chip: StubNode; restore: StubNode; menu: StubNode; list: StubNode; search: StubNode; clear: StubNode } {
     const button = new StubNode('button');
     const drawer = new StubNode('div');
     const head = new StubNode('div');
     const info = new StubNode('span');
     const chip = new StubNode('button');
+    const restore = new StubNode('button');
     const menu = new StubNode('div');
     const searchRow = new StubNode('div');
     const search = new StubNode('input');
@@ -3064,6 +3065,8 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     info.className = 'outline-head-info';
     chip.className = 'picker-btn filter-chip';
     chip.hidden = true;
+    restore.className = 'picker-btn restore-btn';
+    restore.hidden = true;
     menu.className = 'picker-menu down';
     searchRow.className = 'outline-search-row';
     search.className = 'outline-search';
@@ -3072,6 +3075,7 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     list.className = 'outline-list';
     head.appendChild(info);
     head.appendChild(chip);
+    head.appendChild(restore);
     head.appendChild(menu);
     searchRow.appendChild(search);
     searchRow.appendChild(clear);
@@ -3080,10 +3084,10 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     drawer.appendChild(list);
     return {
       elements: {
-        historyBtn: button, history: drawer, historyFilter: chip, historyFilterMenu: menu,
-        historySearch: search, historySearchClear: clear,
+        historyBtn: button, history: drawer, historyFilter: chip, historyRestore: restore,
+        historyFilterMenu: menu, historySearch: search, historySearchClear: clear,
       },
-      drawer, chip, menu, list, search, clear,
+      drawer, chip, restore, menu, list, search, clear,
     };
   }
 
@@ -3562,6 +3566,40 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     } finally {
       StubNode.prototype.focus = original;
     }
+  });
+
+  // [CUSTOM- 2026-11-19] 目录候选按字母序；筛了别的目录时，右侧出现「还原」。
+  test('the folder menu is alphabetical and Restore returns to the current folder', () => {
+    const { docListeners, tree } = openedPicker({
+      directories: [
+        { key: '/git/zeta', cwd: '/git/zeta', name: 'zeta', count: 1, current: false },
+        { key: '/git/alpha', cwd: '/git/alpha', name: 'alpha', count: 2, current: true },
+        { key: '/git/beta', cwd: '/git/beta', name: 'beta', count: 1, current: false },
+      ],
+    }, { tabCwd: '/git/alpha' });
+    dispatchClick(tree.chip, docListeners);
+    assert.deepStrictEqual(
+      filterRows(tree.menu).map(row => row.querySelector('.filter-item-label')!.textContent),
+      ['All folders', 'alpha', 'beta', 'zeta'],
+      'the folder rows are sorted; All folders stays first',
+    );
+    assert.strictEqual(tree.restore.hidden, true, 'already filtering the current folder');
+
+    const beta = filterRows(tree.menu).find(row => row.getAttribute('data-filter-key') === '/git/beta');
+    dispatchClick(beta!, docListeners);
+    assert.strictEqual(tree.restore.hidden, false, 'another folder is selected');
+    dispatchClick(tree.restore, docListeners);
+    assert.strictEqual(tree.restore.hidden, true, 'the current folder is selected again');
+    assert.ok(tree.chip.querySelector('.picker-label')!.textContent.includes('alpha'));
+  });
+
+  test('history width follows the panel setting (default 600, clamped)', () => {
+    const { NS, tree } = openedPicker();
+    assert.strictEqual(tree.drawer.style.width, '600px', 'the default width is applied');
+    NS.sessionMenu.applyPrefs({ historyWidth: 720 });
+    assert.strictEqual(tree.drawer.style.width, '720px');
+    NS.sessionMenu.applyPrefs({ historyWidth: 10 });
+    assert.strictEqual(tree.drawer.style.width, '320px', 'too small values are clamped');
   });
 });
 
@@ -6667,6 +6705,26 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
     assert.ok(use);
     use!.dispatch('click', { preventDefault: () => { /* stub */ }, stopPropagation: () => { /* stub */ } });
     assert.deepStrictEqual(d.picked, [{ id: 'd1', path: '/srv/quoted path' }]);
+  });
+
+  // [CUSTOM- 2026-11-19] 有搜索结果、但没有用户输入的那个目录时，也直接给出
+  // 「Use this directory」——不必先清空搜索才能采用复制来的路径。
+  test('a typed path is offered alongside matches that are only its children', () => {
+    const d = drawer();
+    d.open();
+    d.choices(['/old/project', '/new/project']);
+    d.picked.length = 0;
+
+    d.search.value = '/old';
+    d.search.dispatch('input', {});
+    const use = d.list.querySelector('[data-cwd-use-query]');
+    assert.ok(use, 'the typed directory is offered although the search has results');
+    assert.strictEqual(use!.getAttribute('title'), '/old');
+
+    d.search.value = '/old/project';
+    d.search.dispatch('input', {});
+    assert.strictEqual(d.list.querySelector('[data-cwd-use-query]'), null,
+      'no extra row when the typed directory is already listed');
   });
 
   test('Escape clears the directory search before closing, and removal keeps the query', () => {

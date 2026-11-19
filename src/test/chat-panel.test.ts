@@ -4274,6 +4274,8 @@ suite('chat panel: ui prefs merge ()', () => {
   test('the recent-directory limit is clamped to 0–30, and an empty box means the default', async () => {
     const memento = new FakeMemento();
     const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    const item = (await settingsItems(harness)).find(entry => entry.key === 'panel.recentDirectoryLimit');
+    assert.strictEqual(item?.group, 'appearance', 'listed under Appearance');
 
     function write(value: unknown): unknown {
       harness.host.onMessage({ type: 'setSetting', key: 'panel.recentDirectoryLimit', value });
@@ -4317,6 +4319,7 @@ suite('chat panel: ui prefs merge ()', () => {
     const items = await settingsItems(harness);
     const item = items.find(entry => entry.key === 'panel.historyDisplayLimit');
     assert.ok(item, 'the setting is exposed');
+    assert.strictEqual(item?.group, 'appearance', 'listed under Appearance');
     assert.strictEqual(item?.type, 'number');
     assert.strictEqual(item?.value, 0, 'unset means unlimited');
     assert.strictEqual(item?.min, 0);
@@ -4340,6 +4343,31 @@ suite('chat panel: ui prefs merge ()', () => {
     assert.strictEqual(await write('abc'), 0, 'non-numeric falls back to unlimited');
     assert.strictEqual(await write(null), 0);
     assert.strictEqual(await write(true), 0, 'a non-number is not a limit');
+  });
+
+  test('the history width defaults to 600px and is clamped to 320–1200', async () => {
+    const memento = new FakeMemento();
+    const harness = makeHarness('s-1', 'Claude Code', undefined, new StubPrefs(), {}, memento);
+    const item = (await settingsItems(harness)).find(entry => entry.key === 'panel.historyWidth');
+    assert.ok(item, 'the setting is exposed');
+    assert.strictEqual(item?.group, 'appearance', 'listed under Appearance');
+    assert.strictEqual(item?.type, 'number');
+    assert.strictEqual(item?.value, 600, 'unset means the 600px default');
+    assert.strictEqual(item?.min, 320);
+    assert.strictEqual(item?.max, 1200);
+    assert.strictEqual(item?.step, 10);
+
+    function write(value: unknown): unknown {
+      harness.host.onMessage({ type: 'setSetting', key: 'panel.historyWidth', value });
+      return memento.get<Record<string, unknown>>('vac.outlinePrefs.v1')?.historyWidth;
+    }
+
+    assert.strictEqual(await write(720), 720);
+    assert.strictEqual(await write('640'), 640, 'the number input posts strings');
+    assert.strictEqual(await write(1400), 1200, 'above the range clamps');
+    assert.strictEqual(await write(10), 320, 'below the range clamps');
+    assert.strictEqual(await write(''), 600, 'clearing the box restores the default');
+    assert.strictEqual(await write('abc'), 600, 'non-numeric falls back to the default');
   });
 
   test('the history display limit is shared by every surface and survives unrelated writes', async () => {
@@ -7141,6 +7169,7 @@ suite('chat panel: Side Chat surface isolation', () => {
       autoExpandKinds: ['thought', 'tool'], autoExpandToolHeight: 360, autoExpandThoughtHeight: 240,
       flatTools: false, findAllCards: false, composerMaxWidth: 720, inputMaxHeight: 320, sendKey: 'enter',
       defaultModelByAgent: {}, defaultEffortByAgent: {}, recentDirectoryLimit: 8, historyDisplayLimit: 0,
+      historyWidth: 600,
       markdownStyle: 'editor',
       shortcuts: defaultShortcutMap(),
     };

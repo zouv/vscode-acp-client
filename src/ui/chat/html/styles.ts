@@ -441,6 +441,10 @@ export function styles(): string {
      只写在 #history 上、不动 .outline 的通用规则 —— #outline / #cwdMenu 里没有这种嵌套菜单。
      head 的 background: inherit 与 sticky 都保留（后者仍是菜单的定位锚）。 */
   #history { display: flex; flex-direction: column; overflow: visible; }
+  /* [CUSTOM- 历史抽屉不再铺满：宽度来自 'panel.historyWidth'（默认 600px，由
+     sessionMenu 写 inline style）。right: auto 让 left + width 决定几何；max-width
+     保证面板比设置值更窄时收缩到可用宽度。 */
+  #history { right: auto; width: 600px; max-width: calc(100% - 12px); }
   /* 目录过滤菜单还必须是**画在上面**的那一个：head 上要有正的 z-index。
      因果链：历史行外套的那层 .session-row 是 position: relative（悬停图标要一个定位祖先）
      ⇒ 每一行都是"定位元素、z-index: auto"，与同样 z-index: auto 的 .outline-head 落在
@@ -2906,6 +2910,9 @@ export function styles(): string {
   /* 过滤生效时给边框上色：与 .outline-item.active 同一套"当前项"语义。**不用环**——
      环在这个面板里是键盘焦点（062 的教训）。 */
   .filter-chip.on { border-color: var(--vscode-focusBorder); color: var(--vscode-foreground); }
+  /* [CUSTOM- 历史抽屉头部的「还原到当前会话目录」：紧挨目录 chip，图标按钮。 */
+  .restore-btn { flex: none; padding: 0 4px; font-size: 0.82em; }
+  .restore-btn[hidden] { display: none; }
   /* [CUSTOM- 目录过滤菜单与历史列表的底色/边框/圆角几乎同值（两者都吃
      --vscode-dropdown-* 那套 token），叠在一起分不清哪个是哪个 —— 用户要求区分开。
      借 .filter-chip.on 已有的那套语义（--vscode-focusBorder 表示"当前项"）：**不是画环**
@@ -3510,6 +3517,8 @@ export function styles(): string {
     width: 20px; height: 24px; border-radius: 3px; cursor: grab;
     color: var(--vscode-descriptionForeground); user-select: none;
   }
+  .settings-model-drag-icon { display: inline-flex; align-items: center; }
+  .settings-model-drag-icon svg { display: block; width: 12px; height: 12px; }
   .settings-model-drag:hover { background: var(--vscode-list-hoverBackground); }
   .settings-model-drag:active { cursor: grabbing; }
   .settings-model-drag:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }

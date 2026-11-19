@@ -165,6 +165,20 @@ export const iconsClient = `
     ],
     check: [
       ['path', { d: 'M2.2 6.3 4.8 8.9 9.8 3.3' }]
+    ],
+    // [CUSTOM- 历史抽屉「还原到当前目录」：向左的返回箭头。
+    restore: [
+      ['path', { d: 'M9.8 6H2.4' }],
+      ['path', { d: 'M5.2 3.2 2.4 6l2.8 2.8' }]
+    ],
+    // [CUSTOM- 设置面板自定义模型行的拖拽手柄：2 × 3 个实心圆点。
+    drag: [
+      ['circle', { cx: 4.2, cy: 2.4, r: 1.05, fill: 'currentColor', stroke: 'none' }],
+      ['circle', { cx: 7.8, cy: 2.4, r: 1.05, fill: 'currentColor', stroke: 'none' }],
+      ['circle', { cx: 4.2, cy: 6, r: 1.05, fill: 'currentColor', stroke: 'none' }],
+      ['circle', { cx: 7.8, cy: 6, r: 1.05, fill: 'currentColor', stroke: 'none' }],
+      ['circle', { cx: 4.2, cy: 9.6, r: 1.05, fill: 'currentColor', stroke: 'none' }],
+      ['circle', { cx: 7.8, cy: 9.6, r: 1.05, fill: 'currentColor', stroke: 'none' }]
     ]
   };
 

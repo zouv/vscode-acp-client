@@ -657,7 +657,10 @@ export const settingsPanelClient = `
   /** 自定义模型列表的一行：拖拽手柄 / id / 显示名 / 描述 / 删除。 */
   function modelRow(model) {
     var row = NS.dom.el('div', 'settings-model-row');
-    var drag = NS.dom.el('span', 'settings-model-drag', '\\u2807');
+    var drag = NS.dom.el('span', 'settings-model-drag');
+    // [CUSTOM- 拖拽手柄是 2 × 3 个圆点（SVG）；没有图标模块时退回同样的盲文点阵。
+    var grip = NS.icons && NS.icons.icon ? NS.icons.icon('drag', 'settings-model-drag-icon') : null;
+    if (grip) { drag.appendChild(grip); } else { drag.textContent = '\\u283f'; }
     drag.title = 'Drag to reorder (or focus and press arrow up / down)';
     drag.setAttribute('draggable', 'true');
     drag.setAttribute('tabindex', '0');

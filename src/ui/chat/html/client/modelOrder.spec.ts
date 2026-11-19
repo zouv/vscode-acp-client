@@ -101,4 +101,26 @@ describe('composer model order', () => {
     const mode = { category: 'mode', options: [{ value: 'a' }] };
     expect(order.orderOption(mode, [{ modelId: 'a' }])).toBe(mode);
   });
+
+  it('withCustomModels appends configured models the draft snapshot lacks', () => {
+    const order = load();
+    const input = option([
+      { value: 'builtin', name: 'Builtin' },
+      { value: 'custom-b', name: 'Custom B' },
+    ]);
+    const out = order.withCustomModels(input, [
+      { modelId: 'custom-b', name: 'B' },
+      { modelId: 'custom-a', name: 'Custom A' },
+      { modelId: 'custom-c' },
+    ]);
+    expect(out.options.map((entry: any) => entry.value))
+      .toEqual(['builtin', 'custom-b', 'custom-a', 'custom-c']);
+    expect(out.options[3].name).toBe('custom-c');
+    // Input is not mutated; nothing is appended when every id is already there.
+    expect(input.options.map((entry: any) => entry.value)).toEqual(['builtin', 'custom-b']);
+    expect(order.withCustomModels(input, [{ modelId: 'custom-b' }])).toBe(input);
+    // Only model options are touched.
+    const mode = { category: 'mode', options: [{ value: 'a' }] };
+    expect(order.withCustomModels(mode, [{ modelId: 'custom-a' }])).toBe(mode);
+  });
 });

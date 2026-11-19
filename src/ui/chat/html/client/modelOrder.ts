@@ -6,7 +6,9 @@
 // · agent 内置模型（不在设置列表里）保持 agent 原顺序、排在前面；
 // · 自定义模型按设置列表顺序排在它们后面（适配器也是把 extraModels 追加在内置模型之后）；
 // · 分组条目（`entry.options`）不被摊平或跨组搬动，只在组内重排 —— 分组语义不破；
-// · 设置里有、agent 当前候选里没有的 id 直接忽略（不凭空造菜单项）。
+// · 设置里有、agent 当前候选里没有的 id 在 `orderOption` 里直接忽略（不凭空造菜单项）；
+//   唯一的例外是草稿页的 `withCustomModels`：那里"下一条会话一定会带上它们"是可预期的，
+//   而快照可能早于配置，见该函数注释。
 export const modelOrderClient = `
 (function (NS) {
   'use strict';
@@ -115,10 +117,56 @@ export const modelOrderClient = `
     return copy;
   }
 
+  /**
+   * [CUSTOM- 把"已配置但 agent 候选里还没有"的自定义模型补进选项。
+   *
+   * 只给**草稿页**用：自定义模型经 '_meta.extraModels' 在 'session/new' 时注入，而草稿页
+   * 的候选来目上一次会话的快照 —— 快照可能早于用户配置这些模型。下一条会话一定会带上它们，
+   * 所以在草稿页补出来是诚实的；已有会话不能补（那些 id 对当前 agent 未必有效）。
+   * 已有候选保持原顺序，缺的按设置顺序追加；不修改输入对象。
+   */
+  function withCustomModels(option, customModels) {
+    if (!option || option.category !== 'model') { return option; }
+    if (Object.prototype.toString.call(option.options) !== '[object Array]') { return option; }
+    var list = Object.prototype.toString.call(customModels) === '[object Array]' ? customModels : [];
+    if (list.length === 0) { return option; }
+    var seen = Object.create(null);
+    var entries = option.options;
+    for (var i = 0; i < entries.length; i++) {
+      var entry = entries[i];
+      if (!entry) { continue; }
+      if (Object.prototype.toString.call(entry.options) === '[object Array]') {
+        for (var j = 0; j < entry.options.length; j++) {
+          var grouped = entry.options[j];
+          if (grouped && grouped.value !== undefined) { seen[String(grouped.value)] = true; }
+        }
+      } else if (entry.value !== undefined) {
+        seen[String(entry.value)] = true;
+      }
+    }
+    var extra = [];
+    for (var k = 0; k < list.length; k++) {
+      var model = list[k];
+      if (!model || typeof model.modelId !== 'string') { continue; }
+      var id = model.modelId.trim();
+      if (!id || Object.prototype.hasOwnProperty.call(seen, id)) { continue; }
+      seen[id] = true;
+      extra.push({ value: id, name: model.name || id });
+    }
+    if (extra.length === 0) { return option; }
+    var copy = {};
+    for (var key in option) {
+      if (Object.prototype.hasOwnProperty.call(option, key)) { copy[key] = option[key]; }
+    }
+    copy.options = entries.concat(extra);
+    return copy;
+  }
+
   NS.modelOrder = {
     rankMap: rankMap,
     orderEntries: orderEntries,
-    orderOption: orderOption
+    orderOption: orderOption,
+    withCustomModels: withCustomModels
   };
 })(window.__vac = window.__vac || {});
 `;

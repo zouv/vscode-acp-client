@@ -88,6 +88,9 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
            '.outline-head-info'，筛选按钮是它的兄弟、跨重渲染存活。 -->
       <div class="outline-head">
         <button id="historyFilter" class="picker-btn filter-chip" hidden aria-expanded="false"></button>
+        <!-- [CUSTOM- 「还原到当前会话目录」：目录筛选选了别的目录时出现，
+             点一下回到地址栏当前那个目录。图标 + aria-label 由 sessionMenu 填。 -->
+        <button id="historyRestore" class="picker-btn restore-btn" type="button" hidden></button>
         <span class="outline-head-info"></span>
         <div id="historyFilterMenu" class="picker-menu down filter-menu"></div>
       </div>
