@@ -44,6 +44,7 @@ VAC 是一个 [ACP（Agent Client Protocol）](https://agentclientprotocol.com/)
 **多 agent、多会话**
 
 - 同时连接多个 agent，每个 agent 各带自己的会话列表；断开/重启某个 agent 不影响其它 agent。
+- **默认 Agent**：页签栏右侧图标显示当前默认 Agent（Claude / Codex），点开即可切换；新建会话与未发送的草稿使用它。
 - 每个 agent 可承载多个会话标签页，切标签**不会**重新向 agent 拉历史。
 - 会话历史可重开：agent 支持 `session/list` 就以 agent 为准，否则用本机缓存，支持跨工作目录打开。
 - **Fork from here** —— 在助手的任意一条消息上右键，以它为分叉点派生一个新会话。
@@ -62,7 +63,7 @@ VAC 是一个 [ACP（Agent Client Protocol）](https://agentclientprotocol.com/)
 **用量与统计**
 
 - **Dashboard**：token 与等价成本估算，按模型 / 项目拆分，30 天趋势，连接状态与最近会话。
-- **自定义模型**：`vac.customModels` 经 ACP `_meta.extraModels` 注入 agent 的模型列表。
+- **自定义模型**：`vac.customModels` 经 ACP `_meta.extraModels` 注入 agent 的模型列表（Claude 适配器与默认的 `zouv/codex-acp` fork 都支持；官方 `@agentclientprotocol/codex-acp` 不认，仍用它自己的 `~/.codex/config.toml`）。
 
 **隐私**
 
@@ -136,7 +137,7 @@ npm run dev:host      # 编译 + 打开 Extension Development Host
 | 名称 | `kind` | 命令 |
 |---|---|---|
 | Claude Code | `claude` | `npx -y github:zouv/claude-agent-acp` |
-| Codex CLI | `codex` | `npx -y @agentclientprotocol/codex-acp` |
+| Codex CLI | `codex` | `npx -y github:zouv/codex-acp#main` |
 
 要接别的 agent，加一条 `vac.agents` 配置即可（`kind` 可省略，会按名称/命令自动推断）；详见[配置](#配置)。
 
@@ -158,13 +159,15 @@ npm run dev:host      # 编译 + 打开 Extension Development Host
 | `vac.agents` | object | Claude Code / Codex CLI | agent 列表：名称 → `{ kind, command, args, env }` |
 | `vac.autoApprovePermissions` | `ask` \| `allowAll` | `ask` | 是否自动批准 agent 的权限请求 |
 | `vac.autoConnectOnOpen` | boolean | `true` | 打开聊天面板 0.5 秒后自动连接 |
+| `vac.defaultAgent` | string | 空 | 面板没有会话时连接哪个 agent；留空 = `vac.agents` 的第一项 |
 | `vac.restoreSessionsOnOpen` | `ask` \| `always` \| `never` | `ask` | 上次窗口关闭时开着的会话怎么处理 |
 | `vac.defaultWorkingDirectory` | string | 空 | 新会话的默认工作目录；留空 = 活动编辑器所在的 workspace 文件夹（其次最后编辑过的目录，最后第一个文件夹） |
 | `vac.autoAddWorkspaceFolders` | boolean | false | 多根工作区：新会话是否自动把其它 workspace 文件夹加入 `additionalDirectories`（草稿页显示为可删除的 chips） |
 | `vac.logTraffic` | boolean | `true` | 是否记录 ACP 协议流水（落到 `VAC Traffic` 通道与日志文件） |
-| `vac.customModels` | array | `[]` | 追加进 agent 模型列表的模型（经 `_meta.extraModels` 注入） |
+| `vac.customModels` | array | `[]` | 追加进 agent 模型列表的模型（经 `_meta.extraModels` 注入；Claude 与 `zouv/codex-acp` fork 支持） |
 | `vac.dashboard.enabled` | boolean | `true` | 是否扫描本机转录构建用量面板；关掉即停止一切后台扫描 |
 | `vac.dashboard.claudeProjectsDir` | string | 空 | 覆盖 Claude 转录目录（默认 `~/.claude/projects`） |
+| `vac.dashboard.codexSessionsDir` | string | 空 | 覆盖 Codex rollout 目录（默认 `$CODEX_HOME/sessions` 或 `~/.codex/sessions`） |
 
 ### 接入一个新 agent
 
@@ -332,7 +335,7 @@ arch/                   ARCHITECTURE 分册（面向 AI，按模块拆分）
 - [Agent Client Protocol](https://agentclientprotocol.com/) —— VAC 实现的协议本身；ACP 把「编辑器」与「agent」解耦，VAC 是这个约定下的一枚客户端。
 - [`@agentclientprotocol/sdk`](https://www.npmjs.com/package/@agentclientprotocol/sdk) —— 客户端侧的协议类型与连接实现。
 - [`zouv/claude-agent-acp`](https://github.com/zouv/claude-agent-acp) —— Claude Code 的 ACP 适配器，本项目默认配置使用的就是它。
-- [`@agentclientprotocol/codex-acp`](https://www.npmjs.com/package/@agentclientprotocol/codex-acp) —— Codex 的 ACP 适配器（基于 Codex App Server）。
+- [`zouv/codex-acp`](https://github.com/zouv/codex-acp) —— Codex 的 ACP 适配器 fork；`main` 跟踪上游 `agentclientprotocol/codex-acp`，只在上游未支持时保留本项目定制（默认配置使用的就是它）。
 
 ## 许可证
 

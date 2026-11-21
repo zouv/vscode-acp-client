@@ -14,9 +14,9 @@
 ## 状态快照
 
 - **最近更新**：2026-11-19
-- **整体状态**：v1.18.0 已发布（GitHub Release 附 `vscode-acp-client-1.18.0.vsix`）。本轮包含历史抽屉宽度/排序/还原、目录搜索 Use this directory 增强、自定义模型候选实时补齐、模型拖拽手柄换形；自动验证全绿，**真机验收待做**。上轮 v1.17.0 的真机验收仍可与本轮一起做。
+- **整体状态**：v1.18.0 已发布。v1.18.0 的真机验收仍待做；本轮完成 **Codex/Claude UI 对齐、两个适配器 fork 同步、`vac.defaultAgent` 默认连接设置与页签栏 Agent 图标、Codex 自定义模型注入**（未发布，见 `CHANGELOG [未发布]`）；自动验证全绿，真机验收待做。
 - **当前分支（必填）**：`main`。
-- **最后验证状态**（2026-11-19）：`typecheck` / `lint` / `check-webview-client`（40 个客户端模块）✅；unit **413 / 49 文件** ✅；真实宿主 **846 passing / 0 failing** ✅；`npm run vsix` 产出 `release/vscode-acp-client-1.18.0.vsix`（1.11 MB，sha256 `cd6e7f83…d2643ce07`）。
+- **最后验证状态**（2026-11-20，默认 agent + Codex 自定义模型 + 页签栏图标后）：客户端 `typecheck` / `lint` / `check-webview-client` ✅；unit **420 / 49 文件** ✅；真实宿主 **849 passing / 0 failing** ✅；Claude fork `npm run build` ✅、`vitest` 基线失败之外无新增（干净上游 0.109.0 同环境 58 失败，本 fork 56 失败）；Codex fork `typecheck` / `build` / 新增模型测试 ✅（全量套件的 Windows 快照失败在干净上游同样存在）；两个 fork 的 `npx github:…#main` initialize 探针均 ✅；Codex `session/new` + `_meta.extraModels=vac-probe-model` 实测该 id 出现在 `configOptions` 的 model 选项与 legacy `models` 中。
 
 ## 当前任务（In Progress）
 
@@ -26,7 +26,27 @@
   2. 目录抽屉输入一个"只是结果前缀"的路径（如 `/old`），`Use this directory` 是否与结果同时出现；输入完整已列出的路径时是否不再出现。
   3. 历史列表宽度 600 默认是否合适；把 Chat 面板拖窄后是否跟着收缩；设置面板改宽度是否即时生效。
   4. 历史目录菜单字母序；选别的目录后「还原」是否出现、点击是否回到当前目录；地址栏没有目录时按钮是否保持隐藏。
-- 更早的 v1.17.0 验收细节见 `docs/03-验收清单.md`；更早的会话记录查 git log。
+- **更早的 v1.17.0 验收细节**见 `docs/03-验收清单.md`；更早的会话记录查 git log。
+
+## Codex 体验对齐（本轮未发布，待真机验收）
+
+- 默认适配器已切到 `github:zouv/codex-acp#main`（fork 仓库 `zouv/codex-acp`，当前等于上游 2.8.0）。fork 已补 `prepare: npm run build`；**该提交必须先推到 `zouv/codex-acp` 的 main，`npx github:` 才能拿到 `dist/`**。`AgentMigration` 会把旧 `@zed-industries/codex-acp` 与官方 `@agentclientprotocol/codex-acp` 迁移到 fork。
+
+- 实现已完成：`AgentProfile` 新增 `messageFork` / `customModels`；`SessionMeta` 下发 `messageFork` / `customModelsSupported`；空态卡由宿主下发 `agentLabel`；Dashboard 新增 `vac.dashboard.codexSessionsDir`；`/compact` 按 `availableCommands` 显隐；模型名回退到会话配置；`vac.agents` 排序改为配置顺序；新增 `vac.defaultAgent` 与页签栏右侧 Agent 图标/下拉；Codex fork 支持 `_meta.extraModels`。
+- 待验收：
+  1. 只配置 Codex（或把 Codex 排在 `vac.agents` 第一位）：空面板标题/按钮是否显示 “Codex CLI”，连接中/就绪文案是否跟随。
+  2. Codex 会话里右键助手/用户记录：Fork from here 是否在所选助手消息处截断并打开新会话；Rewind to here 是否回到该用户消息之前。若适配器返回 `invalidParams`，记下当时的 adapter 版本与 messageId。
+  3. **新建或重载** Codex 会话后看模型菜单与设置面板默认模型候选：能看到 `vac.customModels` 的条目；选中后会话模型值保持该模型 id。已在运行的旧会话要重开才会重新下发 `_meta.extraModels`。
+  4. Codex 会话的上下文 Tip 是否显示模型名；没有 `compact` 命令时 `/compact` 按钮是否隐藏。
+  5. Dashboard 设置里 `vac.dashboard.codexSessionsDir` 改路径后是否重新扫描；空态提示是否同时提到 Claude/Codex 目录。
+  6. 设置 → General → Default agent 与页签栏右侧图标双向同步；切换后新开草稿/会话使用该 agent；空面板重开后连接该 agent。
+  7. 页签栏图标的下拉不被 tab 栏裁切，点外面/滚动/改窗口大小会收起。
+
+## 适配器 fork（已推送）
+
+- `zouv/codex-acp`：main `6feb13c`（`fix: skip bracketed ids`）+ `903d305`（`feat: accept client-supplied models via _meta.extraModels`）+ `fe93fd7`（`build: add prepare hook`），已推送；`npx github:zouv/codex-acp#main` 可正常初始化。fork 根目录的 `FORK.md` 记录本地扩展与同步方式。
+- `zouv/claude-agent-acp`：main `b06edf4`（`chore: sync upstream v0.109.0`），已推送。已丢弃被上游 `readHistoryAcrossCompactions` 覆盖的 transcript-chain，保留 `_meta.extraModels`、`_claude/usage`、`vac/agentMap` 与 `prepare`；`npx github:…#main` 报告 0.109.0。
+- fork CI 与上游耦合：Claude 的 release-please 因 fork 权限失败、CI 仅 macOS arm64 runner 容量失败；不影响安装。同步流程见 `docs/dev-workflow.md`。
 
 ## 待归档暂存区（仅本轮未归档的完成项）
 
@@ -48,9 +68,9 @@
 
 ## 下一步（Next Steps）
 
-1. `npm run dev:host`，按「当前任务」的 4 条重点做真机验收（可与 v1.17.0 遗留验收合并做）。
+1. `npm run dev:host`，先按「Codex 体验对齐」的 5 条做真机验收，再按 v1.18.0 的 4 条验收。
 2. 验收发现问题时在 `CHANGELOG.md` 的 `[未发布]` 记录修复并补测试。
-3. 验收通过后按需发版；继续 `ROADMAP.md` 的 P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
+3. 验收通过后发版；继续 `ROADMAP.md` 的 P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
 
 ## 如何运行 / 测试（Quick Verify）
 
@@ -61,8 +81,8 @@
 - 校验/测试：`npm run test:unit`（vitest，秒级）· `npm test`（编译 + lint + 真实宿主测试；若 shell 带 `ELECTRON_RUN_AS_NODE=1`，用 `env -u ELECTRON_RUN_AS_NODE npm test`；最低宿主可用 `VSCODE_TEST_VERSION=1.85.0`，本机剪贴板用例偶发失败时可换 1.144.1）
 - lint / 类型：`npm run lint` · `npm run typecheck`
 - 文档体检：`sh check-docs.sh`
-- agent 能力探针：`node scripts/probe-agent-init.mjs --agent "npx -y @agentclientprotocol/codex-acp" --session`
-  （每次 `--session` 会在该 agent 的历史里留一个空会话；输出含本机模型配置，别提交）
+- agent 能力探针：`node scripts/probe-agent-init.mjs --agent "npx -y github:zouv/codex-acp#main" --session --extra-model vac-probe-model`
+  （`--session` 会在该 agent 的历史里留一个空会话；输出含本机模型配置，别提交）
 - 端到端：需本机可执行 `npx`（默认 agent 经 `npx` 拉起 Claude Code / Codex 的 ACP 适配器）
 
 ## 关键决策记录（Key Decisions）
@@ -84,7 +104,19 @@
   （＝页面上那两颗按钮），不是"扩展能做的全部"—— spec 钉住两边一一对应，收紧白名单时要一起改。
 - **继续走 ACP**：不用 Anthropic 专有 SDK，保持通用 ACP 客户端；当前只接 Claude 与 Codex。
 - **agent 差异集中**：新增 agent 只动 `agents/AgentProfile.ts` 与配置，**不往 UI 加分支**；UI 需要的差异
-  从 profile 按 kind 取（`transcriptStore` / `nesting`），**不按配置名判断**。
+  从 profile 按 kind 取（`transcriptStore` / `nesting` / `messageFork` / `customModels`），**不按配置名判断**。
+  能力位随 `SessionMeta` 下发（`messageFork` / `customModelsSupported`），客户端只消费。
+- **消息级 fork 是 ACP 的 AIR 扩展**（2026-11-19）：Claude 适配器与 `codex-acp`（至少 v2.0 起）都认
+  `_meta.jetbrains.air.fork`（`version: 1` + `messageId`）；Codex 侧无需声明 AIR 身份。`AgentProfile.messageFork`
+  对 Claude/Codex 为 true、generic 为 false；false 的 agent 保留菜单但提示不支持，宿主同时拒绝。
+- **Codex 用量不是 `usage_update`**（2026-11-19）：codex-acp 只在 `PromptResponse.usage` 与
+  `_meta.quota` 里给**单轮** token 数，没有上下文窗口 `used/size`，因此 Codex 的圆环/Tip 数据不完整；
+  若要完全对齐，需要适配器侧补 `usage_update`（优先上游 PR），不是客户端 fork。
+- **自定义模型只对 Claude 展示**（2026-11-19）：Codex 不认 `_meta.extraModels`，UI 与默认模型候选都按
+  `AgentProfile.customModels` 过滤；设置里的全局列表本身仍保留。
+- **默认 agent 排序尊重配置**（2026-11-19）：`getAgentNames` 不再强制 Claude 置顶，按 `vac.agents` 书写顺序。
+- **两个适配器都走 fork 的 `#main`**（2026-11-19）：`zouv/claude-agent-acp` 与 `zouv/codex-acp` 的 `main` 跟踪官方上游，只在官方未支持时保留定制；同步流程见 `docs/dev-workflow.md`「适配器 fork 的同步流程」。
+- **Codex 自定义模型由 fork 承担**（2026-11-20）：客户端 `AgentProfile.codexProfile.customModels=true`，`_meta.extraModels` 随 `session/new|load|resume` 下发；fork 把它追加进 model 配置项。官方 `@agentclientprotocol/codex-acp` 不支持，迁移表会把官方包换到 fork。
 - **不声明 `_meta.terminal_output(_delta)`**（2026-10-25）：Codex 不声明也会发 `terminal_output_delta`；
   Claude 适配器却会因这个声明改走 `_meta` 终端输出，改变现有 Bash 渲染。
 - **构建换成 esbuild**、**测试分两层**（vitest 纯逻辑 + mocha 真实宿主）。

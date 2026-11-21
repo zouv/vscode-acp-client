@@ -181,6 +181,42 @@ node scripts/capture-acp-replay.mjs --out src/test/fixtures/claude-code-session-
 
 ---
 
+## 适配器 fork 的同步流程
+
+本项目默认拉起两个适配器 fork，客户端配置固定指向它们的 `main`：
+
+| 客户端默认 spec | fork | 上游 |
+|---|---|---|
+| `github:zouv/claude-agent-acp#main` | `zouv/claude-agent-acp`（本地 `claude-agent-acp` 检出） | `agentclientprotocol/claude-agent-acp` |
+| `github:zouv/codex-acp#main` | `zouv/codex-acp`（本地 `codex-acp` 检出） | `agentclientprotocol/codex-acp` |
+
+**原则：`main` 尽量等于上游。** 只有「上游尚未支持 / 尚未修复」的适配器侧改动才留在 fork；上游一旦支持，同步时优先采用上游并删掉对应定制。客户端不需要跟着改 spec。
+
+同步步骤（两个 fork 相同，测试命令按各自 `package.json`）：
+
+```bash
+cd <your-checkout>/codex-acp          # 或 claude-agent-acp
+git fetch upstream --tags
+git checkout main
+# 没有定制提交时：
+git merge --ff-only upstream/main
+# 有定制提交时：
+#   git rebase upstream/main   （冲突时先看上游是否已覆盖该定制；已覆盖就丢弃该提交）
+#   或 git merge upstream/main（保留合并历史；冲突逐项解决）
+npm install
+npm run build
+npm test                             # claude: npm run test:run && npm run check
+git push origin main
+```
+
+同步后回到本仓库跑 `node scripts/probe-agent-init.mjs --agent "npx -y github:zouv/<repo>#main" --session`，确认握手/能力没有回退；再用 `npm run dev:host` 做一次真机验收。
+
+> `zouv/codex-acp` 的 `package.json` 必须保留 `"prepare": "npm run build"`——`dist/` 不入库，npm 从 GitHub 安装时靠 `prepare` 现场构建，否则 `npx github:` 找不到 `dist/index.js`。
+>
+> 客户端 `AgentInstall` 会把 npx 安装结果缓存 7 天；同步 fork 后想立刻验证，先删 `globalStorage/agents/<slug-hash>`（或在 `vac.agents` 里临时换一个 spec 再换回）。
+
+---
+
 ## 隐私与个人信息（提交 / 发布前必查）
 
 本仓库是公开仓库，**测试夹具、文档、预览脚本、截图**都会原样发布。以下内容一律不得进仓库：

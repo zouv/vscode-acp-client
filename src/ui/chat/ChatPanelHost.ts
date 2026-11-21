@@ -29,6 +29,7 @@ import { Outbox } from './Outbox';
 // [CUSTOM- 上下文用量统计（圆环 + Tip 面板的数据源）：纯逻辑，不 import vscode。
 import { ContextStats } from './usage/ContextStats';
 import type {
+  AgentChoice,
   Attachment,
   ChatToExt,
   CloseReason,
@@ -360,6 +361,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * 只用来决定"agent 的 stderr 要不要往卡片上送" —— 连接好了以后的 stderr 是噪声。
    */
   private connecting = false;
+  /** Agent of the in-flight connect; keeps stderr updates and the status card on the same name. */
+  private connectingAgent: string | null = null;
 
   private readonly transcripts = new TranscriptStore((sessionId, entries) => {
     // One uncopied pass over the remaining rows, and only when a tool row was removed
@@ -833,8 +836,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         // VS Code 的 Settings UI 里被改：面板上的控件不能显示过期值。
         if (e.affectsConfiguration('vac')) { this.postSettings(); }
         if (e.affectsConfiguration('vac.customModels')) { this.postCustomModels(); }
+        if (e.affectsConfiguration('vac.defaultAgent')) { this.postAgentChoices(); }
         if (e.affectsConfiguration('vac.agents')) {
           this.agentKindCache.clear();
+          this.postAgentChoices();
           this.refreshSessions();
         }
       }),
@@ -1626,6 +1631,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         const entry = entryId ? this.transcripts.getEntry(sessionId, entryId) : undefined;
         if (!agentName || !entry) { return; }
         const messageId = entry.kind === 'assistant' ? entry.messageId : undefined;
+        if (!profileFor(getAgentKind(agentName)).messageFork) {
+          this.reportError(sessionId, new Error(`${agentName} cannot fork at a message; copy the whole session instead.`));
+          return;
+        }
         log(`${LOG_PREFIX}: fork session ${sessionId} at entry ${entryId} (messageId=${messageId ?? 'end'})`);
         void this.sessionManager.forkSession(agentName, sessionId, messageId ? { messageId } : {})
           .then(() => this.refreshSessions())
@@ -3476,9 +3485,14 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       return;
     }
     if (this.rewinding.has(sessionId)) { return; }
-    this.rewinding.add(sessionId);
     const text = entry.text ?? '';
     const agentName = session.agentName;
+    if (!profileFor(getAgentKind(agentName)).messageFork) {
+      this.reportError(sessionId, new Error(
+        `Rewind is not supported by ${agentName}: it needs message-level fork.`));
+      return;
+    }
+    this.rewinding.add(sessionId);
     try {
       const entries = this.transcripts.peekEntries(sessionId);
       const index = entries.findIndex(e => e.id === entryId);
@@ -3674,6 +3688,22 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     return primaryAgentName() ?? null;
   }
 
+  /** What the empty state calls the agent: the configured display name, else the config key. */
+  private agentLabelOf(agent: string | null): string | undefined {
+    if (!agent) { return undefined; }
+    return getAgentConfig(agent)?.displayName || agent;
+  }
+
+  /** Every configured agent and its profile kind, for the tab-strip default-agent picker. */
+  private agentChoices(): AgentChoice[] {
+    return getAgentNames().map(name => ({ name, kind: getAgentKind(name) }));
+  }
+
+  private postAgentChoices(): void {
+    if (this.attachedCount === 0) { return; }
+    this.post({ type: 'agents', agents: this.agentChoices(), defaultAgent: primaryAgentName() ?? null });
+  }
+
   /** Workspace folder used to scope the local history cache, when there is one. */
   private workspaceCwd(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -3730,6 +3760,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     }
     log(`${LOG_PREFIX}: connect requested for ${agent}`);
     const startedAt = Date.now();
+    this.connectingAgent = agent;
     this.postConnection('connecting');
     void this.sessionManager.ensureConnected(agent)
       .then(async () => {
@@ -3778,6 +3809,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     const payload: Record<string, unknown> = { type: 'connection', state };
     if (message) { payload.message = message; }
     if (detail) { payload.detail = detail; }
+    const agentLabel = this.agentLabelOf(this.connectingAgent ?? this.panelAgent());
+    if (agentLabel) { payload.agentLabel = agentLabel; }
     this.post(payload as never);
   }
 
@@ -4460,6 +4493,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
   private handleListDraftOptions(agentName: string | undefined, draftId: string, to: SurfaceKey): void {
     const agent = this.panelAgent(agentName);
     const snapshot = agent ? this.draftOptions.get(agent) : undefined;
+    const profile = profileFor(agent ? getAgentKind(agent) : 'generic');
     this.post({
       type: 'draftOptions',
       draftId,
@@ -4469,8 +4503,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       // 是同一条记录 —— 不是两份真相（pitfall #19）。
       configOptions: withRememberedMode(snapshot?.configOptions ?? [], agent ? this.lastMode.get(agent) : undefined),
       availableCommands: snapshot?.availableCommands ?? [],
-      // [CUSTOM- 自定义模型别名——草稿页的模型下拉也显示这份，随草稿选项下发。
-      customModels: this.customModels(),
+      // [CUSTOM- 自定义模型别名——只对接受 `_meta.extraModels` 的 agent 下发。
+      customModels: profile.customModels ? this.customModels() : [],
+      customModelsSupported: profile.customModels,
     }, to);
   }
 
@@ -4680,7 +4715,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     const options = session.configOptions ?? [];
     // [CUSTOM- 自定义模型（`vac.customModels`）不在 agent 的候选列表里，但用户
     // 在草稿页显式选过它 —— 放行并照常转发给 agent（agent 最终裁决），否则会被当成坏值跳过。
-    const customModelIds = new Set(this.customModels().map(m => m.modelId));
+    // 只对接受 `_meta.extraModels` 的 agent 放行：其它 agent 从没收到过这些 id。
+    const customAllowed = profileFor(getAgentKind(session.agentName)).customModels;
+    const customModelIds = new Set(customAllowed ? this.customModels().map(m => m.modelId) : []);
     let applied = 0;
     for (const { configId, value } of selections) {
       const option = options.find(o => o.id === configId);
@@ -4955,6 +4992,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     const customSource = this.settingsIO.resolve('vac.customModels', 'global');
     const customValue = customSource.layers.find(entry => entry.layer === customSource.effective)?.value;
     const customModels = normalizeCustomModels(customValue);
+    const agentNames = getAgentNames();
+    // A renamed/removed agent falls back to "First agent", matching primaryAgentName().
+    const configuredDefaultAgent = config.get<string>('defaultAgent') ?? '';
+    const defaultAgent = agentNames.includes(configuredDefaultAgent) ? configuredDefaultAgent : '';
     // [CUSTOM- 从未写过时与客户端同一份默认（推理块 + 工具卡）；写过空数组就是"全不展开"。
     const kinds = prefs.autoExpandKinds === undefined
       ? ['thought', 'tool']
@@ -4967,6 +5008,17 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         description: 'Start the agent as soon as the chat panel opens.',
         value: this.prefs.getAutoConnect(),
         ...this.configScope('vac.autoConnectOnOpen', 'ide'),
+      },
+      {
+        key: 'vac.defaultAgent', group: 'general', type: 'select',
+        label: 'Default agent',
+        description: 'Agent a sessionless panel connects to. “First agent” uses the first entry in vac.agents.',
+        value: defaultAgent,
+        options: [
+          { value: '', label: 'First agent' },
+          ...agentNames.map(name => ({ value: name, label: name })),
+        ],
+        ...this.configScope('vac.defaultAgent', 'ide'),
       },
       {
         key: 'vac.restoreSessionsOnOpen', group: 'general', type: 'select',
@@ -5274,8 +5326,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       o => (o as { category?: string }).category === category,
     ) as { options?: unknown } | undefined;
     if (!option || !Array.isArray(option.options)) { return null; }
+    const customAllowed = category === 'model' && profileFor(getAgentKind(agent)).customModels;
     const names = new Map<string, string>();
-    if (category === 'model') {
+    if (customAllowed) {
       for (const model of this.customModels()) { names.set(model.modelId, model.name || model.modelId); }
     }
     const out: SettingOption[] = [{ value: '', label: 'Agent default' }];
@@ -5294,7 +5347,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // [CUSTOM- 快照来自上一次会话，可能早于用户配置自定义模型（extraModels 只在
     // session/new 时注入）。新会话一定会带上它们，所以这里也补进候选——否则刚配好的模型
     // 无法设为默认值，看起来就像设置没生效。
-    if (category === 'model') {
+    if (customAllowed) {
       for (const model of this.customModels()) {
         const id = String(model.modelId || '').trim();
         if (!id || out.some(item => item.value === id)) { continue; }
@@ -5421,6 +5474,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         await this.writeConfigSetting('vac.autoConnectOnOpen', value === true, 'ide');
         this.postAutoConnectPref();
         break;
+      case 'vac.defaultAgent': {
+        const requested = String(value ?? '').trim();
+        const next = getAgentNames().includes(requested) ? requested : '';
+        await this.writeConfigSetting('vac.defaultAgent', next, 'ide');
+        this.postAgentChoices();
+        break;
+      }
       case 'vac.restoreSessionsOnOpen':
         await this.writeConfigSetting('vac.restoreSessionsOnOpen', resolveRestoreChoice(value), 'ide');
         this.postRestorePref();
@@ -5740,6 +5800,9 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       agentConnected: side && focused
         ? this.sessionManager.isAgentConnected(focused.agentName)
         : this.panelAgentConnected(),
+      agentLabel: this.agentLabelOf(this.panelAgent()),
+      agents: this.agentChoices(),
+      defaultAgent: primaryAgentName() ?? null,
       autoConnect: side ? false : this.prefs.getAutoConnect(),
       ...(!side ? { defaultCwd: this.sessionManager.resolveDefaultCwd() } : {}),
       ...(recoverable.length > 0 ? { recoverable } : {}),
@@ -5800,12 +5863,13 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // that missed it would never refresh the strip — the same trap 022 documented for
     // `unread`.
     const agentConnected = this.panelAgentConnected();
-    const signature = `conn:${agentConnected ? 1 : 0}\n` + sessions
+    const agentLabel = this.agentLabelOf(this.panelAgent());
+    const signature = `conn:${agentConnected ? 1 : 0}\nlabel:${agentLabel ?? ''}\n` + sessions
       .map(s => `${s.sessionId}|${s.agentName}|${s.agentKind ?? ''}|${s.title ?? ''}|${s.loading ? 1 : 0}|${s.running ? 1 : 0}|${s.unread ? 1 : 0}|${s.waiting ? 1 : 0}`)
       .join('\n');
     if (signature !== this.lastSessionsSignature) {
       this.lastSessionsSignature = signature;
-      this.outbox.flushThenPost({ type: 'sessionsChanged', sessions, agentConnected });
+      this.outbox.flushThenPost({ type: 'sessionsChanged', sessions, agentConnected, agentLabel });
     }
     const sideId = this.surfaceFocused.get('side');
     const sideSessions = this.buildSideSummaries();
@@ -5952,8 +6016,18 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   private metaOf(sessionId: string): SessionMeta {
     const session = sessionOf(this.sessionManager, sessionId);
+    const profile = profileFor(session ? getAgentKind(session.agentName) : 'generic');
     const usage = this.contextStats.snapshot(sessionId);
     if (usage) {
+      // Codex 不上报 `_claude/model`；用本次会话的模型配置补上，Tip 才能显示模型名。
+      if (!usage.model) {
+        const option = (session?.configOptions ?? []).find(
+          o => (o as { category?: string }).category === 'model',
+        ) as { currentValue?: unknown } | undefined;
+        const modelId = session?.models?.currentModelId
+          ?? (typeof option?.currentValue === 'string' ? option.currentValue : undefined);
+        if (modelId) { usage.model = modelId; }
+      }
       const subagentCostUsd = this.agentMaps.totalCostUsd(sessionId);
       if (subagentCostUsd !== undefined) { usage.subagentCostUsd = subagentCostUsd; }
     }
@@ -5971,8 +6045,10 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
       attachments: this.attachments.get(sessionId) ?? [],
       // [CUSTOM- 额外根目录（多根工作区）——只读展示，随 focus/boot 下发。
       additionalDirectories: session?.additionalDirectories ?? [],
-      // [CUSTOM- 自定义模型别名——全局共享，随 meta 下发。
-      customModels: this.customModels(),
+      // [CUSTOM- 自定义模型别名——只对接受 `_meta.extraModels` 的 agent 下发。
+      customModels: profile.customModels ? this.customModels() : [],
+      customModelsSupported: profile.customModels,
+      messageFork: profile.messageFork,
     };
   }
 

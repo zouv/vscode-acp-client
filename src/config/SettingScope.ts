@@ -11,6 +11,7 @@ import {
 /** 设置面板能写的 VS Code 配置键（防止 webview 借 settingAction 写任意键）。 */
 export const CONFIG_SETTING_KEYS: ReadonlySet<string> = new Set([
   'vac.autoConnectOnOpen',
+  'vac.defaultAgent',
   'vac.restoreSessionsOnOpen',
   'vac.defaultWorkingDirectory',
   'vac.autoAddWorkspaceFolders',

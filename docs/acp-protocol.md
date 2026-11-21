@@ -14,8 +14,8 @@
 | **记录时间** | 2026-10-16 |
 | **本插件版本** | `1.3.0` |
 | **插件侧 ACP SDK** | `@agentclientprotocol/sdk` **1.8.0**（`package.json` 声明 `^1.7.0`，实际解析到 1.8.0） |
-| **claude-agent-acp（官方）** | **0.91.0**（本文档编写时官方最新 tag `v0.91.0`） |
-| **claude-agent-acp（本仓 fork）** | `zouv/claude-agent-acp`，基点 **0.91.0** + 1 个自研提交（`_meta.extraModels`）；2026-10-16 由 0.89.1 升级并推送 |
+| **claude-agent-acp（官方）** | **0.109.0**（本文档编写时官方最新 tag `v0.109.0`） |
+| **claude-agent-acp（本仓 fork）** | `zouv/claude-agent-acp`，基点 **0.109.0** + VAC 定制（`_meta.extraModels`、`_claude/usage` 最近一次调用的拆分、`_meta["vac/agentMap"]` 子 agent 元数据）；跨压缩完整回放已在 0.109.0 上游实现（`readHistoryAcrossCompactions`） |
 | **证据来源** | ① SDK `node_modules/@agentclientprotocol/sdk/dist/acp.d.ts`（`methods` 常量 + `Agent`/`Client` 接口）② 插件代码 `src/**`（grep 方法名）③ 真实抓包夹具 `src/test/fixtures/claude-code-*.json`、`session-cwd-probe.json`（由 `scripts/capture-acp-replay.mjs` / `scripts/probe-session-cwd.mjs` 生成） |
 
 ### 下次怎么更新这份文档（≈10 分钟）
@@ -100,7 +100,7 @@
 | `available_commands_update` | 斜杠命令 / skills 列表 | **✅** |
 | `current_mode_update` | agent 自主切模式 | **✅** |
 | `config_option_update` | 配置项变化 | **✅** |
-| `usage_update` | token 用量 / 模型 | **✅** 圆环 + 用量 Tip；本仓 fork 额外带 `_meta["_claude/model"]`、`_meta["_claude/usage"]`（最近一次调用的 input/output/cache 拆分，圆环双色用）与 `_meta["_claude/rateLimit"]` |
+| `usage_update` | token 用量 / 模型 | **✅** 圆环 + 用量 Tip；`_meta["_claude/model"]` / `_meta["_claude/rateLimit"]` 由上游提供；`_meta["_claude/usage"]`（最近一次调用的 input/output/cache 拆分，圆环双色用）仍是 VAC fork 定制 |
 | `session_info_update` | 会话标题等元信息 | **✅** |
 | `subagent_spawned` / `subagent_state_update` | **子会话**派生与状态（draft，PR #1992） | **🟡** 见 §2.5 |
 | `async_task_spawned` / `async_task_progress` / `async_task_state` | 后台异步任务 | **🟡** 面板已有「后台子任务」呈现；可对照补 |
@@ -153,7 +153,7 @@
 | 权限请求带 `_meta.claudeCode`（command / file_path / toolName…） | **✅** |
 | 表单 `AskUserQuestion`：`_meta._askUserQuestionCustomAnswer` 自由文本 + 选项 `description`/`preview` | **✅** |
 | 工具集 Bash / Read / Write / Edit / Glob / Grep / **Agent（子代理）** + `_meta.claudeCode.toolResponse` | **✅** 渲染 |
-| `_meta.extraModels`（客户端注入自定义模型） | **✅** 本仓 fork 的自研扩展 |
+| `_meta.extraModels`（客户端注入自定义模型） | **✅** VAC fork 的定制扩展 |
 
 ## 2.3 值得补的（汇总）
 
@@ -211,18 +211,20 @@
 
 ---
 
-# 第三部分 · codex-acp 对照（2026-10-25，`@agentclientprotocol/codex-acp` 2.2.2）
+# 第三部分 · codex-acp 对照（2026-11-20，`zouv/codex-acp` fork，上游 `@agentclientprotocol/codex-acp` 2.8.0）
 
 > 旧包 `@zed-industries/codex-acp` 已于 2026-07 归档，npm 标 deprecated、冻结在 0.16.0；新包基于 Codex App Server。
-> 证据：`node scripts/probe-agent-init.mjs --session` 实测握手 + 适配器 `dist/index.js` 源码。
+> 默认配置使用 `github:zouv/codex-acp#main`：该 fork 的 `main` 跟踪上游，只有上游尚未支持/修复的适配器侧改动才留在 fork（当前为 `_meta.extraModels` 与 `prepare`）。
+> 证据：`node scripts/probe-agent-init.mjs --session` 实测握手 + 适配器 `dist/index.js` / `src/` 源码。
 
 | 项 | 实测 / 源码 | 插件处理 |
 |---|---|---|
-| 能力 | `loadSession`；`sessionCapabilities` 含 list / resume / close / delete / fork / additionalDirectories / subagents；`promptCapabilities` image + embeddedContext；`mcpCapabilities.http`；`auth.logout`；`_meta.steering.supported` | 全部走通用路径，无需 Codex 分支 |
+| 能力 | `loadSession`；`sessionCapabilities` 含 list / resume / close / delete / fork / additionalDirectories / subagents；`promptCapabilities` image + embeddedContext；`mcpCapabilities.http`；`auth.logout`；`_meta.steering.supported` | 能力协商全部走通用路径；agent 差异收敛到 `AgentProfile`（Codex：`messageFork=true`、`customModels=true`（fork）、`nesting='flat'`、`transcriptStore=null`） |
 | 认证方式 | `api-key`（`_meta['api-key'].provider`）、`chat-gpt`；`NO_BROWSER` 时为 `chat-gpt-device-code`；客户端声明 `auth._meta.gateway` 才有 `gateway` | **✅** api-key：客户端输入 key → `authenticate._meta['api-key'].apiKey`，存 SecretStorage；留空则用 agent 环境里的 `CODEX_API_KEY` / `OPENAI_API_KEY`。gateway 未接 |
 | 会话配置项 | `mode`（read-only / workspace-write / agent / agent-full-access）、`collaboration_mode`、`model`、`reasoning_effort`（category `thought_level`）；同时给旧式 `modes` / `models` | 输入卡按 configOptions 通用渲染 |
+| 用量 | 只在 `PromptResponse.usage` 与 `_meta.quota`（`token_count` + `model_usage`）给**单轮** token；不发 `usage_update`，也没有上下文窗口 `used/size` 或 rateLimit 的 UI 映射 | 客户端记录本轮构成；上下文圆环/Tip 需要窗口大小，Codex 暂不显示，见 `HANDOFF.md` 决策 |
 | 命令输出 | 不走客户端 `terminal/create`：工具卡 content 放 `{type:'terminal', terminalId:<toolCallId>}`，输出分片在 `_meta.terminal_output_delta`，结束在 `_meta.terminal_exit`；无终端的命令 `rawOutput` 只有 `{exit_code}`、输出进 content 文本 | **✅** `transcript/agentTerminals.ts` 累加并渲染成 console 文本。**不要**为此声明 `_meta.terminal_output_delta`：Claude 适配器也认这个键，会改变它的 Bash 输出形态 |
 | plan | 客户端没声明 `plan` 能力时，计划以**助手消息文本**下发 | 🟡 声明 `plan` + 渲染 `plan_update` 后可得结构化计划 |
-| AIR 扩展 | 声明 `_meta.jetbrains.air` 才启用 diff patch / goal / 后台终端任务 / session failure | ⚪ 暂不接 |
-| 自定义模型 | 不认 `_meta.extraModels`（本仓 Claude fork 的扩展）；Codex 走自己的 `config.toml` / `CODEX_CONFIG` / `MODEL_PROVIDER` | profile 对 codex 不注入 |
+| AIR 扩展 | 多数 AIR 扩展需声明 `_meta.jetbrains.air` 才启用（diff patch / goal / 后台终端任务 / session failure）；但 **`session/fork` 的 `_meta.jetbrains.air.fork`（`version: 1` + `messageId`）无需 opt-in**，按消息裁剪历史 | ✅ 消息级 Fork/Rewind 走它（Claude/Codex 通用）；其余 AIR 扩展暂不接 |
+| 自定义模型 | 官方包不认 `_meta.extraModels`（Codex 走自己的 `config.toml` / `CODEX_CONFIG` / `MODEL_PROVIDER`）；**VAC fork** 在 `session/new | load | resume` 读取 `_meta.extraModels`，把缺失的 id 追加进 model 配置项（名称/描述由客户端映射） | ✅ fork 注入；官方包保持 profile 不注入 |
 

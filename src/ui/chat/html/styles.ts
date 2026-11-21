@@ -327,15 +327,20 @@ export function styles(): string {
     font-family: inherit; font-size: 14px; line-height: 1.2;
   }
   .tab-new:hover { background: var(--vscode-list-hoverBackground); }
-  /* [CUSTOM- Tab 栏右侧的设置入口：与 + 一样固定在动作区，只显示图标。 */
+  /* [CUSTOM- Tab 栏右侧的固定动作区：默认 Agent 图标 + 设置入口。 */
+  .tab-actions {
+    flex: 0 0 auto; margin-left: auto; position: relative;
+    display: flex; align-items: center; gap: 4px;
+  }
   .tab-settings {
-    flex: 0 0 auto; margin-left: auto; padding: 2px 6px; cursor: pointer;
+    flex: 0 0 auto; margin-left: 0; padding: 2px 6px; cursor: pointer;
     display: inline-flex; align-items: center;
     background: transparent; color: var(--vscode-foreground);
     border: 1px solid transparent; border-radius: 3px;
   }
   .tab-settings:hover { background: var(--vscode-list-hoverBackground); border-color: var(--vscode-panel-border); }
   .tab-settings .btn-icon { display: inline-flex; }
+  #defaultAgentBtn[hidden] { display: none; }
 
   /* --- Session header / usage ------------------------------------------ */
   .session-header {
@@ -368,6 +373,7 @@ export function styles(): string {
   .side-origin-time { flex: none; margin-left: auto; white-space: nowrap; }
   .surface-side .agent-bar,
   .surface-side #newTab,
+  .surface-side #defaultAgentBtn,
   .surface-side #settingsBtn,
   .surface-side #historyBtn,
   .surface-side #cwdBtn,
@@ -2906,6 +2912,11 @@ export function styles(): string {
        · 右对齐 —— chip 在 header 右侧，菜单该从它这一侧展开；
        · .filter-item / .picker-count —— 行内有"名称 + 条数"，名称要能被省略号截断。 */
   .picker-menu.down { top: 100%; bottom: auto; left: auto; right: 0; min-width: 240px; }
+  /* [CUSTOM- 默认 Agent 菜单挂在 tab-strip（overflow:hidden）里，必须 fixed + JS 定位，
+     否则会被裁掉。 */
+  .picker-menu.default-agent-menu {
+    position: fixed; top: 0; left: 0; right: auto; bottom: auto; z-index: 70;
+  }
   .filter-chip { max-width: 170px; font-size: 0.82em; padding: 0 5px; }
   /* 过滤生效时给边框上色：与 .outline-item.active 同一套"当前项"语义。**不用环**——
      环在这个面板里是键盘焦点（062 的教训）。 */
@@ -3340,6 +3351,8 @@ export function styles(): string {
   .settings-panel {
     display: flex; flex-direction: column;
     width: min(720px, 100%);
+    /* 设置行共用的值列宽度：所有 select / 输入框 / 复选框共用同一条右缘。 */
+    --settings-value-width: 160px;
     /* [CUSTOM- 固定尺寸（2026-10-21）：高度不随内容自适应 —— 换分组、改值时面板不跳。
        视口太矮时 max-height 兜底，内容在内层滚动。 */
     height: clamp(320px, 80vh, 640px);
@@ -3378,11 +3391,12 @@ export function styles(): string {
   }
   .settings-body { flex: 1 1 auto; min-width: 0; padding: 12px 16px; overflow-y: auto; }
   .settings-row {
-    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+    display: grid; grid-template-columns: minmax(0, 1fr) var(--settings-value-width);
+    align-items: start; gap: 16px;
     padding: 8px 0; border-bottom: 1px solid var(--vscode-panel-border);
   }
   .settings-row:last-child { border-bottom: none; }
-  .settings-row.indent { padding-left: 16px; }
+  .settings-row.indent .settings-text { padding-left: 16px; }
   .settings-text { min-width: 0; }
   .settings-label { font-size: 0.95em; }
   .settings-desc { margin-top: 2px; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
@@ -3436,7 +3450,7 @@ export function styles(): string {
   }
   /* [CUSTOM- 快捷键行：录制按钮 + Reset / Disable 文本动作。按钮宽度固定，
      避免录制中/禁用/不同键位把整行挤得左右跳。 */
-  .settings-shortcut-control { flex-wrap: wrap; justify-content: flex-end; max-width: 340px; }
+  .settings-shortcut-control { flex-wrap: wrap; justify-content: flex-end; max-width: 100%; }
   .settings-shortcut-record {
     min-width: 104px; padding: 3px 10px; border-radius: 4px; cursor: pointer;
     font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em;
@@ -3455,15 +3469,21 @@ export function styles(): string {
     color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
   }
   .settings-shortcut-control .settings-link { font-size: 0.85em; white-space: nowrap; }
-  .settings-control { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding-top: 2px; }
+  .settings-control {
+    min-width: 0; display: flex; align-items: center; justify-content: flex-end;
+    flex-wrap: wrap; gap: 6px; padding-top: 2px;
+  }
   .settings-check { width: 14px; height: 14px; accent-color: var(--vscode-button-background); }
   .settings-select, .settings-number, .settings-text-input {
     padding: 2px 4px; border-radius: 3px; font-family: inherit;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
   }
+  .settings-select { width: 100%; min-width: 0; }
   .settings-number { width: 76px; }
   .settings-text-input { width: 220px; max-width: 100%; }
+  /* 值列内的文本输入填满列宽；带 Browse 时换行，而不是把输入框压到几十像素。 */
+  .settings-control .settings-text-input { flex: 1 1 100%; width: 100%; min-width: 0; }
   .settings-action {
     padding: 2px 10px; border-radius: 3px; cursor: pointer; font-family: inherit;
     background: var(--vscode-button-secondaryBackground);
@@ -3554,6 +3574,10 @@ export function styles(): string {
       border-right: none; border-bottom: 1px solid var(--vscode-panel-border);
     }
     .settings-body { padding: 8px 12px; }
+  }
+  @media (max-width: 420px) {
+    .settings-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+    .settings-control { justify-content: flex-start; }
   }
 </style>`;
 }

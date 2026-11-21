@@ -10,6 +10,10 @@ export interface AgentProfile {
   readonly transcriptStore: 'claude' | null;
   /** How tool calls are grouped under the call that delegated them (see `ui/chat/nesting`). */
   readonly nesting: 'claude-code' | 'flat';
+  /** Honors the message-level fork `_meta` (Claude adapter's AIR extension). */
+  readonly messageFork: boolean;
+  /** Accepts extra model ids via `_meta.extraModels`. */
+  readonly customModels: boolean;
   /** Extra `_meta` merged into session/new | load | resume requests. */
   sessionMeta(opts: { customModelIds: readonly string[] }): Record<string, unknown> | undefined;
 }
@@ -19,6 +23,8 @@ const claudeProfile: AgentProfile = {
   label: 'Claude Code',
   transcriptStore: 'claude',
   nesting: 'claude-code',
+  messageFork: true,
+  customModels: true,
   sessionMeta({ customModelIds }) {
     return customModelIds.length > 0 ? { extraModels: [...customModelIds] } : undefined;
   },
@@ -29,7 +35,11 @@ const codexProfile: AgentProfile = {
   label: 'Codex',
   transcriptStore: null,
   nesting: 'flat',
-  sessionMeta: () => undefined,
+  messageFork: true,
+  customModels: true,
+  sessionMeta({ customModelIds }) {
+    return customModelIds.length > 0 ? { extraModels: [...customModelIds] } : undefined;
+  },
 };
 
 const genericProfile: AgentProfile = {
@@ -37,6 +47,8 @@ const genericProfile: AgentProfile = {
   label: 'Agent',
   transcriptStore: null,
   nesting: 'flat',
+  messageFork: false,
+  customModels: false,
   sessionMeta: () => undefined,
 };
 
@@ -64,4 +76,17 @@ export function inferAgentKind(
 
 export function profileFor(kind: AgentKind): AgentProfile {
   return PROFILES[kind];
+}
+
+/**
+ * The configured default agent when it is still configured, else the first
+ * configured agent (the order the user wrote in `vac.agents`). Undefined when
+ * no agent is configured.
+ */
+export function resolveDefaultAgent(
+  names: readonly string[],
+  preferred: string | undefined,
+): string | undefined {
+  const value = (preferred ?? '').trim();
+  return value && names.includes(value) ? value : names[0];
 }

@@ -14,6 +14,10 @@ describe('pricing', () => {
   it('prefers the longest matching prefix', () => {
     expect(findPrice('claude-opus-4-1-20250805')?.inputPerM).toBe(15);
     expect(findPrice('claude-3-5-haiku-20241022')?.inputPerM).toBe(0.8);
+    expect(findPrice('gpt-5.1-codex-mini')?.inputPerM).toBe(0.25);
+    expect(findPrice('gpt-5.1-codex')?.outputPerM).toBe(10);
+    expect(findPrice('o3-mini')?.outputPerM).toBe(4.4);
+    expect(findPrice('o3')?.inputPerM).toBe(2);
   });
 
   it('strips provider prefixes and context-window suffixes', () => {

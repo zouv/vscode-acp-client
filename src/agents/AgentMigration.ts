@@ -4,11 +4,18 @@ export interface MigratableAgentEntry {
 }
 
 /** Adapter packages that were deprecated upstream, and what replaces them. */
+const CODEX_FORK = 'github:zouv/codex-acp#main';
+
 const REPLACEMENTS: ReadonlyArray<{ from: RegExp; to: string }> = [
   // Archived 2026-07; npm marks it deprecated and it is frozen at 0.16.0.
-  { from: /^@zed-industries\/codex-acp(@.*)?$/, to: '@agentclientprotocol/codex-acp' },
-  // 0.91.0's session/load replays only the post-compaction effective chain, so a
-  // compacted session starts at the summary instead of the first real prompt.
+  { from: /^@zed-industries\/codex-acp(@.*)?$/, to: CODEX_FORK },
+  // The VAC fork tracks upstream main and only carries adapter-side fixes that
+  // upstream has not accepted yet; the default config points here for both agents.
+  { from: /^@agentclientprotocol\/codex-acp(@.*)?$/, to: CODEX_FORK },
+  { from: /^github:zouv\/codex-acp$/, to: CODEX_FORK },
+  // 0.91.0's session/load replayed only the post-compaction effective chain; upstream
+  // 0.109.0 now rebuilds it (`readHistoryAcrossCompactions`). The fork is still pinned
+  // for its VAC `_meta` extensions (extraModels / usage split / agent map).
   // Use the fork's main branch rather than a commit pin: npm 10.8.2 fails to pack
   // a github spec pinned to a commit ("GitFetcher requires an Arborist constructor").
   {

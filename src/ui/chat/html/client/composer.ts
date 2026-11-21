@@ -57,6 +57,11 @@ export const composerClient = `
     // 模型本身经 agent 的 '_meta.extraModels' 注入进入 model 配置项（见 SessionManager），
     // 这里只拿它做**显示名映射**：agent 把自定义模型列为裸 id，optionLabel 据此显示成 name。
     customModels: [],
+    // [CUSTOM- 当前 agent 是否接受 '_meta.extraModels'（来自 meta / draftOptions）。
+    // false 时即便设置里配了别名也不进模型候选——Codex 不认这些 id。
+    customModelsSupported: false,
+    // [CUSTOM- 当前 agent 是否支持消息级 fork（来自 meta）：Fork/Rewind 菜单据此提示。
+    messageFork: false,
     attachments: [],
     slashIndex: 0,
     slashMatches: [],
@@ -411,7 +416,7 @@ export const composerClient = `
           draftPathMeta.push(pathMeta);
         }
       }
-      NS.bridge.post({
+      var outbound = {
         type: 'createDraftAndSend',
         draftId: state.draft.draftId,
         cwd: state.draft.cwd || undefined,
@@ -427,7 +432,11 @@ export const composerClient = `
         pathMeta: draftPathMeta,
         // [CUSTOM- 草稿页显式勾选的额外根目录（additionalDirectories）。
         additionalDirectories: state.additionalDirectories
-      });
+      };
+      // The session is created with the configured default agent; omit the key
+      // when no default is known so the host falls back to its own resolution.
+      if (state.agentName) { outbound.agentName = state.agentName; }
+      NS.bridge.post(outbound);
       // [CUSTOM- 回车立刻要看得见反应：文字先存进草稿表（失败时 failDraft 原样还原），
       // 输入框马上清空。建会话本身仍可能要等几秒（agent 侧 sdk-initialize），那段时间
       // 由状态卡的"建会话中"相位说明；不再把已发出的文字留在输入框里。
@@ -1537,7 +1546,7 @@ export const composerClient = `
     // another DRAFT, and losing its text is what this fix is about.
     stashDraft();
     state.sessionId = null;
-    state.agentName = null;
+    state.agentName = draft ? (draft.agentName || null) : null;
     state.running = false;
     state.loading = false;
     state.draft = draft ? { draftId: draft.draftId, cwd: draft.cwd || null } : null;
@@ -1579,7 +1588,9 @@ export const composerClient = `
     // because the component that has to render the answer is the one that knows it is missing;
     // draftId rides along so a late answer cannot land on a different draft.
     if (state.draft) {
-      NS.bridge.post({ type: 'listDraftOptions', draftId: state.draft.draftId });
+      var draftOptionsRequest = { type: 'listDraftOptions', draftId: state.draft.draftId };
+      if (state.agentName) { draftOptionsRequest.agentName = state.agentName; }
+      NS.bridge.post(draftOptionsRequest);
     }
   }
 
@@ -1594,8 +1605,9 @@ export const composerClient = `
     if (!state.draft || state.draft.draftId !== payload.draftId) { return; }
     state.configOptions = payload.configOptions || [];
     state.commands = payload.availableCommands || [];
-    // [CUSTOM- 自定义模型随草稿选项一起到。
-    state.customModels = payload.customModels || [];
+    // [CUSTOM- 自定义模型随草稿选项一起到；该 agent 不接受 '_meta.extraModels' 时清空。
+    state.customModelsSupported = payload.customModelsSupported === true;
+    state.customModels = state.customModelsSupported ? (payload.customModels || []) : [];
     // The user's own picks outrank the snapshot's values: this draft may have been focused
     // before, and the answer always arrives with the snapshot's (agent-side) current values.
     applyDraftSelections();
@@ -1749,13 +1761,18 @@ export const composerClient = `
       if (typeof meta.steering === 'boolean') { state.steering = meta.steering; }
       // [CUSTOM- 会话的额外根目录（只读展示，来自宿主 meta）。
       state.additionalDirectories = meta.additionalDirectories || [];
-      // [CUSTOM- 自定义模型别名（来自宿主 meta）。
-      state.customModels = meta.customModels || [];
+      // [CUSTOM- 自定义模型别名（来自宿主 meta）；只对接受 '_meta.extraModels' 的 agent 生效。
+      state.customModelsSupported = meta.customModelsSupported === true;
+      state.customModels = state.customModelsSupported ? (meta.customModels || []) : [];
+      // [CUSTOM- 消息级 fork：Fork/Rewind 菜单据此提示当前 agent 支不支持。
+      state.messageFork = meta.messageFork === true;
     } else {
       state.commands = [];
       state.configOptions = [];
       state.additionalDirectories = [];
       state.customModels = [];
+      state.customModelsSupported = false;
+      state.messageFork = false;
     }
     // [CUSTOM- 已有会话：额外根目录只读（创建后锁死不可改）。
     state.addDirectoriesReadonly = true;
@@ -1781,12 +1798,15 @@ export const composerClient = `
     renderContext(lastUsage);
   }
 
-  function setMeta(meta) {    state.commands = meta.availableCommands || [];
+  function setMeta(meta) {
+    state.commands = meta.availableCommands || [];
     state.configOptions = meta.configOptions || [];
     // [CUSTOM- 自定义模型别名（来自宿主 meta）。
-    state.customModels = meta.customModels || [];
+    state.customModelsSupported = meta.customModelsSupported === true;
+    state.customModels = state.customModelsSupported ? (meta.customModels || []) : [];
     // [CUSTOM- 能力位（见 setFocus 的同名处理）。
     if (typeof meta.steering === 'boolean') { state.steering = meta.steering; }
+    state.messageFork = meta.messageFork === true;
     renderPickers();
     renderContext(meta.usage);
     refreshControls();
@@ -1799,8 +1819,34 @@ export const composerClient = `
 
   /** [CUSTOM- 设置面板保存后宿主主动推来：别名/描述立即生效。 */
   function setCustomModels(list) {
-    state.customModels = list || [];
+    // 该 agent 不接受 '_meta.extraModels' 时直接忽略，不放进模型候选。
+    state.customModels = state.customModelsSupported ? (list || []) : [];
     renderPickers();
+  }
+
+  /**
+   * [CUSTOM- The configured default agent changed while this draft is open:
+   * keep the typed text, switch the draft's agent and re-ask for its options.
+   */
+  function setDraftAgent(agentName) {
+    if (!state.draft) { return; }
+    state.agentName = agentName || null;
+    var request = { type: 'listDraftOptions', draftId: state.draft.draftId };
+    if (state.agentName) { request.agentName = state.agentName; }
+    NS.bridge.post(request);
+  }
+
+  /** [CUSTOM- 当前 agent 是否支持从某条消息处 fork（Fork/Rewind 菜单据此提示）。 */
+  function canForkAtMessage() {
+    return state.messageFork === true;
+  }
+
+  /** [CUSTOM- 当前会话是否提供了某个斜杠命令（Tip 的 /compact 据此显隐）。 */
+  function hasCommand(name) {
+    for (var i = 0; i < state.commands.length; i++) {
+      if (state.commands[i] && state.commands[i].name === name) { return true; }
+    }
+    return false;
   }
 
   // [CUSTOM- 客户端记录图片缩略图（boot.ts 读取剪贴板位图后调用）。
@@ -1884,6 +1930,8 @@ export const composerClient = `
     setRunning: setRunning,
     setMeta: setMeta,
     setCustomModels: setCustomModels,
+    canForkAtMessage: canForkAtMessage,
+    hasCommand: hasCommand,
     setAttachments: setAttachments,
     rememberImage: rememberImage,
     setLoading: setLoading,
@@ -1893,6 +1941,7 @@ export const composerClient = `
     isComposable: isComposable,
     forgetDraft: forgetDraft,
     setDraft: setDraft,
+    setDraftAgent: setDraftAgent,
     setDraftOptions: setDraftOptions,
     updateDraftCwd: updateDraftCwd,
     resolveDraft: resolveDraft,

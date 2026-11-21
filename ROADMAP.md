@@ -45,30 +45,12 @@ Recently used 条数可配、tab/目录提示分色、Markdown 渲染预设。�
 ## ✅ 已交付里程碑
 
 - **v1.18.0**（2026-11-19）：历史列表/目录/模型交互增强，见 `CHANGELOG`。
-
-### v1.16.0 · ~~灰屏自救与多根工作区~~ ✅（2026-11-13）
-
-已实现 Webview 灰屏自救、多根工作区默认 cwd 与自动额外根、目录附件、模型菜单排序修正；明细见 `CHANGELOG [1.16.0]`。
-
-### v1.15.0 · ~~上下文用量 Tip 与页签交互~~ ✅（2026-11-12）
-
-输入卡圆环可点击并弹出用量面板（增长曲线、本轮 token 构成、费用、额度、`/compact` 入口）；页签支持右键新建到右侧、同目录草稿、拖拽排序与压缩宽度。明细见 `CHANGELOG [1.15.0]`。
-
-### v1.14.2 · ~~首条消息时序、目录搜索直用与附件清理~~ ✅（2026-11-11）
-
-已实现首条消息即时刷新、目录搜索直用与引用清理；明细见 `CHANGELOG [1.14.2]`。
-
-### v1.14.1 · ~~Mermaid 稳定性与页签拖拽修复~~ ✅（2026-11-10）
-
-已修复 Mermaid 崩溃与页签排序问题；明细见 `CHANGELOG [1.14.1]`。
-
-### v1.12.0 · ~~Chat 快捷键与设置体验增强~~ ✅（2026-11-06）
-
-已实现可自定义快捷键、Read 高亮与显示修复、模型排序及历史显示上限；真机验证状态见 `HANDOFF.md`。
-
-### v1.11.0 · ~~Mermaid 与面板交互增强~~ ✅（2026-11-05）
-
-Mermaid 图表（限高、按面板缩放、50–200% 缩放与原文切换）、代码高亮、双列表搜索、大纲 Messages/Cards、Tail 两角 + 淡渐隐；修复滚动条拖拽与 Tail 抢视口、底部中键/滚轮误关 Tail，两个下拉按面板剩余高度滚动。自动验证通过；真机 259–266 验收待做。明细见 `CHANGELOG [1.11.0]`。
+- **v1.16.0**（2026-11-13）：Webview 灰屏自救、多根工作区默认 cwd/额外根、目录附件与模型菜单排序修正，见 `CHANGELOG [1.16.0]`。
+- **v1.15.0**（2026-11-12）：上下文用量 Tip、页签右键新建/拖拽排序/压缩宽度，见 `CHANGELOG [1.15.0]`。
+- **v1.14.2**（2026-11-11）：首条消息时序、目录搜索直用与引用清理，见 `CHANGELOG [1.14.2]`。
+- **v1.14.1**（2026-11-10）：Mermaid 稳定性与页签拖拽修复，见 `CHANGELOG [1.14.1]`。
+- **v1.12.0**（2026-11-06）：Chat 快捷键、Read 高亮与显示修复、模型排序及历史显示上限，见 `CHANGELOG`。
+- **v1.11.0**（2026-11-05）：Mermaid 图表、代码高亮、双列表搜索、大纲双 tab、Tail 渐隐与滚动修复，见 `CHANGELOG [1.11.0]`。
 
 ### v1.10.0 · ~~Side Chat 临时侧边会话~~ ✅（2026-11-04）
 
@@ -173,7 +155,7 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 
 | # | 任务 | 说明 |
 |---|------|------|
-| P1-1 | Codex 链路端到端验证 | 🚧 2026-10-25：换新包 `@agentclientprotocol/codex-acp`、握手探针实测能力、API Key 认证 + 登出、`_meta` 终端输出渲染已完成；**剩真机跑一轮带命令的会话**，并核对 `CodexUsageSource` 口径 |
+| P1-1 | Codex 链路端到端验证 | 🚧 2026-10-25：换新包、握手探针实测能力、API Key 认证 + 登出、`_meta` 终端输出渲染已完成；2026-11-19 默认切到 `github:zouv/codex-acp#main`（跟踪上游 2.8.0）并补齐 UI 侧差异（agent 文案、Fork/Rewind 门禁、自定义模型过滤、`/compact`、模型名回退）；**剩真机跑一轮带命令的会话**，并核对 `CodexUsageSource` 口径 |
 | P1-2 | 宿主实测验收 | `npm run dev:host` 目视验收 Dashboard 与聊天面板的渲染、统计数字是否对得上 |
 | P1-3 | 打包体积瘦身 | `dist/extension.js` 当前生产包约 1.71 MiB（2026-11-01），主要来自 ACP SDK 全量引入；评估按需引入或裁剪 |
 | ~~P1-4~~ | ~~首次发布~~ | ✅ 已完成（2026-10-12）：v1.0.1 已打 GitHub Release 并附 `.vsix`；市场发布见 P2-5 |
@@ -182,14 +164,15 @@ Chat 面板子系统，新增侧边栏 Dashboard（用量统计）。细节见 `
 | ~~P1-7~~ | ~~终端与写文件健壮性~~ | ✅ 2026-11-01：shell-free argv、进程树回收、UTF-8 解码、释放资源；dirty 文档拒绝写入，clean 文档 WorkspaceEdit + save。终端输出保留到扩展销毁 |
 | P1-8 | 连接健壮性 | ✅ 2026-11-02：initialize 超时、有界退避 resume 恢复（不重发 prompt）、手动恢复去重、配置重载提示；取消/晚到防护、销毁、两桥、ownership 与 traffic 默认关闭。仅 resume-capable agent 自动恢复，真实账号验收另做 |
 | P1-9 | SDK 新更新类型 | `plan_update` / `plan_removed`（声明 `plan`，Codex 才发结构化计划）、`notice`、`compaction_*`（compaction 已于 2026-11-02 接入为独立 compact 记录）；评估 SDK 2.x 升级 |
+| ~~P1-10~~ | ~~Codex 与 Claude 的 UI 体验对齐~~ | ✅ 2026-11-19：空态卡按 agent 命名、消息级 Fork/Rewind 按 `AgentProfile.messageFork` 门禁（Claude/Codex 均支持）、自定义模型按 `customModels` 过滤、`/compact` 按 `availableCommands` 显隐、Dashboard 新增 `vac.dashboard.codexSessionsDir`、补齐 OpenAI 定价与模型名回退；`vac.agents` 排序改为尊重配置顺序 |
 
 ### 🟢 远期 / 增强
 
 | # | 任务 | 说明 |
 |---|------|------|
 | P2-1 | Dashboard 第二轮 | 按 `docs/dashboard-design.md` 的扩展点补：按项目/模型的时间趋势、导出、更细的成本拆分 |
-| P2-2 | 价格表校验 | `dashboard/usage/pricing.ts` 的 `PRICING_AS_OF` 与各档价格需按官方口径复核 |
-| P2-3 | 更多 agent 接入 | 保持「加 agent 只动 `agents/AgentProfile.ts` + 配置」这一约束不被破坏 |
+| P2-2 | 价格表校验 | `dashboard/usage/pricing.ts` 的 `PRICING_AS_OF` 与各档价格需按官方口径复核。2026-11-19 已补 Codex/OpenAI 常用型号（gpt-5-codex、gpt-5.1-codex、o3、o4-mini 等） |
+| P2-3 | 更多 agent 接入 | 保持「加 agent 只动 `agents/AgentProfile.ts` + 配置」这一约束不被破坏；能力位现有 `transcriptStore` / `nesting` / `messageFork` / `customModels` |
 | P2-4 | ~~记录区长对话性能~~ | ✅ 2026-11-02：增量文本、合帧、预览与 prose 缓存、流式 Markdown 稳定块/尾块及原生正文渲染窗口；保留记录 DOM（非 DOM 卸载式虚拟列表），详见 `arch/chat-performance.md` |
 | P2-5 | 上架 VS Code Marketplace | 注册 publisher、准备图标与截图、按 vsce publish 流程发布。**图标已就绪**（2026-10-13，`resources/icon.{svg,png}` 由 `npm run icon` 生成）；截图待补 |
 | P2-6 | Diff 审阅 | 工具卡的 diff 用 VS Code diff 编辑器打开；接受 / 拒绝；按轮次回滚 |

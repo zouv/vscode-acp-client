@@ -7,7 +7,7 @@ import type { SessionManager } from '../../core/SessionManager';
 import { log } from '../../utils/Logger';
 import type { ChatPanelHost } from './ChatPanelHost';
 import { panelSurface } from './ChatSurface';
-import { getAgentNames } from '../../config/AgentConfig';
+import { getAgentNames, primaryAgentName } from '../../config/AgentConfig';
 import type { PanelContext } from './panelContract';
 
 export const CHAT_EDITOR_VIEW_TYPE = 'vac-chat-editor';
@@ -84,7 +84,10 @@ export class ChatEditorPanel implements vscode.Disposable {
    * not spawn an agent process; an empty panel is valid and its `+` creates a session.
    */
   private focusMostRecentSession(): void {
-    for (const agentName of getAgentNames()) {
+    const names = getAgentNames();
+    const primary = primaryAgentName();
+    const ordered = primary ? [primary, ...names.filter(name => name !== primary)] : names;
+    for (const agentName of ordered) {
       const ids = this.sessionManager.getSessionIdsForAgent(agentName);
       const mostRecent = ids[ids.length - 1];
       if (mostRecent) {

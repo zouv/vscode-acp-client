@@ -97,17 +97,23 @@ export function activate(context: vscode.ExtensionContext): void {
     storageDir: context.globalStorageUri.fsPath,
     enabled: config().get<boolean>('dashboard.enabled', true),
     claudeProjectsDir: config().get<string>('dashboard.claudeProjectsDir') || undefined,
+    codexSessionsDir: config().get<string>('dashboard.codexSessionsDir') || undefined,
   });
   let projectsDir = config().get<string>('dashboard.claudeProjectsDir') || undefined;
+  let codexDir = config().get<string>('dashboard.codexSessionsDir') || undefined;
   let usageConfigQueue: Promise<void> = Promise.resolve();
   const usageConfigListener = vscode.workspace.onDidChangeConfiguration(event => {
-    if (!event.affectsConfiguration('vac.dashboard.enabled') && !event.affectsConfiguration('vac.dashboard.claudeProjectsDir')) { return; }
+    if (!event.affectsConfiguration('vac.dashboard.enabled')
+      && !event.affectsConfiguration('vac.dashboard.claudeProjectsDir')
+      && !event.affectsConfiguration('vac.dashboard.codexSessionsDir')) { return; }
     usage.setEnabled(false);
     usageConfigQueue = usageConfigQueue.then(async () => {
       const nextDir = config().get<string>('dashboard.claudeProjectsDir') || undefined;
-      if (nextDir !== projectsDir) {
-        await usage.replaceSources([new ClaudeUsageSource(nextDir), new CodexUsageSource()]);
+      const nextCodexDir = config().get<string>('dashboard.codexSessionsDir') || undefined;
+      if (nextDir !== projectsDir || nextCodexDir !== codexDir) {
+        await usage.replaceSources([new ClaudeUsageSource(nextDir), new CodexUsageSource(nextCodexDir)]);
         projectsDir = nextDir;
+        codexDir = nextCodexDir;
       }
       const enabled = config().get<boolean>('dashboard.enabled', true);
       usage.setEnabled(enabled);

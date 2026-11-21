@@ -4053,7 +4053,11 @@ suite('chat client logic: composer input bar (stub DOM)', () => {
 
   test('compact waits for the running turn; both actions post the right messages', () => {
     const { NS, contextMeter, contextTip, sent } = composerBar();
-    NS.composer.setFocus(session('s-1'), { availableCommands: [], configOptions: [], usage: tipUsage() });
+    NS.composer.setFocus(session('s-1'), {
+      availableCommands: [{ name: 'compact', description: 'Compact', inputHint: null }],
+      configOptions: [],
+      usage: tipUsage(),
+    });
     NS.composer.setRunning(true);
     contextMeter.dispatch('click', { preventDefault: () => {} });
     assert.strictEqual(contextTip.querySelector('.context-tip-compact')!.disabled, true,
@@ -4071,6 +4075,16 @@ suite('chat client logic: composer input bar (stub DOM)', () => {
     const dashboard = contextTip.querySelector('.context-tip-dashboard')!;
     contextTip.dispatch('click', { target: dashboard });
     assert.ok(sent.some(m => m.type === 'openDashboard'), 'the dashboard link is a host message');
+  });
+
+  test('compact is hidden when the session does not advertise it', () => {
+    const { NS, contextMeter, contextTip } = composerBar();
+    NS.composer.setFocus(session('s-1'), {
+      availableCommands: [], configOptions: [], usage: tipUsage(),
+    });
+    contextMeter.dispatch('click', { preventDefault: () => {} });
+    assert.ok(!contextTip.querySelector('.context-tip-compact'),
+      'a Codex-style session without /compact must not send it as plain text');
   });
 
   test('empty text sends only when an attachment is present', () => {
@@ -5995,6 +6009,21 @@ suite('chat client logic: connect card (stub DOM, )', () => {
     assert.strictEqual(els.stateError.hidden, true);
     assert.strictEqual(els.stateActions.hidden, false, 'the button is on offer');
     assert.strictEqual(els.autoConnectRow.hidden, false, 'the switch is where you would look for it');
+  });
+
+  test('the card uses the host-provided agent name (Codex, not Claude)', () => {
+    const { NS, els } = cardWith();
+    NS.stateCard.noteBoot({
+      agentConnected: false, agentLabel: 'Codex CLI', autoConnect: false, focused: false,
+    });
+    assert.strictEqual(els.stateTitle.textContent, 'Codex CLI');
+    assert.strictEqual(els.emptyConnect.textContent, 'Connect Codex CLI');
+
+    NS.stateCard.onConnection({ type: 'connection', state: 'connecting', agentLabel: 'Codex CLI' });
+    assert.strictEqual(els.stateTitle.textContent, 'Connecting to Codex CLI…');
+
+    NS.stateCard.onConnection({ type: 'connection', state: 'connected', agentLabel: 'Codex CLI' });
+    assert.strictEqual(els.stateTitle.textContent, 'Codex CLI is ready');
   });
 
   test('before the first host message the card says it is loading', () => {
@@ -8208,6 +8237,8 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     const harness = loadClient({ messages, popover: pop.root });
     const { NS } = harness;
     NS.popover.install();
+    // Claude 支持消息级 fork；测试菜单动作时先把这个能力位打开（这个 harness 没接输入卡）。
+    NS.composer.canForkAtMessage = () => true;
     const posted: Array<Record<string, unknown>> = [];
     NS.bridge.post = (message: Record<string, unknown>) => { posted.push(message); };
     // 记录的正文要**真的进过转录**（entry(id) 才解析得到）—— 这是 067 那条老路
@@ -8301,6 +8332,24 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
     });
     assert.deepStrictEqual(posted, [{ type: 'rewindTo', entryId: 'u1' }],
       'the host looks up the text and the fork point from the record');
+  });
+
+  test('an agent without message-level fork explains instead of posting', () => {
+    const { NS, posted, pop } = withEntry();
+    NS.composer.canForkAtMessage = () => false;
+    NS.bridge.postForSession = (message: Record<string, unknown>) => { posted.push(message); };
+    NS.transcriptView.append(
+      { id: 'a1', kind: 'assistant', at: 2, text: 'answer', streaming: false }, undefined);
+
+    const assistant = new StubNode('div');
+    assistant.setAttribute('data-entry-id', 'a1');
+    const items = NS.contextMenu.itemsFor(assistant) as Array<{ label: string; run: (e?: unknown) => void }>;
+    const fork = items.find(i => i.label === 'Fork from here');
+    assert.ok(fork, `expected Fork from here, got: ${labels(items)}`);
+    fork.run({});
+    assert.deepStrictEqual(posted, [], 'no fork request is sent for an unsupported agent');
+    assert.ok(String(pop.root.textContent || '').includes('Not supported'),
+      'the panel explains why instead of silently doing nothing');
   });
 
   test('Side Chat with Selection captures the source session and selection when the menu opens', () => {

@@ -155,6 +155,26 @@ export const bootClient = `
     if (NS.stateCard) { NS.stateCard.setConnected(connected === true); }
   }
 
+  /** [CUSTOM- 空态卡上的 agent 名由宿主下发，客户端不再写死 "Claude Code"。 */
+  function applyAgentLabel(label) {
+    if (NS.stateCard && NS.stateCard.setAgent) { NS.stateCard.setAgent(label); }
+  }
+
+  /** [CUSTOM- 默认 Agent（vac.defaultAgent）变化：页签栏图标、空态卡与草稿一起跟上。 */
+  function applyAgentChoices(message) {
+    var agents = message && message.agents ? message.agents : [];
+    var defaultAgent = message && message.defaultAgent ? message.defaultAgent : null;
+    if (NS.tabs && NS.tabs.setAgentChoices) {
+      NS.tabs.setAgentChoices({ agents: agents, defaultAgent: defaultAgent });
+    }
+    applyAgentLabel(defaultAgent || undefined);
+    // Unsent drafts are new sessions too: they follow the configured default.
+    for (var i = 0; i < drafts.length; i++) { drafts[i].agentName = defaultAgent; }
+    if (focusedDraftId && NS.composer && NS.composer.setDraftAgent) {
+      NS.composer.setDraftAgent(defaultAgent);
+    }
+  }
+
   function setLoading(loading) {
     loadOverlay.hidden = !loading;
     NS.composer.setLoading(loading);
@@ -382,6 +402,8 @@ export const bootClient = `
   function startDraft(initialCwd) {
     var draft = {
       draftId: 'draft-' + draftSeed + '-' + (++draftSeq),
+      // New sessions use the configured default agent, not whichever session is focused.
+      agentName: NS.tabs && NS.tabs.defaultAgentName ? NS.tabs.defaultAgentName() : null,
       cwd: initialCwd || null,
       additionalDirectories: [],
       // [CUSTOM- 2026-11-13] 'vac.autoAddWorkspaceFolders' seeds the other roots
@@ -632,12 +654,15 @@ export const bootClient = `
         // [CUSTOM- 没有聚焦会话时地址栏显示什么（宿主解析的默认目录）。
         if (NS.tabs && NS.tabs.setDefaultCwd) { NS.tabs.setDefaultCwd(message.defaultCwd); }
         applyEmptyState(message.agentConnected);
+        applyAgentLabel(message.agentLabel);
+        if (message.agents) { applyAgentChoices(message); }
         // [CUSTOM- Arm the auto-connect timer here: this is the only place
         // that knows all three inputs at once (agentConnected + focused + the setting).
         // noteBoot is idempotent — boot is delivered twice per document.
         if (NS.stateCard) {
           NS.stateCard.noteBoot({
             agentConnected: message.agentConnected === true,
+            agentLabel: message.agentLabel,
             autoConnect: message.autoConnect,
             focused: !!message.focused
           });
@@ -706,6 +731,10 @@ export const bootClient = `
         if (NS.stateCard) { NS.stateCard.setAutoConnect(message.value === true); }
         break;
 
+      case 'agents':
+        applyAgentChoices(message);
+        break;
+
       case 'sessionsChanged':
         NS.tabs.setSessions(message.sessions || []);
         if (NS.times) { NS.times.noteSessions(message.sessions || []); }
@@ -713,6 +742,7 @@ export const bootClient = `
         if (NS.tail) { NS.tail.noteSessions(message.sessions || []); }
         if (NS.autoExpand) { NS.autoExpand.noteSessions(message.sessions || []); }
         applyEmptyState(message.agentConnected);
+        applyAgentLabel(message.agentLabel);
         syncFocusedState(message.sessions || []);
         break;
 

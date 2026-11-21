@@ -160,6 +160,10 @@ export interface SessionMeta {
    * 已提供的 model 选项覆盖名称与描述，并按配置排序，不创建额外候选。
    */
   customModels?: CustomModel[];
+  /** Agent accepts `vac.customModels` via `_meta.extraModels` (absent = no). */
+  customModelsSupported?: boolean;
+  /** Agent honors the message-level fork `_meta`; drives Fork/Rewind menu actions (absent = no). */
+  messageFork?: boolean;
 }
 
 /** Incremental patch for an existing transcript entry (streaming text, status). */
@@ -365,19 +369,25 @@ export interface HistorySessionSummary {
   fromDisk?: boolean;
 }
 
+export interface AgentChoice {
+  name: string;
+  kind: string;
+}
+
 /** extension → webview */
 export type ExtToChat =
   // [CUSTOM- `agentConnected` drives the empty state's copy (and whether
-  // its button is "Connect Claude Code" or "New session"): a sessionless panel can have
+  // its button is "Connect" or "New session"): a sessionless panel can have
   // a live agent process — closing the last session does not stop it. Optional so an
   // older surface simply keeps the old copy.
   // [CUSTOM- `defaultCwd` 是「没有聚焦会话时地址栏该显示什么」的那份内容
   // （宿主 `resolveDefaultCwd()`：下次会话将建在这里）。随 boot 走而不是客户端自己猜：
   // 默认目录的三级回退（配置 → 第一个工作区文件夹 → cwd）只有宿主知道，且 058 的草稿页
   // 展示的是**同一份**值（pitfalls #19：同一份知识不要存两份）。
-  | { type: 'boot'; focused: SessionSummary | null; sessions: SessionSummary[]; snapshot: TranscriptSnapshotWire | null; meta: SessionMeta | null; agentConnected?: boolean; autoConnect?: boolean; defaultCwd?: string; recoverable?: RecoverableSession[]; restorePref?: RestoreChoice }
+  | { type: 'boot'; focused: SessionSummary | null; sessions: SessionSummary[]; snapshot: TranscriptSnapshotWire | null; meta: SessionMeta | null; agentConnected?: boolean; agentLabel?: string; agents?: AgentChoice[]; defaultAgent?: string | null; autoConnect?: boolean; defaultCwd?: string; recoverable?: RecoverableSession[]; restorePref?: RestoreChoice }
+  | { type: 'agents'; agents: AgentChoice[]; defaultAgent: string | null }
   | { type: 'focus'; summary: SessionSummary | null; snapshot: TranscriptSnapshotWire | null; meta: SessionMeta | null; agentConnected?: boolean }
-  | { type: 'sessionsChanged'; sessions: SessionSummary[]; agentConnected?: boolean }
+  | { type: 'sessionsChanged'; sessions: SessionSummary[]; agentConnected?: boolean; agentLabel?: string }
   | { type: 'sideQuote'; sessionId: string; text: string }
   // [CUSTOM- 2026-10-29：宿主请求弹出"停止本轮"确认条（侧边栏标题栏 Stop / 命令面板）。
   // 客户端只负责显示；真正的 cancelTurn 仍由用户在 #stopConfirm 上点 Stop 后发出。
@@ -431,7 +441,7 @@ export type ExtToChat =
   // 校验后才下发，陈旧无害。
   // 定向发给发起请求的那个面（同 058 那四条——这是"某个文档正在编辑的草稿"）；
   // `draftId` 同样不能省：应答回来时用户可能已经换了草稿，客户端据它丢弃过期结果。
-  | { type: 'draftOptions'; draftId: string; agentName: string | null; configOptions: SessionConfigOption[]; availableCommands: SessionMeta['availableCommands']; customModels: CustomModel[] }
+  | { type: 'draftOptions'; draftId: string; agentName: string | null; configOptions: SessionConfigOption[]; availableCommands: SessionMeta['availableCommands']; customModels: CustomModel[]; customModelsSupported?: boolean }
   | { type: 'sessionClosed'; sessionId: string; reason: CloseReason }
   | { type: 'append'; sessionId: string; entries: WireEntry[] }
   | { type: 'revise'; sessionId: string; entryId: string; patch: EntryPatch }
@@ -458,7 +468,7 @@ export type ExtToChat =
    * （最典型的是 npx 的 "…will be installed: …"）。用户卡在连接界面时，那一行才说明**为什么**在等
    * —— 此前它只进日志，卡片上永远只有一句 "Connecting…"。
    */
-  | { type: 'connection'; state: 'connecting' | 'connected' | 'failed'; message?: string; detail?: string }
+  | { type: 'connection'; state: 'connecting' | 'connected' | 'failed'; message?: string; detail?: string; agentLabel?: string }
   // 设置项 vac.autoConnectOnOpen 的当前值。
   // 走**广播**：两个面渲染的是同一个开关，不能各显示各的。
   // 带在 boot 里的是**首屏值**（客户端要靠 {agentConnected, focused, autoConnect} 三者

@@ -71,9 +71,9 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 |---|---|---|
 | `src/extension.ts` | 激活入口：装配全部服务与视图、把 SessionManager 事件接到 UI、dispose 编排；驱动 `vac.turnInProgress` 上下文键 | 新增服务 / 新增事件转发 / 改装配顺序 |
 | `src/commands.ts` | `vac.*` 命令注册表（一个 `handlers` 对象，命令 id → 处理函数，末尾统一 register） | 新增/改命令行为（同时改 `package.json`） |
-| `src/agents/AgentProfile.ts` | 按 `kind`（claude / codex / generic）分化的 agent 专有行为：会话请求的 `_meta`（自定义模型）、`transcriptStore`（能否读它的磁盘转录补全历史/回放）、`nesting`（工具调用嵌套策略 id）。**UI 侧的 agent 差异一律从这里按 kind 取，不按配置名** | 新增 agent 专有差异 |
-| `src/agents/AgentMigration.ts` | 适配器包 / 版本表示的替换表 + `migrateAgents`（纯逻辑）；`AgentConfig.offerAgentMigration` 在激活时提示改写用户自己的 `vac.agents`（Codex 旧包、Claude 裸 spec → `#main`） | 上游适配器换包名 / 需要固定到修复分支 |
-| `src/config/AgentConfig.ts` | 读 `vac.agents`；`getAgentNames` 把第一个 Claude 排最前；`getAgentKind`；`offerAgentMigration`（旧包迁移提示，可“不再询问”） | agent 列表读取/排序 / 配置迁移 |
+| `src/agents/AgentProfile.ts` | 按 `kind`（claude / codex / generic）分化的 agent 专有行为：会话请求的 `_meta`（自定义模型，`customModels`）、`transcriptStore`（能否读它的磁盘转录补全历史/回放）、`nesting`（工具调用嵌套策略 id）、`messageFork`（是否认消息级 fork 的 AIR `_meta`）。**UI 侧的 agent 差异一律从这里按 kind 取，不按配置名**；能力位随 `SessionMeta` 下发（`customModelsSupported` / `messageFork`） | 新增 agent 专有差异 |
+| `src/agents/AgentMigration.ts` | 适配器包 / 版本表示的替换表 + `migrateAgents`（纯逻辑）；`AgentConfig.offerAgentMigration` 在激活时提示改写用户自己的 `vac.agents`（Codex 旧包/官方 npm 包 → `github:zouv/codex-acp#main`、Claude 裸 spec → `#main`） | 上游适配器换包名 / 需要固定到修复分支 |
+| `src/config/AgentConfig.ts` | 读 `vac.agents`；`getAgentNames` 按配置对象顺序（不偏向任何 agent，默认配置本身 Claude 在前）；`primaryAgentName` 取 `vac.defaultAgent`（未配置/已移除则回退首项）；`getAgentKind`；`offerAgentMigration`（旧包迁移提示，可“不再询问”） | agent 列表读取/排序 / 默认 agent / 配置迁移 |
 | `src/config/CustomModels.ts` / `CustomModelList.ts` / `ModelListSync.ts` | 自定义模型读取/规整、顺序签名、设置层 CAS 与串行任务；后两者纯逻辑 | 模型排序、冲突与设置作用域 |
 | `src/config/GlobalSettings.ts` | **跨 IDE 全局配置** `VAC_HOME/config.json`（默认 `~/.vac`）：原子写、白名单（首期仅 `vac.customModels`）、`firstSetLayer` 解析；纯逻辑，禁 import vscode | 新增/改动全局层配置键 |
 | `src/config/SettingScope.ts` | VS Code 三层 + 全局层的解析（`resolveSetting`）与写入（`writeSetting` 写当前生效层）、移除覆盖、打开对应配置文件；`SettingIO` 是可注入的测试缝 | 设置作用域 / 覆盖提示 / 写入层 |

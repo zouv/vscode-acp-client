@@ -601,7 +601,7 @@
   | 知识 | 宿主侧 | 客户端侧 |
   |---|---|---|
   | 工具状态字形 / kind 标签 | `content/toolCalls.ts` 的 `statusGlyph`/`statusClass`/`kindLabel` | `html/client/toolCallView.ts` 顶部的 `STATUS_GLYPH`/`KIND_LABEL` |
-  | agent 名字面量 `'Claude Code'` | `panelContract.MODERN_AGENTS`（面板路由）、`NestingStrategy`（嵌套策略）、`AgentConfig`（排序） | `html/client/sessionMenu.ts` 的 `CONNECT_LABEL`（硬编码字符串） |
+  | agent 显示名 | `ChatPanelHost.agentLabelOf()`（随 `boot` / `connection` / `sessionsChanged` 下发 `agentLabel`） | 无（`stateCard.ts` 只消费，不再硬编码） |
 - **为什么危险（不是"重复代码不好看"这种层面）**：宿主与客户端是**两个独立的代码世界**——
   客户端代码是模板字符串里的 JS，跨不过类型检查、也没有任何自动检查能比对两边。
   所以"改了一边"这件事**不会有任何东西告诉你**。038 就是同一族的一个真实实例：

@@ -29,8 +29,18 @@ export const PRICE_TABLE: ModelPrice[] = [
   { prefix: 'opus', inputPerM: 5, outputPerM: 25 },
   { prefix: 'sonnet', inputPerM: 3, outputPerM: 15 },
   { prefix: 'haiku', inputPerM: 1, outputPerM: 5 },
-  // Best-known GPT-5 list price; Codex-side models other than gpt-5* stay unpriced.
+  // OpenAI (Codex) list prices. Cached input has no write premium; cacheReadMult is
+  // 0.1x for GPT-5 family and 0.25x for o-series / codex-mini.
   { prefix: 'gpt-5', inputPerM: 1.25, outputPerM: 10, cacheWriteMult: 1, cacheReadMult: 0.1 },
+  { prefix: 'gpt-5-1-codex-mini', inputPerM: 0.25, outputPerM: 2, cacheWriteMult: 1, cacheReadMult: 0.1 },
+  { prefix: 'gpt-5-1-codex', inputPerM: 1.25, outputPerM: 10, cacheWriteMult: 1, cacheReadMult: 0.1 },
+  { prefix: 'gpt-5-codex', inputPerM: 1.25, outputPerM: 10, cacheWriteMult: 1, cacheReadMult: 0.1 },
+  { prefix: 'gpt-5-mini', inputPerM: 0.25, outputPerM: 2, cacheWriteMult: 1, cacheReadMult: 0.1 },
+  { prefix: 'gpt-5-nano', inputPerM: 0.05, outputPerM: 0.4, cacheWriteMult: 1, cacheReadMult: 0.1 },
+  { prefix: 'codex-mini', inputPerM: 1.5, outputPerM: 6, cacheWriteMult: 1, cacheReadMult: 0.25 },
+  { prefix: 'o4-mini', inputPerM: 1.1, outputPerM: 4.4, cacheWriteMult: 1, cacheReadMult: 0.25 },
+  { prefix: 'o3-mini', inputPerM: 1.1, outputPerM: 4.4, cacheWriteMult: 1, cacheReadMult: 0.25 },
+  { prefix: 'o3', inputPerM: 2, outputPerM: 8, cacheWriteMult: 1, cacheReadMult: 0.25 },
 ];
 
 function normalize(model: string): string {

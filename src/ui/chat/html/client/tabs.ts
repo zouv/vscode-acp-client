@@ -11,13 +11,20 @@ export const tabsClient = `
   var agentBar = null;
   var agentSelect = null;
   var agentMenu = null;
+  // [CUSTOM- 默认 Agent（vac.defaultAgent）的页签栏图标与下拉。
+  var defaultAgentBtn = null;
+  var defaultAgentMenu = null;
   var tipEl = null;
   var cwdBtn = null;
 
   // [CUSTOM- 'drafts' are LOCAL tabs: a new session that does not
   // exist yet. They are client state on purpose — the host knows nothing about
   // them, so 'sessionsChanged' / 'boot' must never clear this list.
-  var state = { sessions: [], focusedId: null, focusedAgent: null, drafts: [], focusedDraftId: null };
+  var state = {
+    sessions: [], focusedId: null, focusedAgent: null, drafts: [], focusedDraftId: null,
+    // [CUSTOM- 宿主的 vac.agents + 生效的 vac.defaultAgent；页签栏右侧的默认 Agent 图标用。
+    agentChoices: [], defaultAgent: null,
+  };
   // [CUSTOM- 「待恢复的会话」：本地 tab（宿主里还不存在），带 sessionId/agentName/cwd/title。
   // 与草稿一样是纯客户端状态 —— 点它才真去 load（懒恢复）；收到那个会话的 focus/sessionsChanged 时让位。
   var restoring = [];
@@ -410,6 +417,8 @@ export const tabsClient = `
     agentBar = NS.dom.qs('agentBar');
     agentSelect = NS.dom.qs('agentSelect');
     agentMenu = NS.dom.qs('agentMenu');
+    defaultAgentBtn = NS.dom.qs('defaultAgentBtn');
+    defaultAgentMenu = NS.dom.qs('defaultAgentMenu');
     cwdBtn = NS.dom.qs('cwdBtn');
     // [CUSTOM- 会话 tab / 目录图标的悬停提示要**分色**（SessionId、State 用灰色），
     // 原生 title 做不到分段着色 —— 用一条自绘的浮层（2026-10-27）。
@@ -450,10 +459,30 @@ export const tabsClient = `
         renderAgentMenu();
       }
     });
+    if (defaultAgentBtn) {
+      defaultAgentBtn.addEventListener('click', function (event) {
+        event.stopPropagation();
+        if (!defaultAgentMenu) { return; }
+        var open = defaultAgentMenu.className.indexOf('open') !== -1;
+        closeDefaultAgentMenu();
+        if (!open) {
+          defaultAgentMenu.className = 'picker-menu default-agent-menu open';
+          renderDefaultAgentMenu();
+          placeDefaultAgentMenu();
+        }
+      });
+    }
     // 点菜单外任意处收起（菜单项自己的 click 会 stopPropagation）。
-    document.addEventListener('click', function () { closeAgentMenu(); });
-    document.addEventListener('scroll', hideTip, true);
-    window.addEventListener('resize', function () { hideTip(); updateDensity(); });
+    document.addEventListener('click', function () { closeAgentMenu(); closeDefaultAgentMenu(); });
+    document.addEventListener('scroll', function (event) {
+      hideTip();
+      // A long menu scrolls itself; that must not dismiss it. Any other scroll
+      // moves the anchor (or the panel) and closes it.
+      var insideMenu = !!(defaultAgentMenu && event && event.target
+        && defaultAgentMenu.contains && defaultAgentMenu.contains(event.target));
+      if (!insideMenu) { closeDefaultAgentMenu(); }
+    }, true);
+    window.addEventListener('resize', function () { hideTip(); closeDefaultAgentMenu(); updateDensity(); });
 
     // [CUSTOM- The tablist keyboard contract: arrows move the
     // selection, Delete closes. Needed because the roving tabindex deliberately
@@ -1139,14 +1168,118 @@ export const tabsClient = `
     if (agentMenu) { agentMenu.className = 'picker-menu down agent-menu'; }
   }
 
-  function agentDescription(name) {
-    var kind = null;
-    for (var i = 0; i < state.sessions.length; i++) {
-      if (state.sessions[i].agentName === name) { kind = state.sessions[i].agentKind || null; break; }
+  /** Icon kind for an agent: the profile kind when known, else the generic glyph. */
+  function agentIconKind(kind) {
+    return kind === 'claude' ? 'claude' : kind === 'codex' ? 'codex' : 'agent';
+  }
+
+  function agentKindOf(name) {
+    for (var i = 0; i < state.agentChoices.length; i++) {
+      if (state.agentChoices[i].name === name) { return state.agentChoices[i].kind || null; }
     }
+    for (var j = 0; j < state.sessions.length; j++) {
+      if (state.sessions[j].agentName === name) { return state.sessions[j].agentKind || null; }
+    }
+    return null;
+  }
+
+  function agentDescription(name) {
+    var kind = agentKindOf(name);
     if (kind === 'claude') { return 'Claude Code agent'; }
     if (kind === 'codex') { return 'OpenAI Codex agent'; }
     return 'ACP agent';
+  }
+
+  function closeDefaultAgentMenu() {
+    if (defaultAgentMenu) { defaultAgentMenu.className = 'picker-menu default-agent-menu'; }
+  }
+
+  /**
+   * [CUSTOM- The menu lives inside .tab-strip, whose overflow:hidden would clip
+   * an absolutely positioned dropdown. It is position:fixed, so place it under
+   * the button (flip above when the viewport is short) and keep it inside the
+   * horizontal bounds.
+   */
+  function placeDefaultAgentMenu() {
+    if (!defaultAgentBtn || !defaultAgentMenu) { return; }
+    if (!defaultAgentBtn.getBoundingClientRect || !defaultAgentMenu.getBoundingClientRect) { return; }
+    var rect = defaultAgentBtn.getBoundingClientRect();
+    var box = defaultAgentMenu.getBoundingClientRect();
+    var viewportWidth = window.innerWidth || 800;
+    var viewportHeight = window.innerHeight || 600;
+    var width = box.width || 240;
+    var height = box.height || 0;
+    var left = Math.max(4, Math.min(rect.right - width, viewportWidth - width - 8));
+    var top = rect.bottom + 4;
+    if (height > 0 && top + height > viewportHeight - 8) {
+      top = Math.max(8, rect.top - height - 4);
+    }
+    defaultAgentMenu.style.left = left + 'px';
+    defaultAgentMenu.style.top = top + 'px';
+  }
+
+  function renderDefaultAgentButton() {
+    if (!defaultAgentBtn) { return; }
+    var name = state.defaultAgent;
+    defaultAgentBtn.hidden = !name;
+    NS.dom.clear(defaultAgentBtn);
+    if (!name) { return; }
+    var glyph = NS.icons && NS.icons.icon
+      ? NS.icons.icon(agentIconKind(agentKindOf(name)), 'btn-icon')
+      : null;
+    if (glyph) { defaultAgentBtn.appendChild(glyph); }
+    var title = 'Default agent: ' + name + ' (click to change)';
+    defaultAgentBtn.title = title;
+    defaultAgentBtn.setAttribute('aria-label', title);
+  }
+
+  function renderDefaultAgentMenu() {
+    if (!defaultAgentMenu) { return; }
+    NS.dom.clear(defaultAgentMenu);
+    defaultAgentMenu.appendChild(NS.dom.el('div', 'picker-title', 'Default agent'));
+    for (var i = 0; i < state.agentChoices.length; i++) {
+      (function (choice) {
+        var active = choice.name === state.defaultAgent;
+        var item = NS.dom.el('button', 'picker-item' + (active ? ' active' : ''), '');
+        item.type = 'button';
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', active ? 'true' : 'false');
+        var glyph = NS.icons && NS.icons.icon
+          ? NS.icons.icon(agentIconKind(choice.kind), 'picker-icon')
+          : null;
+        if (glyph) { item.appendChild(glyph); }
+        var body = NS.dom.el('span', 'picker-item-body');
+        body.appendChild(NS.dom.el('span', 'picker-item-label', choice.name));
+        body.appendChild(NS.dom.el('span', 'picker-item-desc', agentDescription(choice.name)));
+        item.appendChild(body);
+        if (active) {
+          var check = NS.icons && NS.icons.icon ? NS.icons.icon('check', 'picker-check') : null;
+          if (check) { item.appendChild(check); }
+        }
+        item.addEventListener('click', function (event) {
+          event.stopPropagation();
+          closeDefaultAgentMenu();
+          // Optimistic: the host echoes the value back in the 'agents' / 'settings' messages.
+          state.defaultAgent = choice.name;
+          renderDefaultAgentButton();
+          NS.bridge.post({ type: 'setSetting', key: 'vac.defaultAgent', value: choice.name });
+        });
+        defaultAgentMenu.appendChild(item);
+      })(state.agentChoices[i]);
+    }
+  }
+
+  function setAgentChoices(payload) {
+    var agents = payload && payload.agents ? payload.agents : [];
+    state.agentChoices = agents;
+    state.defaultAgent = payload && payload.defaultAgent
+      ? payload.defaultAgent
+      : (agents.length > 0 ? agents[0].name : null);
+    renderDefaultAgentButton();
+    if (defaultAgentMenu && defaultAgentMenu.className.indexOf('open') !== -1) {
+      renderDefaultAgentMenu();
+      placeDefaultAgentMenu();
+    }
   }
 
   function renderAgentMenu() {
@@ -1389,6 +1522,9 @@ export const tabsClient = `
   NS.tabs = {
     init: init,
     setSessions: setSessions,
+    // [CUSTOM- 宿主的 vac.agents + 生效的 vac.defaultAgent；页签栏右侧的默认 Agent 图标/下拉。
+    setAgentChoices: setAgentChoices,
+    defaultAgentName: function () { return state.defaultAgent; },
     setFocus: setFocus,
     setDrafts: setDrafts,
     setDraftFocus: setDraftFocus,

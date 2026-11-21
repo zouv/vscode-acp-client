@@ -56,15 +56,21 @@ export const stateCardClient = `
     // 客户端脚本还没跑起来 —— body.ts 里已经把同样的文案静态写好了，这里负责 JS 接管后
     // 继续显示同一句话，直到 boot/connection 到达。用户看到的"黑屏"就是这一格。
     booting: 'Starting VAC\\u2026',
-    disconnected: 'Claude Code',
-    connecting: 'Connecting to Claude Code\\u2026',
-    // [CUSTOM- 不是 'Connected to Claude Code'：那串字在扫读时会被当成
-    // 'Connect to Claude Code'（动词短语），于是"已经连上了"被读成"还需要连接"。
-    // 状态句比被动语态难误读。
-    ready: 'Claude Code is ready',
     // [CUSTOM- 首条消息正在建会话（见 HINTS.creating）。
     creating: 'Creating this session\\u2026'
   };
+  // [CUSTOM- 空态里 agent 的名字由宿主随 boot/connection 下发（Claude Code / Codex CLI …），
+  // 不再写死 —— 只配了 Codex 的面板不该说 "Connect Claude Code"。
+  var agentLabel = 'Claude Code';
+
+  /** 三句带 agent 名字的标题。'ready' 不用 'Connected to X'：那串字扫读时像动词短语，
+      容易被读成「还需要连接」；状态句更难误读。 */
+  function titleFor(p) {
+    if (p === 'disconnected') { return agentLabel; }
+    if (p === 'connecting') { return 'Connecting to ' + agentLabel + '\\u2026'; }
+    if (p === 'ready') { return agentLabel + ' is ready'; }
+    return TITLES[p];
+  }
   var HINTS = {
     booting: 'Loading the chat panel\\u2026',
     disconnected: 'Connect to start a session in this panel.',
@@ -132,7 +138,7 @@ export const stateCardClient = `
     // 三条都按它算 —— 免得两个相位各写一遍、迟早漏一处。
     var waiting = (p === 'connecting' || p === 'creating' || p === 'booting');
     var asking = p === 'restore';
-    setText(els.title, asking ? restoreTitle() : TITLES[p]);
+    setText(els.title, asking ? restoreTitle() : titleFor(p));
     // [CUSTOM- 连接中若拿到了 agent 的 stderr（npx 在下载那几行），就**用它**代替
     // 那句套话 —— 用户卡在连接界面时要的是"为什么在等"，而不是"正在启动"。
     // [CUSTOM- 建会话中：套话 + **秒表**（同 194 的道理：数字在动才说明"还在等"）。
@@ -148,7 +154,7 @@ export const stateCardClient = `
       els.connect.disabled = p === 'connecting';
       setText(els.connect, p === 'connecting'
         ? 'Connecting\\u2026' + elapsedLabel()
-        : 'Connect Claude Code');
+        : 'Connect ' + agentLabel);
     }
     // ready 态的按钮整块退场（连同它的间距），不是只把它藏起来。[195] 建会话中同理：
     // 那一刻按 Connect 没有意义（而且 connect 按钮的相位文案会跟卡片的标题打架）。
@@ -225,6 +231,9 @@ export const stateCardClient = `
 
   function onConnection(message) {
     booted = true;
+    if (message && typeof message.agentLabel === 'string' && message.agentLabel) {
+      agentLabel = message.agentLabel;
+    }
     var state = message && message.state;
     if (state === 'connecting') {
       connecting = true;
@@ -270,6 +279,13 @@ export const stateCardClient = `
     render();
   }
 
+  /** [CUSTOM- 宿主换了面板 agent（或刚连上/断开）时更新名字。 */
+  function setAgent(label) {
+    if (typeof label !== 'string' || !label) { return; }
+    agentLabel = label;
+    render();
+  }
+
   function setError(text) {
     errorText = text || '';
     render();
@@ -307,6 +323,7 @@ export const stateCardClient = `
   function noteBoot(info) {
     var boot = info || {};
     booted = true;
+    if (typeof boot.agentLabel === 'string' && boot.agentLabel) { agentLabel = boot.agentLabel; }
     connected = boot.agentConnected === true;
     if (boot.autoConnect !== undefined) { setAutoConnect(boot.autoConnect === true); }
     render();
@@ -397,6 +414,7 @@ export const stateCardClient = `
     setRestorePref: function (value) { booted = true; restorePref = value || 'ask'; render(); },
     isRestorePending: function () { return phase() === 'restore'; },
     noteBoot: noteBoot,
+    setAgent: setAgent,
     setConnected: setConnected,
     setAutoConnect: setAutoConnect,
     setError: setError,

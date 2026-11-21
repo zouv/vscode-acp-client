@@ -8,7 +8,7 @@
 | Agent | 根目录 | 状态 |
 |---|---|---|
 | Claude Code | `~/.claude/projects/**/*.jsonl`（可覆盖：设置 `vac.dashboard.claudeProjectsDir`） | 已对真机文件核过 |
-| Codex CLI | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | 已对真机文件核过 |
+| Codex CLI | `$CODEX_HOME/sessions/**/rollout-*.jsonl`，默认 `~/.codex/sessions`（可覆盖：设置 `vac.dashboard.codexSessionsDir`） | 已按实测样本解析；真机复核见 `ROADMAP.md` P1-1 |
 
 **Claude 的行形状**（实测）：每行一个 JSON 对象，`type: "assistant"`，带 `message.model`、`message.id`、
 `message.usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}`，
@@ -85,8 +85,8 @@
 
 - **加一个 agent**：实现 `UsageSource`（`agent` / `scan(state, options)` / `watchRoots()`），
   塞进 `UsageService.sources` —— 索引、持久化与 UI **都不用改**。
-- **Codex 真机支持**：`CodexUsageSource` 已经能解析实测到的 rollout 格式；把 `codexSessionsDir`
-  指向 `~/.codex/sessions` 即可启用（默认已如此）。
+- **Codex 真机支持**：`CodexUsageSource` 已经能解析实测到的 rollout 格式；默认读 `$CODEX_HOME/sessions` 或
+  `~/.codex/sessions`，也可用 `vac.dashboard.codexSessionsDir` 覆盖。
 - **加分区**：扩展 `DashboardSnapshot` 与 `renderDashboardHtml` 里的 `render()`。
 - 测试用：`UsageService` 接受 `now` / `debounceMs` / `pollMs` / `persistIntervalMs` / `indexOptions`
-  与 `watchFactory`；生产入口是 `createUsageService({storageDir, claudeProjectsDir?, now?})`。
+  与 `watchFactory`；生产入口是 `createUsageService({storageDir, claudeProjectsDir?, codexSessionsDir?, now?})`。

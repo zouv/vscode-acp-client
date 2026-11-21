@@ -71,6 +71,24 @@ export const contextMenuClient = `
     return entry && typeof entry.text === 'string' ? entry.text : '';
   }
 
+  /** [CUSTOM- 当前 agent 是否支持从某条消息处 fork（宿主随 meta 下发的 messageFork）。 */
+  function messageForkAvailable() {
+    return !!(NS.composer && NS.composer.canForkAtMessage && NS.composer.canForkAtMessage());
+  }
+
+  /** [CUSTOM- 保留菜单项但如实说明：消息级 fork 是 Claude 适配器的扩展，其它 agent 不认。 */
+  function explainNoMessageFork(event) {
+    if (NS.popover && NS.popover.alert) {
+      NS.popover.alert({
+        title: 'Not supported by this agent',
+        message: 'Forking or rewinding at a message needs an agent extension this agent '
+          + 'does not provide. Use the Duplicate session action on the session tab to copy '
+          + 'the whole conversation instead.',
+        event: event
+      });
+    }
+  }
+
   function codeTextOf(node) {
     var wrap = node && node.closest ? node.closest('.code-wrap') : null;
     var code = wrap ? wrap.querySelector('code') : null;
@@ -323,7 +341,10 @@ export const contextMenuClient = `
         label: 'Fork from here',
         // postForSession：这条是**会话作用域**消息，宿主会按 sessionId 校验后处理；
         // 裸 post 不带 sessionId，会被守卫静默丢掉（点了没反应）。
-        run: function () { NS.bridge.postForSession({ type: 'forkFromMessage', entryId: forkId }); }
+        run: function (event) {
+          if (!messageForkAvailable()) { explainNoMessageFork(event); return; }
+          NS.bridge.postForSession({ type: 'forkFromMessage', entryId: forkId });
+        }
       });
     }
 
@@ -334,6 +355,7 @@ export const contextMenuClient = `
       items.push({
         label: 'Rewind to here',
         run: function (event) {
+          if (!messageForkAvailable()) { explainNoMessageFork(event); return; }
           var rewind = function () {
             NS.bridge.postForSession({ type: 'rewindTo', entryId: forkId });
           };

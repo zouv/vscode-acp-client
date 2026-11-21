@@ -7,8 +7,9 @@
 // 这本身就是要知道的信息）。
 //
 // 用法：
-//   node scripts/probe-agent-init.mjs --agent "npx -y @agentclientprotocol/codex-acp"
-//   node scripts/probe-agent-init.mjs --agent "npx -y @agentclientprotocol/codex-acp" --session --out <file.json>
+//   node scripts/probe-agent-init.mjs --agent "npx -y github:zouv/codex-acp#main"
+//   node scripts/probe-agent-init.mjs --agent "npx -y github:zouv/codex-acp#main" --session --out <file.json>
+//   node scripts/probe-agent-init.mjs --agent "npx -y github:zouv/codex-acp#main" --session --extra-model my-model-id
 // 可选：--timeout 300000（首次 npx 要下载，给足时间）
 //
 // 声明的 clientCapabilities 与扩展 `ConnectionManager.connect` 保持一致——agent 的回答可能取决于它。
@@ -25,10 +26,14 @@ const argOf = (name, fallback) => {
   const i = argv.indexOf(name);
   return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : fallback;
 };
-const agentCommand = argOf('--agent', 'npx -y @agentclientprotocol/codex-acp');
+const agentCommand = argOf('--agent', 'npx -y github:zouv/codex-acp#main');
 const outPath = argOf('--out', '');
 const timeoutMs = Number(argOf('--timeout', '300000'));
 const wantSession = argv.includes('--session');
+const extraModels = argOf('--extra-model', '')
+  .split(',')
+  .map(value => value.trim())
+  .filter(Boolean);
 
 // agent 可能读写 cwd：放在一次性的临时目录里，绝不在仓库里跑。
 const scratch = mkdtempSync(join(tmpdir(), 'acp-init-probe-'));
@@ -67,7 +72,11 @@ try {
   report.initialize = init;
   if (wantSession) {
     try {
-      const session = await connection.newSession({ cwd: scratch, mcpServers: [] });
+      const session = await connection.newSession({
+        cwd: scratch,
+        mcpServers: [],
+        ...(extraModels.length > 0 ? { _meta: { extraModels } } : {}),
+      });
       report.newSession = session;
     } catch (e) {
       report.newSessionError = { code: e?.code, message: e?.message, data: e?.data };

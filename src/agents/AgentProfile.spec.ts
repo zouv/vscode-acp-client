@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { inferAgentKind, isAgentKind, profileFor } from './AgentProfile';
+import { inferAgentKind, isAgentKind, profileFor, resolveDefaultAgent } from './AgentProfile';
 
 describe('inferAgentKind', () => {
   it('honours an explicit kind', () => {
@@ -30,17 +30,41 @@ describe('inferAgentKind', () => {
   });
 });
 
+describe('resolveDefaultAgent', () => {
+  it('uses the configured agent when it still exists', () => {
+    expect(resolveDefaultAgent(['Claude Code', 'Codex CLI'], 'Codex CLI')).toBe('Codex CLI');
+    expect(resolveDefaultAgent(['Claude Code', 'Codex CLI'], '  Codex CLI  ')).toBe('Codex CLI');
+  });
+
+  it('falls back to the first configured agent', () => {
+    expect(resolveDefaultAgent(['Claude Code', 'Codex CLI'], '')).toBe('Claude Code');
+    expect(resolveDefaultAgent(['Claude Code', 'Codex CLI'], undefined)).toBe('Claude Code');
+    expect(resolveDefaultAgent(['Claude Code', 'Codex CLI'], 'removed agent')).toBe('Claude Code');
+  });
+
+  it('returns undefined when no agent is configured', () => {
+    expect(resolveDefaultAgent([], 'Codex CLI')).toBeUndefined();
+  });
+});
+
 describe('agent profiles', () => {
-  it('injects custom models as _meta.extraModels for Claude only', () => {
+  it('injects custom models as _meta.extraModels for Claude and Codex', () => {
     expect(profileFor('claude').sessionMeta({ customModelIds: ['opus-5', 'sonnet-5'] }))
       .toEqual({ extraModels: ['opus-5', 'sonnet-5'] });
     expect(profileFor('claude').sessionMeta({ customModelIds: [] })).toBeUndefined();
-    expect(profileFor('codex').sessionMeta({ customModelIds: ['x'] })).toBeUndefined();
+    expect(profileFor('codex').sessionMeta({ customModelIds: ['x'] })).toEqual({ extraModels: ['x'] });
+    expect(profileFor('codex').sessionMeta({ customModelIds: [] })).toBeUndefined();
   });
 
   it('only Claude reads its transcripts and nests tool calls', () => {
     expect(profileFor('claude')).toMatchObject({ transcriptStore: 'claude', nesting: 'claude-code' });
     expect(profileFor('codex')).toMatchObject({ transcriptStore: null, nesting: 'flat' });
     expect(profileFor('generic')).toMatchObject({ transcriptStore: null, nesting: 'flat' });
+  });
+
+  it('Claude and Codex fork at a message and accept custom models', () => {
+    expect(profileFor('claude')).toMatchObject({ messageFork: true, customModels: true });
+    expect(profileFor('codex')).toMatchObject({ messageFork: true, customModels: true });
+    expect(profileFor('generic')).toMatchObject({ messageFork: false, customModels: false });
   });
 });

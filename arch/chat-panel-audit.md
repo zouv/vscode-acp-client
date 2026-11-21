@@ -86,10 +86,11 @@
 
 **其他值得知道的风险**
 
-- `'Claude Code'` 这个字面量还剩 **2 个语义不同的地方**：`agents/AgentProfile.ts` 的 `label`（配置默认名）、
-  `stateCard.ts` 的空态文案（客户端硬编码，123 从 `sessionMenu.ts`/`boot.ts` 收拢到这里）。
+- `'Claude Code'` 字面量只剩 **1 处**：`agents/AgentProfile.ts` 的 `label`（配置默认名）。
+  空态文案自 2026-11-19 起由宿主随 `boot` / `connection` / `sessionsChanged` 下发 `agentLabel`
+  （`stateCard.setAgent`），客户端不再硬编码；`body.ts` 的首帧按钮退回通用的 “Connect”。
   转录目录（`diskSessions`）与嵌套策略（`NestingStrategy`）2026-10-25 起都改为按 **kind**（`AgentProfile.transcriptStore` / `nesting`）——
-  此前它们按名字判断，用户在 `vac.agents` 里改个名就悄悄失效。排序（`AgentConfig.getAgentNames`）一直按 kind。
+  此前它们按名字判断，用户在 `vac.agents` 里改个名就悄悄失效。排序（`AgentConfig.getAgentNames`）自 2026-11-19 起按配置顺序，不再按 kind 固定 Claude 优先。
 - `sanitize()` 的 `ATTR_ALLOWLIST` **放行全部 `data-*`**，而点击委托偏偏信任 `data-href` / `data-path` /
   `data-terminal`——这层兜底实际没约束住它最该约束的几个属性。当前不可利用（`SafeMarkdown.html()`
   把原始 HTML 转义成文本，没有注入路径），但将来若 marked 新增没人覆盖的钩子，这层就形同虚设。

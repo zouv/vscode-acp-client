@@ -11,6 +11,28 @@
 
 ---
 
+## [1.19.0] - 2026-11-21
+
+### 新增
+- 新增 `vac.defaultAgent`：配置面板没有会话时默认连接的 agent（设置 → General → **Default agent**）；留空或配置的 agent 已被移除时，回退到 `vac.agents` 的第一项。
+- 会话页签栏右侧新增**默认 Agent 图标**（Claude / Codex 品牌形图标，位于设置齿轮左侧）：点开下拉可切换默认 Agent；新建草稿/会话按该配置创建，未发送的草稿也会跟随切换。
+- **Codex 体验对齐**：空态状态卡与连接按钮改用当前 agent 的名字（例如 “Connect Codex CLI”），不再写死 Claude Code。
+- **Codex 自定义模型**：`zouv/codex-acp` fork 支持 `_meta.extraModels`，`vac.customModels` 现在会出现在 Codex 的模型菜单与默认模型候选中；官方 Codex 包仍走它自己的 `config.toml`。
+- Dashboard 新增 `vac.dashboard.codexSessionsDir`：可覆盖 Codex rollout 目录（默认 `$CODEX_HOME/sessions` 或 `~/.codex/sessions`）；空态提示同时指出 Claude / Codex 两个目录设置。
+- Dashboard 价格表补齐 Codex / OpenAI 常用型号（`gpt-5-codex`、`gpt-5.1-codex`、`o3`、`o4-mini` 等），未知型号仍明确标为 unpriced。
+- 上下文 Tip 在 agent 不提供 `_meta["_claude/model"]` 时，回退显示会话当前模型名（Codex 也能看到）。
+
+### 变更
+- **Codex 默认适配器切到 `github:zouv/codex-acp#main`**：fork 的 `main` 跟踪上游 `agentclientprotocol/codex-acp`，只在上游未支持时保留本项目定制；旧的 `@zed-industries/codex-acp` 与官方 npm 包会在激活时提示一键迁移。
+- **Claude 适配器 fork 同步到上游 0.109.0**：跨压缩完整历史回放改用上游实现（`readHistoryAcrossCompactions`），fork 只保留上游仍缺的 `_meta.extraModels`、`_meta["_claude/usage"]` 与 `_meta["vac/agentMap"]` 定制；`prepare` 仍保留以支持 `npx github:` 安装。
+- `vac.agents` 的排序不再强制把 Claude 提到最前，按配置里的书写顺序决定默认 agent（默认配置本身仍把 Claude Code 放在前面）。
+- 默认 agent 的差异继续收敛在 `AgentProfile`：新增 `messageFork` / `customModels` 能力位，随 `SessionMeta` 下发。
+
+### 修复
+- 设置面板的下拉框不再因选中项文字宽度不同而左右错位：每行改为「文字列 + 固定 160px 值列」，所有控件共用同一右缘；子项缩进只作用于文字列，窄面板自动上下堆叠。
+- Codex 也支持消息级 **Fork from here / Rewind to here**：上游 `codex-acp` 的 `session/fork` 认 `_meta.jetbrains.air.fork`（无客户端 opt-in）。`AgentProfile.messageFork` 保留为能力位，generic agent 仍会在点击时提示不支持，宿主侧同时拒绝其 messageId fork / rewind。
+- `/compact` 按钮只在当前会话真的提供 `compact` 命令时显示，避免把 `/compact` 当普通消息发给不认它的 agent。
+
 ## [1.18.0] - 2026-11-19
 
 ### 新增

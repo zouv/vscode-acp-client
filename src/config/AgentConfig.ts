@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { migrateAgents } from '../agents/AgentMigration';
-import { inferAgentKind, type AgentKind } from '../agents/AgentProfile';
+import { inferAgentKind, resolveDefaultAgent, type AgentKind } from '../agents/AgentProfile';
 import { log } from '../utils/Logger';
 
 export interface AgentConfigEntry {
@@ -24,20 +24,15 @@ export function getAgentKind(name: string): AgentKind {
   return inferAgentKind(name, getAgentConfig(name));
 }
 
-/** Configured agent names; the first Claude agent is pinned first, the rest keep their order. */
+/** Configured agent names in the order the user wrote them (`vac.agents` object order). */
 export function getAgentNames(): string[] {
-  const configs = getAgentConfigs();
-  const names = Object.keys(configs);
-  const at = names.findIndex(n => inferAgentKind(n, configs[n]) === 'claude');
-  if (at > 0) {
-    const [primary] = names.splice(at, 1);
-    names.unshift(primary);
-  }
-  return names;
+  return Object.keys(getAgentConfigs());
 }
 
+/** The agent a sessionless panel connects to: `vac.defaultAgent`, else the first configured. */
 export function primaryAgentName(): string | undefined {
-  return getAgentNames()[0];
+  const preferred = vscode.workspace.getConfiguration('vac').get<string>('defaultAgent');
+  return resolveDefaultAgent(getAgentNames(), preferred);
 }
 
 const MIGRATION_DISMISSED_KEY = 'vac.agentMigrationDismissed.v1';

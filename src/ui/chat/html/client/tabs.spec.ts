@@ -85,7 +85,7 @@ function session(sessionId: string, extra: Record<string, unknown> = {}) {
 
 function createClient() {
   const elements: Record<string, FakeElement> = {};
-  for (const id of ['tabs', 'tabStrip', 'agentBar', 'agentSelect', 'agentMenu', 'cwdBtn', 'newTab']) {
+  for (const id of ['tabs', 'tabStrip', 'agentBar', 'agentSelect', 'agentMenu', 'defaultAgentBtn', 'defaultAgentMenu', 'cwdBtn', 'newTab']) {
     elements[id] = element();
   }
   const document = {
@@ -137,6 +137,46 @@ function tabNode(elements: Record<string, FakeElement>, attribute: string, id: s
 function restore(sessionId: string) {
   return { sessionId, agentName: 'Claude Code', title: sessionId, cwd: 'C:/work' };
 }
+
+describe('chat tabs: default agent picker', () => {
+  it('shows the configured default and posts the chosen agent', () => {
+    const { tabs, elements, bridge } = createClient();
+    tabs.setAgentChoices({
+      agents: [
+        { name: 'Claude Code', kind: 'claude' },
+        { name: 'Codex CLI', kind: 'codex' },
+      ],
+      defaultAgent: 'Codex CLI',
+    });
+    expect(elements.defaultAgentBtn.hidden).toBe(false);
+    expect(elements.defaultAgentBtn.title).toContain('Codex CLI');
+
+    elements.defaultAgentBtn.fire('click', { stopPropagation: () => {} });
+    expect(elements.defaultAgentMenu.className).toContain('open');
+    expect(elements.defaultAgentMenu.children).toHaveLength(3); // title + two agents
+
+    const codex = elements.defaultAgentMenu.children.find(
+      child => child.className.includes('picker-item') && child.className.includes('active'),
+    );
+    const codexBody = codex?.children.find(child => child.className.includes('picker-item-body'));
+    const codexLabel = codexBody?.children.find(child => child.className.includes('picker-item-label'));
+    expect(codexLabel?.textContent).toBe('Codex CLI');
+    const claude = elements.defaultAgentMenu.children.find(
+      child => child.className.includes('picker-item') && !child.className.includes('active'),
+    );
+    bridge.post.mockClear();
+    claude!.fire('click', { stopPropagation: () => {} });
+    expect(bridge.post).toHaveBeenCalledWith({
+      type: 'setSetting', key: 'vac.defaultAgent', value: 'Claude Code',
+    });
+  });
+
+  it('hides the picker when no agent is configured', () => {
+    const { tabs, elements } = createClient();
+    tabs.setAgentChoices({ agents: [], defaultAgent: null });
+    expect(elements.defaultAgentBtn.hidden).toBe(true);
+  });
+});
 
 describe('chat tabs: draft position becomes the session position', () => {
   it('inserts the session created from a dragged draft at the draft slot', () => {

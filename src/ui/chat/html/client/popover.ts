@@ -96,7 +96,9 @@ export const popoverClient = `
     messageEl.textContent = opts.message || '';
     inputWrap.hidden = true;
     NS.dom.clear(actionsEl);
-    actionsEl.appendChild(makeButton(opts.cancelLabel || 'Cancel', 'cancel', false));
+    if (!opts.singleAction) {
+      actionsEl.appendChild(makeButton(opts.cancelLabel || 'Cancel', 'cancel', false));
+    }
     var ok = makeButton(opts.confirmLabel || 'OK', 'confirm', !!opts.danger);
     actionsEl.appendChild(ok);
     // 危险操作默认停在 Cancel：误按回车不会删东西。
@@ -139,6 +141,14 @@ export const popoverClient = `
   function prompt(opts) {
     opts = opts || {};
     return open(opts, 'prompt', opts.onSubmit);
+  }
+
+  /** Informational note with a single OK button (no cancel choice to make). */
+  function alert(opts) {
+    opts = opts || {};
+    opts.singleAction = true;
+    opts.confirmLabel = opts.confirmLabel || 'OK';
+    return open(opts, 'confirm', null);
   }
 
   function install() {
@@ -193,6 +203,7 @@ export const popoverClient = `
   NS.popover = {
     confirm: confirm,
     prompt: prompt,
+    alert: alert,
     close: close,
     install: install,
     isOpen: isOpen

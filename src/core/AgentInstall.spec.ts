@@ -36,6 +36,8 @@ describe('npxSpecOf', () => {
   it('splits the package spec out of an npx command', () => {
     expect(npxSpecOf('npx', ['-y', 'github:zouv/claude-agent-acp']))
       .toEqual({ spec: 'github:zouv/claude-agent-acp', extraArgs: [] });
+    expect(npxSpecOf('npx', ['-y', 'github:zouv/codex-acp#main']))
+      .toEqual({ spec: 'github:zouv/codex-acp#main', extraArgs: [] });
   });
 
   it('accepts the Windows shim and trailing arguments', () => {

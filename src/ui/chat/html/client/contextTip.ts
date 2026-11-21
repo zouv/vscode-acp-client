@@ -479,14 +479,19 @@ export const contextTipClient = `
     if (limitsBox) { panel.appendChild(limitsBox); }
 
     var actions = NS.dom.el('div', 'context-tip-actions');
-    var compact = NS.dom.el('button', 'context-tip-action context-tip-compact', '/compact');
-    compact.type = 'button';
-    compact.setAttribute('data-context-tip', 'compact');
-    compact.title = running
-      ? 'Wait for the running turn to finish'
-      : 'Ask the agent to compact this conversation';
-    compact.disabled = running || !sessionId;
-    actions.appendChild(compact);
+    // [CUSTOM- /compact 只在当前会话真的提供了这个命令时显示；没有就整颗退场，
+    // 免得把 "/compact" 当普通消息发给不认它的 agent（Codex 等）。
+    var canCompact = !NS.composer || !NS.composer.hasCommand || NS.composer.hasCommand('compact');
+    if (canCompact) {
+      var compact = NS.dom.el('button', 'context-tip-action context-tip-compact', '/compact');
+      compact.type = 'button';
+      compact.setAttribute('data-context-tip', 'compact');
+      compact.title = running
+        ? 'Wait for the running turn to finish'
+        : 'Ask the agent to compact this conversation';
+      compact.disabled = running || !sessionId;
+      actions.appendChild(compact);
+    }
     var dashboard = NS.dom.el('button', 'context-tip-action context-tip-dashboard', 'Usage dashboard ↗');
     dashboard.type = 'button';
     dashboard.setAttribute('data-context-tip', 'dashboard');

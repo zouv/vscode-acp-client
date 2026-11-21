@@ -77,7 +77,7 @@ const CLIENT_SCRIPT = [
   "    slot('breakdown').innerHTML = empty ? '' : table('Top models (30d)', u.breakdown.last30d.models) + table('Top projects (30d)', u.breakdown.last30d.projects);",
   "    slot('empty').hidden = !empty;",
   "    if (empty) {",
-  "      slot('empty').innerHTML = '<div class=\"h\">No transcripts found yet</div><div class=\"dim\">' + (u.scanning ? 'Scanning\\u2026' : 'Checked ' + u.sources.map(function (s) { return esc(s.agent) + ': ' + s.files + ' file(s)'; }).join(', ') + '. Set vac.dashboard.claudeProjectsDir if your transcripts live elsewhere.') + '</div>';",
+  "      slot('empty').innerHTML = '<div class=\"h\">No transcripts found yet</div><div class=\"dim\">' + (u.scanning ? 'Scanning\\u2026' : 'Checked ' + u.sources.map(function (s) { return esc(s.agent) + ': ' + s.files + ' file(s)'; }).join(', ') + '. Set vac.dashboard.claudeProjectsDir or vac.dashboard.codexSessionsDir if your transcripts live elsewhere.') + '</div>';",
   '    }',
   "    if (u.unpriced.tokens > 0) { slot('unpriced').textContent = 'Unpriced models: ' + u.unpriced.models.join(', ') + ' (' + tok(u.unpriced.tokens) + ' tokens excluded from est. cost)'; }",
   '  }',

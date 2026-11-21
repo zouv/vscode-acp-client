@@ -30,8 +30,14 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
   <div id="tabStrip" class="tab-strip">
     <div id="tabs" class="tabs" role="tablist"></div>
     <button id="newTab" class="tab-new" title="New session" aria-label="New session">+</button>
-    <!-- [CUSTOM- 设置入口（2026-10-21）。与 + 一样是 tab 条带上的固定动作，不随 tab 滚动。 -->
-    <button id="settingsBtn" class="tab-settings" title="Settings" aria-label="Settings"></button>
+    <!-- [CUSTOM- 右侧固定动作区：默认 Agent 图标 + 设置齿轮。默认 Agent 决定无会话面板连接谁、
+         新建草稿/会话用谁；点图标可在同一个下拉里切换（写入 vac.defaultAgent）。 -->
+    <div class="tab-actions">
+      <button id="defaultAgentBtn" class="tab-settings tab-agent" type="button"
+              title="Default agent" aria-label="Default agent" aria-haspopup="listbox" hidden></button>
+      <div id="defaultAgentMenu" class="picker-menu default-agent-menu" role="listbox"></div>
+      <button id="settingsBtn" class="tab-settings" title="Settings" aria-label="Settings"></button>
+    </div>
   </div>
 
   <div id="sessionHeader" class="session-header">
@@ -229,7 +235,7 @@ export function body(surface: SurfaceKey = 'view', mermaidSrc = ''): string {
         <p id="stateHint" class="state-hint">Loading the chat panel…</p>
         <p id="stateError" class="state-error" hidden></p>
         <div id="stateActions" class="state-actions">
-          <button id="emptyConnect" class="state-connect">Connect Claude Code</button>
+          <button id="emptyConnect" class="state-connect">Connect</button>
         </div>
         <!-- 配置项 vac.autoConnectOnOpen 的勾选形态。放这里而不是设置面板：
              用户是在「面板空着、想让它自动连」的这一刻才需要它。
