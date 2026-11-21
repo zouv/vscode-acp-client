@@ -13,24 +13,24 @@
 
 ## 状态快照
 
-- **最近更新**：2026-11-19
-- **整体状态**：v1.18.0 已发布。v1.18.0 的真机验收仍待做；本轮完成 **Codex/Claude UI 对齐、两个适配器 fork 同步、`vac.defaultAgent` 默认连接设置与页签栏 Agent 图标、Codex 自定义模型注入**（未发布，见 `CHANGELOG [未发布]`）；自动验证全绿，真机验收待做。
+- **最近更新**：2026-11-21
+- **整体状态**：**v1.19.0 已发布**（GitHub Release 附 `vscode-acp-client-1.19.0.vsix`）。本轮 Codex/Claude UI 对齐、两个适配器 fork、`vac.defaultAgent` 与页签栏 Agent 图标、Codex 自定义模型均已交付；**v1.19.0 与 v1.18.0 的真机验收待做**。
 - **当前分支（必填）**：`main`。
-- **最后验证状态**（2026-11-20，默认 agent + Codex 自定义模型 + 页签栏图标后）：客户端 `typecheck` / `lint` / `check-webview-client` ✅；unit **420 / 49 文件** ✅；真实宿主 **849 passing / 0 failing** ✅；Claude fork `npm run build` ✅、`vitest` 基线失败之外无新增（干净上游 0.109.0 同环境 58 失败，本 fork 56 失败）；Codex fork `typecheck` / `build` / 新增模型测试 ✅（全量套件的 Windows 快照失败在干净上游同样存在）；两个 fork 的 `npx github:…#main` initialize 探针均 ✅；Codex `session/new` + `_meta.extraModels=vac-probe-model` 实测该 id 出现在 `configOptions` 的 model 选项与 legacy `models` 中。
+- **最后验证状态**（2026-11-21，v1.19.0）：客户端 `typecheck` / `lint` / `check-webview-client` ✅；unit **420 / 49 文件** ✅；真实宿主 **849 passing / 0 failing** ✅；`npm run vsix` 产出 `release/vscode-acp-client-1.19.0.vsix`（1.12 MB，sha256 `6ce5d72e…590198`），Release：https://github.com/zouv/vscode-acp-client/releases/tag/v1.19.0。Claude fork build ✅（上游基线测试失败之外无新增）；Codex fork typecheck/build/模型测试 ✅；两个 fork 的 `npx github:…#main` 探针 ✅。
 
 ## 当前任务（In Progress）
 
-- **v1.18.0 的真机验收**（实现与自动验证已完成并发布）：
-- **待验收（最多 5 条）**：
+- **v1.19.0 / v1.18.0 的真机验收**（实现、自动验证、打包与发布均已完成）：
+- **v1.18.0 待复验（4 条）**：
   1. 设置里新增 / 改名 / 重排自定义模型，立刻点 `+` 打开模型菜单，新模型是否出现在草稿候选里（且新建出的会话里也有）。
   2. 目录抽屉输入一个"只是结果前缀"的路径（如 `/old`），`Use this directory` 是否与结果同时出现；输入完整已列出的路径时是否不再出现。
   3. 历史列表宽度 600 默认是否合适；把 Chat 面板拖窄后是否跟着收缩；设置面板改宽度是否即时生效。
   4. 历史目录菜单字母序；选别的目录后「还原」是否出现、点击是否回到当前目录；地址栏没有目录时按钮是否保持隐藏。
 - **更早的 v1.17.0 验收细节**见 `docs/03-验收清单.md`；更早的会话记录查 git log。
 
-## Codex 体验对齐（本轮未发布，待真机验收）
+## v1.19.0 重点验收（Codex / 默认 Agent，待真机）
 
-- 默认适配器已切到 `github:zouv/codex-acp#main`（fork 仓库 `zouv/codex-acp`，当前等于上游 2.8.0）。fork 已补 `prepare: npm run build`；**该提交必须先推到 `zouv/codex-acp` 的 main，`npx github:` 才能拿到 `dist/`**。`AgentMigration` 会把旧 `@zed-industries/codex-acp` 与官方 `@agentclientprotocol/codex-acp` 迁移到 fork。
+- 默认适配器已切到 `github:zouv/codex-acp#main`（fork 仓库 `zouv/codex-acp`，等于上游 2.8.0 + `_meta.extraModels`）。fork 的 `prepare` 与模型注入提交均已推送；`AgentMigration` 会把旧 `@zed-industries/codex-acp` 与官方 `@agentclientprotocol/codex-acp` 迁移到 fork。
 
 - 实现已完成：`AgentProfile` 新增 `messageFork` / `customModels`；`SessionMeta` 下发 `messageFork` / `customModelsSupported`；空态卡由宿主下发 `agentLabel`；Dashboard 新增 `vac.dashboard.codexSessionsDir`；`/compact` 按 `availableCommands` 显隐；模型名回退到会话配置；`vac.agents` 排序改为配置顺序；新增 `vac.defaultAgent` 与页签栏右侧 Agent 图标/下拉；Codex fork 支持 `_meta.extraModels`。
 - 待验收：
@@ -68,9 +68,9 @@
 
 ## 下一步（Next Steps）
 
-1. `npm run dev:host`，先按「Codex 体验对齐」的 5 条做真机验收，再按 v1.18.0 的 4 条验收。
-2. 验收发现问题时在 `CHANGELOG.md` 的 `[未发布]` 记录修复并补测试。
-3. 验收通过后发版；继续 `ROADMAP.md` 的 P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
+1. `npm run dev:host`，按本文件「v1.19.0 重点验收」7 条 + v1.18.0 的 4 条复验。
+2. 发现问题时在 `CHANGELOG.md` 的 `[未发布]` 记录修复并补测试，按需发补丁版本。
+3. 验收通过后继续 `ROADMAP.md` 的 P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
 
 ## 如何运行 / 测试（Quick Verify）
 
