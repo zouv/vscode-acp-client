@@ -274,10 +274,17 @@ export const iconsClient = `
     return iconEl('history', 'btn-icon');
   }
 
+  /** [CUSTOM- 2026-11-22] agent kind → brand shape. Single source for the tab tip,
+      the history drawer header and the address-bar badge; caller supplies the class. */
+  function shapeForAgent(kind) {
+    return kind === 'claude' ? 'claude' : kind === 'codex' ? 'codex' : 'agent';
+  }
+
   NS.icons = {
     attach: attach,
     toolIcon: toolIcon,
     historyIcon: historyIcon,
+    shapeForAgent: shapeForAgent,
     // [CUSTOM- 大纲侧栏要按 kind 独立取图标（不再挂到记录气泡里），
     // 把私有的 iconEl 暴露出来。参数与 attach 里的一致：kind + 包装 class。
     icon: iconEl

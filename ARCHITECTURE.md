@@ -114,6 +114,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | `resources/icon.svg` | 活动栏容器图标（24×24 单色 `currentColor`，`viewsContainers.activitybar`） | 改侧边栏图标外观 |
 | `resources/icon-editor-color.svg` | 编辑区标签栏按钮的图标（全彩徽标：蓝→紫渐变底 + 白色标记，与 `icon.png` 同一几何/配色） | 改那颗按钮外观（同经 `make-icon.mjs` 生成，别手改） |
 | `resources/icon.png` | 128×128 插件徽标（`package.json` 的 `icon`）＋编辑区标签页图标（`ChatEditorPanel` 的 `iconPath`） | 改徽标外观 |
+| `resources/agent-{claude,codex,generic}.svg` | Agents 树根节点的 Agent 品牌图标（16×16、固定品牌色）。与 webview 内 `icons.ts` 的 `claude` / `codex` / `agent` 形状同源（后者用 `currentColor`），两处改形要同步 | 改 Agent 标识外观 |
 | `scripts/make-icon.mjs` | **图标的唯一几何源**：一份几何同时产出 `icon.svg` 与 `icon.png`（SDF 光栅化 + zlib 手写 PNG，零依赖）；`npm run icon`，`--preview` 另出多尺寸预览图到系统临时目录 | 改图标外观 |
 
 ---
@@ -159,12 +160,8 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 ---
 ### 3.4 生命周期、隔离与工具回收（2026-11-01）
 
-- disconnect 先取消握手/自动恢复，再移除会话并结算两桥；意外退出仅对 resume-capable agent 有界恢复，保留 tab/草稿、不重发 prompt；详见 `arch/connection-lifecycle.md`。
-- SessionUpdateHandler 的 sourceAgentId ownership 覆盖早到更新；releaseAgent 清归属且拒绝旧连接晚到数据。SessionStore、openExisting/load/resume 遇跨 agent 同 sessionId 明确拒绝，不静默覆盖（尚未改复合键）。
-- TranscriptStore 的 onRemove 在条目限长、会话 LRU、drop/dropAgent 时通知 host；host 只回收已经没有可见引用的 toolCallId 及 entry-id 索引，重复引用保留。
-- ToolInvocationStore 的单次消息 JSON 有 128K 字符预算（深度 10、2048 节点、集合 128 项、单字符串 32K）；保留身份字段与显式集合替换语义，contentBlocks 拒绝必需字段缺失的块。活跃会话仍豁免 LRU；agent terminal 的 ID 数量还不是硬上限。
-- 轮次结束（`finalizeTurn`）与 `session-load-end` 都会 `ToolInvocationStore.finalizeOpen` 给没有终态的通告盖上 `endedAt`：被取消/中断的 Task 区间不再一直开到 `now`，因而不会把之后所有工具调用吞进它的嵌套窗口。
-- `session/load` 回放期间（`SessionManager.isLoading`）记录的 `append/appendText/revise/toolUpdate/markdownRendered` **不下发** webview：加载遮罩已覆盖内容，逐条推送只会灌满 webview 的 FIFO，把用户在加载中切换 tab 的 `focus` 回包压到加载结束之后。回放仍完整落进宿主 store；`session-load-end` 只在**该会话仍是焦点**时补一份 `focus` 快照，绝不把焦点抢回到已切走的会话。
+- 断开/意外退出/自动恢复的有界策略、跨连接归属、load 回放期间的推送抑制：详见 `arch/connection-lifecycle.md`「隔离与工具回收」。
+- 一句话：**每个权限/表单请求恰好结算一次；会话移除时回收没有可见引用的工具与记录；回放期间不逐条推送 webview**。
 
 ## 4. 数据流 / 接口契约
 
@@ -175,6 +172,7 @@ ESLint flat config（`--max-warnings 0`）；**vitest** 跑纯逻辑（`src/**/*
 | 宿主 ↔ Chat 快捷键 | `UiPrefs.shortcuts` → `uiPrefs`；设置面板 `setSetting(panel.shortcut.<action>)`；懒恢复 `trackRestore` → `restoreFinished` | 宿主校验、webview 仅在本面消费键盘事件 | action 为 scrollTop/scrollBottom/focusInput/previousSession/nextSession/closeSession/restoreClosed；值为规范组合键或 `null`（禁用），仅宿主逐项校验写入；Main/Side 共用，恢复结果定向回复来源面 |
 | 宿主 ↔ 自定义模型排序 / Dashboard | Chat：`setModelList` → `SettingItem.modelSync`；Dashboard：`postMessage` | Chat 宿主串行 CAS；Dashboard CSP + 命令白名单 | Chat `requestId` 匹配回执、基线含生效层/目标层/数组签名；Dashboard 见 `dashboard/DashboardModel.ts`，只投 `snapshot` |
 | 会话缓存 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.sessionHistory.v1`，**改名即丢历史**；每条可带 `additionalDirectories`（可选字段，旧记录无需迁移） |
+| 草稿页配置项快照 | `<globalStorage>/draft-options.json`（`ChatPanelHost.draftSnapshot` / `rememberAgentOptions`），`globalState` key `vac.draftOptions.v1` 仅兜旧数据 | —— | 按 agent 存最后见到的 `configOptions` + `availableCommands`；**文件为准**（Memento 按窗口缓存，多窗口会读到旧副本）；内存缺条目时按需重读文件；快照变化广播 `draftOptionsChanged`，打开的草稿用 `composer.noteDraftOptionsChanged` 重问 `listDraftOptions` |
 | 跨 IDE 全局配置 | `VAC_HOME/config.json`（默认 `~/.vac`，`GlobalSettings.ts`） | —— | 白名单键（首期 `vac.customModels`）；原子写（临时文件 + rename）；读取顺序：工作区 > 用户 > 全局 > `package.json` 默认 |
 | 「Recently used」的删除 | `workspaceState`（`SessionHistoryStore`） | —— | key `vac.recentCwdDismissed.v1`（路径数组）；同一目录新建会话即自动移除 |
 | 会话恢复快照 | `globalState`（`ChatPanelHost.saveOpenSessions`） | —— | key `vac.openSessions.v1`；每条 `RecoverableSession` 可带 `app`（写入时的 IDE 标签），与当前环境相同的会在下发前剥掉，只用于标注 |

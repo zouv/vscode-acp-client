@@ -10,6 +10,7 @@ interface FakeElement {
   title: string;
   tabIndex: number;
   type: string;
+  style: Record<string, string>;
   parentNode: FakeElement | null;
   children: FakeElement[];
   attrs: Record<string, string>;
@@ -36,6 +37,7 @@ function element(tagName = 'div'): FakeElement {
     title: '',
     tabIndex: 0,
     type: '',
+    style: {},
     parentNode: null,
     children: [] as FakeElement[],
     attrs: {} as Record<string, string>,
@@ -85,7 +87,7 @@ function session(sessionId: string, extra: Record<string, unknown> = {}) {
 
 function createClient() {
   const elements: Record<string, FakeElement> = {};
-  for (const id of ['tabs', 'tabStrip', 'agentBar', 'agentSelect', 'agentMenu', 'defaultAgentBtn', 'defaultAgentMenu', 'cwdBtn', 'newTab']) {
+  for (const id of ['tabs', 'tabStrip', 'defaultAgentBtn', 'defaultAgentMenu', 'cwdBtn', 'newTab']) {
     elements[id] = element();
   }
   const document = {
@@ -819,5 +821,83 @@ describe('chat tabs: vertical wheel scrolls the strip horizontally', () => {
       expect(event.preventDefault).not.toHaveBeenCalled();
     }
     expect(scroller.scrollLeft).toBe(0);
+  });
+});
+
+describe('chat tabs: agent identity', () => {
+  /** The real icons.ts maps kind → shape; the stub records which shape was asked for. */
+  function withIcons(client: ReturnType<typeof createClient>) {
+    client.NS.icons = {
+      shapeForAgent: (kind: string) => kind === 'claude' ? 'claude' : kind === 'codex' ? 'codex' : 'agent',
+      icon: (shape: string, className?: string) => {
+        const node = element('span');
+        node.className = className || '';
+        node.setAttribute('data-shape', shape);
+        return node;
+      },
+    };
+    client.tabs.setAgentChoices({
+      agents: [
+        { name: 'Claude Code', kind: 'claude' },
+        { name: 'Codex CLI', kind: 'codex' },
+      ],
+      defaultAgent: 'Claude Code',
+    });
+    return client;
+  }
+
+  function summary(sessionId: string, agentName: string, agentKind: string) {
+    return { sessionId, agentName, agentKind, title: sessionId, cwd: 'C:/work' };
+  }
+
+  it('puts the brand glyph inside the address bar, fused with the directory', () => {
+    const { tabs, elements } = withIcons(createClient());
+    tabs.setFocus(summary('s1', 'Codex CLI', 'codex'));
+
+    const badge = elements.cwdBtn.children.find(child => child.className === 'session-agent');
+    expect(badge).toBeDefined();
+    expect(badge!.children[0].getAttribute('data-shape')).toBe('codex');
+    const text = elements.cwdBtn.children.find(child => child.className === 'session-title-text');
+    expect(text!.textContent).toBe('C:/work');
+    expect(elements.cwdBtn.getAttribute('aria-label')).toContain('Codex CLI');
+    expect(elements.cwdBtn.title).toContain('Agent: Codex CLI');
+  });
+
+  it('a draft shows its target agent in the same place', () => {
+    const { tabs, elements } = withIcons(createClient());
+    tabs.setDraftFocus({ draftId: 'd1', cwd: '/tmp/x', agentName: 'Codex CLI' });
+
+    const badge = elements.cwdBtn.children.find(child => child.className === 'session-agent');
+    expect(badge!.children[0].getAttribute('data-shape')).toBe('codex');
+  });
+
+  it('the empty state has no agent badge', () => {
+    const { tabs, elements } = withIcons(createClient());
+    tabs.setFocus(null);
+    expect(elements.cwdBtn.children.some(child => child.className === 'session-agent')).toBe(false);
+  });
+
+  it('the hover tip shows the glyph before the session id', () => {
+    const { tabs, elements, document } = withIcons(createClient());
+    tabs.setSessions([summary('s1', 'Codex CLI', 'codex')]);
+
+    const tab = tabNode(elements, 'data-session-id', 's1');
+    tab!.fire('mouseover', { target: tab });
+    const tip = document.body.children.find(child => child.className === 'tab-tip');
+    expect(tip).toBeDefined();
+    const idLine = tip!.children[1];
+    expect(idLine.children[0].getAttribute('data-shape')).toBe('codex');
+    expect(idLine.children[1].textContent).toBe('s1');
+  });
+
+  it('a draft tip carries the default agent glyph too', () => {
+    const { tabs, elements, document } = withIcons(createClient());
+    tabs.setDrafts([{ draftId: 'd1', cwd: '/tmp/x', agentName: 'Claude Code' }]);
+
+    const tab = tabNode(elements, 'data-draft-id', 'd1');
+    tab!.fire('mouseover', { target: tab });
+    const tip = document.body.children.find(child => child.className === 'tab-tip');
+    const line = tip!.children[1];
+    expect(line.children[0].getAttribute('data-shape')).toBe('claude');
   });
 });

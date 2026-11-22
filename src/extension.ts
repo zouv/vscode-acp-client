@@ -86,7 +86,9 @@ export function activate(context: vscode.ExtensionContext): void {
   permissionBridge.setSessionLookup(sessionLookup);
   elicitationBridge.setSessionLookup(sessionLookup);
 
-  const tree = new SessionTreeProvider(sessions, history, () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+  const tree = new SessionTreeProvider(
+    sessions, history, () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, context.extensionUri,
+  );
   const chat = new ChatViewProvider(
     context.extensionUri, sessions, updates, permissionBridge, context.globalState, elicitationBridge,
     context.globalStorageUri.fsPath,

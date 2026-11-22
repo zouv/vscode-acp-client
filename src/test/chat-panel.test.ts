@@ -1155,6 +1155,49 @@ suite('chat panel: draft page creates the session on first send', () => {
       'a fresh window must still be able to render the full composer');
   });
 
+  // [CUSTOM- 2026-11-21] 多窗口：A 窗口记录了快照，B 窗口的 Memento 还是激活时那份
+  // （VS Code 不会跨窗口刷新）。快照因此以 globalStorage 下的文件为准，缺条目时按需重读。
+  test('a snapshot recorded by another window is read from the file on demand', function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vac-draft-options-'));
+    try {
+      const { harness } = draftHarness();
+      harness.host.setStorageRoot(dir);
+      fs.writeFileSync(path.join(dir, 'draft-options.json'), JSON.stringify({
+        'Codex CLI': { configOptions: SNAPSHOT_OPTIONS, availableCommands: [] },
+      }));
+
+      harness.host.onMessage({ type: 'listDraftOptions', draftId: 'd4', agentName: 'Codex CLI' });
+      const reply = messagesOf(harness, 'draftOptions')[0];
+      assert.strictEqual(reply.agentName, 'Codex CLI');
+      assert.deepStrictEqual(reply.configOptions, SNAPSHOT_OPTIONS,
+        'a draft opened before this window saw any Codex session must still get the options');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a new snapshot is written to the file and announced to open drafts', function () {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vac-draft-options-'));
+    try {
+      const { harness, manager } = draftHarness();
+      harness.host.setStorageRoot(dir);
+      // Another window's entry must survive this window's write.
+      fs.writeFileSync(path.join(dir, 'draft-options.json'), JSON.stringify({
+        'Codex CLI': { configOptions: [], availableCommands: [] },
+      }));
+      seedAgentOptions(manager, 'seeded-session', SNAPSHOT_OPTIONS);
+
+      const written = JSON.parse(fs.readFileSync(path.join(dir, 'draft-options.json'), 'utf8'));
+      assert.deepStrictEqual(written['Claude Code'].configOptions, SNAPSHOT_OPTIONS);
+      assert.ok(written['Codex CLI'], 'a snapshot from another window is not overwritten');
+      assert.deepStrictEqual(
+        messagesOf(harness, 'draftOptionsChanged').map(m => m.agentName), ['Claude Code'],
+        'an already-open draft must be told to re-ask');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('opening a history session does not empty the snapshot (load writes its options late)', function () {
     const { harness, manager } = draftHarness();
     // `loadSession` registers the placeholder FIRST, emits `session-created`, and only writes

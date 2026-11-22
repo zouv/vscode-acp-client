@@ -8,9 +8,6 @@ export const tabsClient = `
 
   var tabsEl = null;
   var stripEl = null;
-  var agentBar = null;
-  var agentSelect = null;
-  var agentMenu = null;
   // [CUSTOM- 默认 Agent（vac.defaultAgent）的页签栏图标与下拉。
   var defaultAgentBtn = null;
   var defaultAgentMenu = null;
@@ -21,7 +18,7 @@ export const tabsClient = `
   // exist yet. They are client state on purpose — the host knows nothing about
   // them, so 'sessionsChanged' / 'boot' must never clear this list.
   var state = {
-    sessions: [], focusedId: null, focusedAgent: null, drafts: [], focusedDraftId: null,
+    sessions: [], focusedId: null, drafts: [], focusedDraftId: null,
     // [CUSTOM- 宿主的 vac.agents + 生效的 vac.defaultAgent；页签栏右侧的默认 Agent 图标用。
     agentChoices: [], defaultAgent: null,
   };
@@ -414,9 +411,6 @@ export const tabsClient = `
     tabsEl = NS.dom.qs('tabs');
     // [CUSTOM- 整条标签栏（含最后一个 tab 右边的空白）才是落点容器，见 installDrag。
     stripEl = NS.dom.qs('tabStrip');
-    agentBar = NS.dom.qs('agentBar');
-    agentSelect = NS.dom.qs('agentSelect');
-    agentMenu = NS.dom.qs('agentMenu');
     defaultAgentBtn = NS.dom.qs('defaultAgentBtn');
     defaultAgentMenu = NS.dom.qs('defaultAgentMenu');
     cwdBtn = NS.dom.qs('cwdBtn');
@@ -449,16 +443,6 @@ export const tabsClient = `
       if (NS.composer) { NS.composer.focusInput(); }
     });
 
-    agentSelect.addEventListener('click', function (event) {
-      event.stopPropagation();
-      if (!agentMenu) { return; }
-      var open = agentMenu.className.indexOf('open') !== -1;
-      closeAgentMenu();
-      if (!open) {
-        agentMenu.className = 'picker-menu down agent-menu open';
-        renderAgentMenu();
-      }
-    });
     if (defaultAgentBtn) {
       defaultAgentBtn.addEventListener('click', function (event) {
         event.stopPropagation();
@@ -473,7 +457,7 @@ export const tabsClient = `
       });
     }
     // 点菜单外任意处收起（菜单项自己的 click 会 stopPropagation）。
-    document.addEventListener('click', function () { closeAgentMenu(); closeDefaultAgentMenu(); });
+    document.addEventListener('click', function () { closeDefaultAgentMenu(); });
     document.addEventListener('scroll', function (event) {
       hideTip();
       // A long menu scrolls itself; that must not dismiss it. Any other scroll
@@ -1006,19 +990,24 @@ export const tabsClient = `
         tab.setAttribute('aria-label', label);
         tab.tabIndex = active || (!activeSeen && index === 0) ? 0 : -1;
         // [CUSTOM- 自绘悬停提示（2026-10-27）：标签名正常色，会话 id 灰色。
+        // [CUSTOM- 2026-11-22：会话 id 前带该会话所属 agent 的品牌图标（页签本身不再加图标，
+        // 免得把每个 tab 撑长）；草稿/待恢复的 id 行同样带上，悬停即可确认"这是谁"。
+        var tipAgentName = isDraft ? (model.draft.agentName || state.defaultAgent)
+          : (isRestore ? model.restore.agentName : (model.summary && model.summary.agentName));
+        var tipAgentKind = tipAgentName ? agentKindOf(tipAgentName) : null;
         var tabLines = isDraft
           ? [{ text: model.draft.cwd || 'Default directory' },
-            { text: '(not created yet)', dim: true }]
+            { text: '(not created yet)', dim: true, icon: tipAgentKind }]
           : (isRestore
             ? [{ text: label },
-              { text: model.id, dim: true }]
+              { text: model.id, dim: true, icon: tipAgentKind }]
               .concat(model.restore.app ? [{ text: '(' + model.restore.app + ')', dim: true }] : [])
               .concat([{ text: '(not loaded yet \\u2014 click to open)', dim: true }])
             : (side
               ? [{ text: 'From ' + (model.summary.sideChat.parentTitle || model.summary.sideChat.parentSessionId) },
-                { text: 'Side: ' + model.id, dim: true },
+                { text: 'Side: ' + model.id, dim: true, icon: tipAgentKind },
                 { text: 'Inherited: ' + model.summary.sideChat.forkedAt, dim: true }]
-              : [{ text: label }, { text: model.id, dim: true }]));
+              : [{ text: label }, { text: model.id, dim: true, icon: tipAgentKind }]));
 
         // [CUSTOM- 目录标识：dot 里写目录缩写，一个字母一个 span
         // （3 个走「上 2 下 1」、4 个走 2x2，靠 styles.ts 那套两列网格排）。
@@ -1120,7 +1109,7 @@ export const tabsClient = `
   /**
    * [CUSTOM- 自绘悬停提示（2026-10-27）。原生 title 只能整段同色，而用户要求
    * 会话 tab 的 SessionId、目录图标的 State 用灰色 —— 只能渲染成一条浮层。
-   * 'lines' 里每项是 { text, dim }；dim = 次要色。
+   * 'lines' 里每项是 { text, dim, icon }；dim = 次要色，icon = agent kind（品牌图标）。
    */
   function hideTip() {
     if (tipEl) { tipEl.hidden = true; }
@@ -1130,8 +1119,13 @@ export const tabsClient = `
     if (!tipEl || !anchor || !lines || lines.length === 0) { return; }
     NS.dom.clear(tipEl);
     for (var i = 0; i < lines.length; i++) {
-      tipEl.appendChild(NS.dom.el(
-        'div', 'tab-tip-line' + (lines[i].dim ? ' dim' : ''), lines[i].text || ''));
+      var line = NS.dom.el('div', 'tab-tip-line' + (lines[i].dim ? ' dim' : ''));
+      if (lines[i].icon) {
+        var glyph = agentGlyph(lines[i].icon, 'tab-tip-icon');
+        if (glyph) { line.appendChild(glyph); }
+      }
+      line.appendChild(NS.dom.el('span', 'tab-tip-text', lines[i].text || ''));
+      tipEl.appendChild(line);
     }
     tipEl.hidden = false;
     var rect = anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: 0, bottom: 0, width: 0 };
@@ -1142,35 +1136,16 @@ export const tabsClient = `
     tipEl.style.top = ((rect.bottom || 0) + 6) + 'px';
   }
 
-  /** The agent bar is only worth showing when more than one agent is live. */
-  function renderAgentBar() {
-    var agents = [];
-    var seen = {};
-    for (var i = 0; i < state.sessions.length; i++) {
-      var name = state.sessions[i].agentName;
-      if (!seen[name]) { seen[name] = true; agents.push(name); }
-    }
-    if (agents.length <= 1) {
-      agentBar.hidden = true;
-      closeAgentMenu();
-      return;
-    }
-    agentBar.hidden = false;
-    // [CUSTOM- 按钮本身也是「图标 + 当前 agent 名」（2026-10-27）。
-    NS.dom.clear(agentSelect);
-    var glyph = NS.icons && NS.icons.icon ? NS.icons.icon('agent', 'picker-icon') : null;
-    if (glyph) { agentSelect.appendChild(glyph); }
-    agentSelect.appendChild(NS.dom.el('span', 'picker-label', state.focusedAgent || agents[0]));
-    if (agentMenu && agentMenu.className.indexOf('open') !== -1) { renderAgentMenu(); }
-  }
-
-  function closeAgentMenu() {
-    if (agentMenu) { agentMenu.className = 'picker-menu down agent-menu'; }
-  }
-
   /** Icon kind for an agent: the profile kind when known, else the generic glyph. */
   function agentIconKind(kind) {
     return kind === 'claude' ? 'claude' : kind === 'codex' ? 'codex' : 'agent';
+  }
+
+  /** [CUSTOM- 2026-11-22] Brand glyph for an agent kind (shape mapping lives in icons.ts). */
+  function agentGlyph(kind, className) {
+    if (!NS.icons || !NS.icons.icon) { return null; }
+    var shape = NS.icons.shapeForAgent ? NS.icons.shapeForAgent(kind) : agentIconKind(kind);
+    return NS.icons.icon(shape, className);
   }
 
   function agentKindOf(name) {
@@ -1282,41 +1257,6 @@ export const tabsClient = `
     }
   }
 
-  function renderAgentMenu() {
-    if (!agentMenu) { return; }
-    NS.dom.clear(agentMenu);
-    agentMenu.appendChild(NS.dom.el('div', 'picker-title', 'Agents'));
-    var agents = [];
-    var seen = {};
-    for (var i = 0; i < state.sessions.length; i++) {
-      var name = state.sessions[i].agentName;
-      if (!seen[name]) { seen[name] = true; agents.push(name); }
-    }
-    for (var j = 0; j < agents.length; j++) {
-      (function (name) {
-        var active = name === state.focusedAgent;
-        var item = NS.dom.el('button', 'picker-item' + (active ? ' active' : ''), '');
-        item.type = 'button';
-        item.setAttribute('role', 'option');
-        item.setAttribute('aria-selected', active ? 'true' : 'false');
-        var body = NS.dom.el('span', 'picker-item-body');
-        body.appendChild(NS.dom.el('span', 'picker-item-label', name));
-        body.appendChild(NS.dom.el('span', 'picker-item-desc', agentDescription(name)));
-        item.appendChild(body);
-        if (active) {
-          var check = NS.icons && NS.icons.icon ? NS.icons.icon('check', 'picker-check') : null;
-          if (check) { item.appendChild(check); }
-        }
-        item.addEventListener('click', function (event) {
-          event.stopPropagation();
-          closeAgentMenu();
-          NS.bridge.post({ type: 'focusAgent', agentName: name });
-        });
-        agentMenu.appendChild(item);
-      })(agents[j]);
-    }
-  }
-
   /**
    * [CUSTOM- 没有聚焦会话/草稿时地址栏显示的那一份内容：宿主解析出的默认目录，
    * 宿主值到达前先给一句文案（与 058 草稿页原本的兜底同一句）。单点函数是为了让
@@ -1324,6 +1264,28 @@ export const tabsClient = `
    */
   function defaultCwdLabel() {
     return defaultCwd || 'Default directory';
+  }
+
+  /**
+   * [CUSTOM- 2026-11-22] 地址栏（#cwdBtn）的内容：**Agent 品牌图标 + 目录文本**渲染在同一个
+   * 按钮里，图标紧贴路径、不额外占宽度 —— 读起来是"这个 agent 在这个目录"，而不是两个控件。
+   * 图标 aria-hidden：可读名称走按钮自己的 aria-label/title（含 agent 名）。
+   */
+  function renderCwd(text, title, agentName) {
+    NS.dom.clear(cwdBtn);
+    var kind = agentName ? agentKindOf(agentName) : null;
+    var glyph = kind ? agentGlyph(kind, 'session-agent-icon') : null;
+    if (glyph) {
+      var badge = NS.dom.el('span', 'session-agent');
+      badge.setAttribute('aria-hidden', 'true');
+      badge.appendChild(glyph);
+      cwdBtn.appendChild(badge);
+      if (agentName) { title = (title ? title + '\\n' : '') + 'Agent: ' + agentName; }
+    }
+    cwdBtn.appendChild(NS.dom.el('span', 'session-title-text', text));
+    cwdBtn.title = title || '';
+    // [CUSTOM- 含图标时给按钮一个不会把"图标"读成路径字符的可读名。
+    cwdBtn.setAttribute('aria-label', agentName ? agentName + ': ' + text : text);
   }
 
   function renderHeader(summary) {
@@ -1335,16 +1297,14 @@ export const tabsClient = `
       // —— 改用 disabled 解决：按钮在事件层面点不动，抽屉根本打不开。
       cwdBtn.hidden = false;
       cwdBtn.disabled = true;
-      cwdBtn.textContent = defaultCwdLabel();
-      cwdBtn.title = defaultCwd
+      renderCwd(defaultCwdLabel(), defaultCwd
         ? defaultCwd + '\\nThe next session will be created here'
-        : 'Working directory';
+        : 'Working directory', null);
       return;
     }
     cwdBtn.hidden = false;
     cwdBtn.disabled = false;
-    cwdBtn.textContent = summary.cwd || '';
-    cwdBtn.title = summary.cwd || '';
+    renderCwd(summary.cwd || '', summary.cwd || '', summary.agentName);
   }
 
   /**
@@ -1377,8 +1337,21 @@ export const tabsClient = `
     cwdBtn.disabled = false;
     // [CUSTOM- 还没选过目录时显示**真正的默认目录**（宿主值），与空态那一格
     // 同一份文案 —— 草稿的抽屉收到 choices 后也会把 defaultCwd 采用成自己的 cwd（058）。
-    cwdBtn.textContent = draft && draft.cwd ? draft.cwd : defaultCwdLabel();
-    cwdBtn.title = 'This session will be created in this directory\\n(not created yet)';
+    // [CUSTOM- 2026-11-22] 草稿还没有会话，用它的目标 agent（默认 agent）显示图标。
+    var draftAgent = draft && draft.agentName ? draft.agentName : state.defaultAgent;
+    renderCwd(draft && draft.cwd ? draft.cwd : defaultCwdLabel(),
+      'This session will be created in this directory\\n(not created yet)', draftAgent);
+  }
+
+  /** [CUSTOM- 2026-11-22] Re-render the focused draft header (its agent just changed). */
+  function refreshFocusedDraft() {
+    if (!state.focusedDraftId) { return; }
+    for (var i = 0; i < state.drafts.length; i++) {
+      if (state.drafts[i].draftId === state.focusedDraftId) {
+        renderDraftHeader(state.drafts[i]);
+        return;
+      }
+    }
   }
 
   function setSessions(sessions) {
@@ -1400,7 +1373,6 @@ export const tabsClient = `
     restoring = kept;
     if (keepTabFocus) { tabFocusExpected = true; }
     renderTabs();
-    renderAgentBar();
     if (keepTabFocus) { restoreFocusIfExpected(); }
   }
 
@@ -1438,7 +1410,6 @@ export const tabsClient = `
     if (summary) { releaseRestore(summary.sessionId); }
     if (keepTabFocus || (refocusAfterRestore && focusAllowedAfterRestore())) { tabFocusExpected = true; }
     state.focusedId = summary ? summary.sessionId : null;
-    state.focusedAgent = summary ? summary.agentName : null;
     if (summary) { state.focusedDraftId = null; }
     renderTabs();
     renderHeader(summary);
@@ -1524,6 +1495,7 @@ export const tabsClient = `
     setSessions: setSessions,
     // [CUSTOM- 宿主的 vac.agents + 生效的 vac.defaultAgent；页签栏右侧的默认 Agent 图标/下拉。
     setAgentChoices: setAgentChoices,
+    refreshFocusedDraft: refreshFocusedDraft,
     defaultAgentName: function () { return state.defaultAgent; },
     setFocus: setFocus,
     setDrafts: setDrafts,

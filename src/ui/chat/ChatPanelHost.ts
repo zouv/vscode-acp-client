@@ -11,8 +11,8 @@
 // · 两个 surface（侧边栏视图 / 编辑区面板）共享本实例：`post()` 广播、`boot` 只回给发起者
 // （，见 ChatSurface.ts）。
 import * as vscode from 'vscode';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import type { ContentBlock, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
 
@@ -143,6 +143,9 @@ const STRUCTURAL_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   // [CUSTOM- 自定义模型是整表状态（不是流式增量），且输入卡菜单要立刻换描述；
   // 排进合帧队列只会让"保存后看起来没生效"多一个 16ms 的窗口。
   'customModels',
+  // [CUSTOM- 2026-11-21] 草稿页快照变了：这是一条"重新问一次"的整表信号，
+  // 与 customModels 同类，合帧只会让空输入卡多停一帧。
+  'draftOptionsChanged',
 ]);
 
 /** [CUSTOM- globalState key for main-scoped and shared UI prefs. */
@@ -262,7 +265,12 @@ function withNormalizedShortcuts(prefs: UiPrefs): UiPrefs {
 // 草稿页的配置项/命令快照，按 agent 存。
 // 为什么要持久化：VS Code 重载后宿主内存里的活动会话**全没了**，而"全新窗口点 + 时输入卡
 // 还是只有输入框"正是用户报的那个现象——只存内存等于默认路径上不生效。
+//
+// [CUSTOM- 2026-11-21] globalState 还会**按窗口缓存**：A 窗口记录了 Codex 的快照，B 窗口
+// 的 Memento 仍是激活时读到的那一份，于是 B 里新建草稿仍然是空输入卡（多窗口常见）。
+// 因此以 globalStorage 下的文件为准（跨窗口实时可读），globalState 只作为旧数据兜底。
 const DRAFT_OPTIONS_KEY = 'vac.draftOptions.v1';
+const DRAFT_OPTIONS_FILE = 'draft-options.json';
 
 /** One agent's last-seen composer options (see ChatPanelHost.rememberAgentOptions). */
 interface AgentOptionSnapshot {
@@ -604,6 +612,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     // [CUSTOM- 上一次退出时开着的会话（可能是上一次进程留下的 —— 本次还没人写它）。
     this.openSessions = this.globalState?.get<OpenSessionsSnapshot>(OPEN_SESSIONS_KEY) ?? null;
     // [CUSTOM- 草稿页的配置项/命令快照（重载窗口后仍可用）。
+    // [CUSTOM- 2026-11-21] 文件（storageRoot 就绪后由 setStorageRoot 读）优先，
+    // globalState 只兜旧数据 —— 多窗口下 Memento 是各窗口激活时的旧副本。
     const storedOptions = this.globalState?.get<DraftOptionsStore>(DRAFT_OPTIONS_KEY) ?? {};
     for (const agentName of Object.keys(storedOptions)) {
       const snapshot = storedOptions[agentName];
@@ -1130,14 +1140,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
         void this.sessionManager.newConversation(agentName).catch(e => this.reportError(null, e));
         return;
       }
-      case 'focusAgent': {
-        const agentName = (msg as { agentName?: string }).agentName;
-        if (!agentName) { return; }
-        const ids = this.sessionManager.getSessionIdsForAgent(agentName);
-        const next = ids[ids.length - 1];
-        if (next) { this.sessionManager.focusSession(next); }
-        return;
-      }
+
 
       // 面板内的「连接」与「历史会话」。
       // 都按设计不带 sessionId（要用它们时往往根本没有聚焦会话），所以在守卫之前处理。
@@ -4090,6 +4093,8 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     this.post({
       type: 'history',
       agentName: agent,
+      // [CUSTOM- 2026-11-22] 抽屉标题行只画品牌图标（名称在 tooltip 里）。
+      agentKind: getAgentKind(agent),
       source,
       sessions: rows,
       // [CUSTOM- `currentCwd` is the CLIENT's address-bar directory when it
@@ -4311,9 +4316,15 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
     if (previous && JSON.stringify(previous) === signature) { return; }
     this.draftOptions.set(session.agentName, next);
     // globalState 只在真的变了才写：这个函数会跟着会话的每一次配置项变化跑。
-    const store: DraftOptionsStore = {};
+    // [CUSTOM- 2026-11-21] 先并入磁盘上的其他窗口记录再写：只写本窗口内存会把
+    // 另一个窗口刚记下的 agent 快照整个抹掉。
+    const store: DraftOptionsStore = { ...(this.readDraftOptionsFile() ?? {}) };
     for (const [agentName, snapshot] of this.draftOptions) { store[agentName] = snapshot; }
+    this.writeDraftOptionsFile(store);
     void this.globalState?.update(DRAFT_OPTIONS_KEY, store);
+    // [CUSTOM- 2026-11-21] 已经打开的草稿页要跟着刷新：它在建快照之前就打开了，
+    // 客户端不会自己重问 —— 不通知的话输入卡会一直停在"只有 + 和 /"。
+    this.post({ type: 'draftOptionsChanged', agentName: session.agentName });
     log(`${LOG_PREFIX}: draft options for ${session.agentName}: ${next.configOptions.length} option(s), ${next.availableCommands.length} command(s)`);
   }
 
@@ -4492,8 +4503,12 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    */
   private handleListDraftOptions(agentName: string | undefined, draftId: string, to: SurfaceKey): void {
     const agent = this.panelAgent(agentName);
-    const snapshot = agent ? this.draftOptions.get(agent) : undefined;
+    const snapshot = agent ? this.draftSnapshot(agent) : undefined;
     const profile = profileFor(agent ? getAgentKind(agent) : 'generic');
+    // [CUSTOM- 2026-11-21] 请求侧也留一行：多窗口/首次使用时要能直接看出是
+    // "快照没读到" 还是 "客户端没渲染"（真机日志里排除这两类）。
+    log(`${LOG_PREFIX}: listDraftOptions for ${agent ?? '(no agent)'}: `
+      + `${snapshot?.configOptions.length ?? 0} option(s), ${snapshot?.availableCommands.length ?? 0} command(s)`);
     this.post({
       type: 'draftOptions',
       draftId,
@@ -5259,15 +5274,77 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
 
   // [CUSTOM- 扩展的 globalStorage 根目录：设置面板里的「打开/清除 agent 运行时缓存」
   // 需要它（缓存位于 `<root>/agents/<agent>`，见 core/AgentInstall.ts）。
+  // 草稿页快照也落在这里（`draft-options.json`）：文件不按窗口缓存，多窗口即时可见。
   private storageRoot?: string;
 
   /** [CUSTOM- 由 ChatViewProvider 在构造后注入（避免把 9 个位置参数的顺序耦合进测试桩）。 */
   setStorageRoot(root: string | undefined): void {
     this.storageRoot = root;
+    this.mergeDraftOptions(this.readDraftOptionsFile());
   }
 
   private agentCacheDir(): string | undefined {
     return this.storageRoot ? join(this.storageRoot, 'agents') : undefined;
+  }
+
+  private draftOptionsFile(): string | undefined {
+    return this.storageRoot ? join(this.storageRoot, DRAFT_OPTIONS_FILE) : undefined;
+  }
+
+  private readDraftOptionsFile(): DraftOptionsStore | null {
+    const file = this.draftOptionsFile();
+    if (!file) { return null; }
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as DraftOptionsStore;
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeDraftOptionsFile(store: DraftOptionsStore): void {
+    const file = this.draftOptionsFile();
+    if (!file) { return; }
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      const temp = `${file}.${process.pid}.tmp`;
+      writeFileSync(temp, JSON.stringify(store), 'utf8');
+      renameSync(temp, file);
+    } catch (e) {
+      log(`${LOG_PREFIX}: could not persist draft options: ${String(e)}`);
+    }
+  }
+
+  /** [CUSTOM- 只补缺：文件里已有的条目覆盖内存（文件是跨窗口的最新副本）。 */
+  private mergeDraftOptions(store: DraftOptionsStore | null): void {
+    if (!store) { return; }
+    for (const agentName of Object.keys(store)) {
+      const snapshot = store[agentName];
+      if (!snapshot) { continue; }
+      this.draftOptions.set(agentName, {
+        configOptions: snapshot.configOptions ?? [],
+        availableCommands: snapshot.availableCommands ?? [],
+      });
+    }
+  }
+
+  /**
+   * [CUSTOM- 该 agent 的快照：内存优先，空/缺时**按需重读文件**。
+   * 理由见 DRAFT_OPTIONS_KEY 的注释（多窗口时 Memento 不会更新，草稿页会退回空输入卡）。
+   */
+  private draftSnapshot(agent: string): AgentOptionSnapshot | undefined {
+    const cached = this.draftOptions.get(agent);
+    if (cached && (cached.configOptions.length > 0 || cached.availableCommands.length > 0)) {
+      return cached;
+    }
+    const stored = this.readDraftOptionsFile()?.[agent];
+    if (!stored) { return cached; }
+    const next: AgentOptionSnapshot = {
+      configOptions: stored.configOptions ?? [],
+      availableCommands: stored.availableCommands ?? [],
+    };
+    this.draftOptions.set(agent, next);
+    return next;
   }
 
   /**
@@ -5321,7 +5398,7 @@ export class ChatPanelHost implements IChatPanel, PermissionPresenter, Elicitati
    * 自定义模型（`vac.customModels`）不在 agent 的候选里，但用户显式配置过，所以一并列出。
    */
   private agentChoicesFor(agent: string, category: string): SettingOption[] | null {
-    const snapshot = this.draftOptions.get(agent);
+    const snapshot = this.draftSnapshot(agent);
     const option = (snapshot?.configOptions ?? []).find(
       o => (o as { category?: string }).category === category,
     ) as { options?: unknown } | undefined;

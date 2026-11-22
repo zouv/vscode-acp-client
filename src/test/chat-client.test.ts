@@ -1156,9 +1156,6 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     const els: Record<string, StubNode> = {
       tabStrip: new StubNode('div'),
       tabs: new StubNode('div'),
-      agentBar: new StubNode('div'),
-      agentSelect: new StubNode('button'),
-      agentMenu: new StubNode('div'),
       cwdBtn: new StubNode('button'),
       newTab: new StubNode('button'),
       popover: pop.root,
@@ -3137,6 +3134,17 @@ suite('chat client logic: history picker filter (stub DOM)', () => {
     return menu.querySelectorAll('[data-filter-key]');
   }
 
+  // [CUSTOM- 2026-11-22] 历史抽屉标题行只显示 Agent 品牌图标，名称放 tooltip
+  // （用户反馈：图标 + 名称叠在计数行太乱，但图标本身有用）。
+  test('the history header shows the agent glyph without its name', () => {
+    const { tree } = openedPicker({ agentName: 'Codex CLI', agentKind: 'codex' });
+    const icon = tree.drawer.querySelector('.outline-agent');
+    assert.ok(icon, 'the header carries an agent glyph');
+    assert.ok(icon!.querySelector('svg'), 'the glyph comes from the shared icon set');
+    assert.strictEqual(icon!.title, 'Agent: Codex CLI');
+    assert.strictEqual(icon!.childNodes.length, 1, 'glyph only — the name stays in the tooltip');
+  });
+
   test('picking a directory keeps the list open and filters it', () => {
     const { docListeners, tree } = openedPicker();
     const { drawer, chip, menu, list } = tree;
@@ -4255,6 +4263,27 @@ suite('chat client logic: draft composer options (stub DOM)', () => {
     posted.length = 0;
     NS.composer.setDraft(draft('d1'));
     assert.deepStrictEqual(posted, [{ type: 'listDraftOptions', draftId: 'd1' }]);
+  });
+
+  // [CUSTOM- 2026-11-21] 草稿先打开、该 agent 的第一条会话之后才建出来时，
+  // 宿主广播 draftOptionsChanged —— 打开的草稿要重新问一次，否则一直停在空输入卡。
+  test('a snapshot update re-asks for the open draft (only for its own agent)', () => {
+    const { NS, posted } = draftComposer();
+    NS.composer.setDraft({ draftId: 'd1', cwd: '/tmp/x', agentName: 'Codex CLI' });
+    posted.length = 0;
+
+    NS.composer.noteDraftOptionsChanged('Claude Code');
+    assert.deepStrictEqual(posted, [], 'another agent\'s snapshot is none of this draft\'s business');
+
+    NS.composer.noteDraftOptionsChanged('Codex CLI');
+    assert.deepStrictEqual(posted, [
+      { type: 'listDraftOptions', draftId: 'd1', agentName: 'Codex CLI' },
+    ]);
+
+    NS.composer.setFocus({ sessionId: 's1', agentName: 'Codex CLI' });
+    posted.length = 0;
+    NS.composer.noteDraftOptionsChanged('Codex CLI');
+    assert.deepStrictEqual(posted, [], 'no draft on screen — nothing to refresh');
   });
 
   test('an answer for a different draft is ignored (the reply is asynchronous)', () => {
@@ -9144,7 +9173,7 @@ suite('chat client logic: 会话恢复（stub DOM, ）', () => {
   test('待恢复的 tab：按 tabOrder 排原位、点开才发 openHistorySession、关掉就忘掉它', () => {
     const els: Record<string, StubNode> = {
       tabs: new StubNode('div'), tabStrip: new StubNode('div'), newTab: new StubNode('button'),
-      agentBar: new StubNode('div'), agentSelect: new StubNode('select'), cwdBtn: new StubNode('button'),
+      cwdBtn: new StubNode('button'),
     };
     els.tabStrip.appendChild(els.tabs);
     const { NS, doc } = loadClient(els);
@@ -9184,7 +9213,7 @@ suite('chat client logic: 会话恢复（stub DOM, ）', () => {
   test('会话活了 ⇒ 真 tab 顶替那条本地 tab', () => {
     const els: Record<string, StubNode> = {
       tabs: new StubNode('div'), tabStrip: new StubNode('div'), newTab: new StubNode('button'),
-      agentBar: new StubNode('div'), agentSelect: new StubNode('select'), cwdBtn: new StubNode('button'),
+      cwdBtn: new StubNode('button'),
     };
     els.tabStrip.appendChild(els.tabs);
     const { NS } = loadClient(els);

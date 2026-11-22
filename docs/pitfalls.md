@@ -425,7 +425,7 @@
   | 元素 | 冲突的规则 | 症状 |
   |---|---|---|
   | `#loadOverlay` | `.load-overlay { display: flex }` | 常驻可见 + 吃掉全部点击 |
-  | `#agentBar` | `.agent-bar { display: flex }` | 只有一个 agent 时也显示一条空条 |
+  | `#agentBar` | `.agent-bar { display: flex }` | 只有一个 agent 时也显示一条空条（该元素已于 2026-11-21 删除，样本保留） |
   | `#attachments` | `.attachments { display: flex }` | 没有附件时也占一段空隙 |
 
 - **解法**：加一条全局规则把 `[hidden]` 的语义抢回来（`!important` 保证压过后面的类规则）：

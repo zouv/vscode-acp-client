@@ -432,6 +432,20 @@ export const sessionMenuClient = `
     if (!headEl || !listEl) { return; }
     NS.dom.clear(headEl);
     NS.dom.clear(listEl);
+    // [CUSTOM- 2026-11-22] 标题行只放 Agent 品牌图标（用户要求：不要名称，图标留着）。
+    // 形状与页签 tip / 地址栏同源；名称进 tooltip / aria-label，不占行内空间。
+    if (message && message.agentName) {
+      var agentIcon = NS.dom.el('span', 'outline-agent');
+      var shape = NS.icons && NS.icons.shapeForAgent ? NS.icons.shapeForAgent(message.agentKind) : 'agent';
+      var glyph = NS.icons && NS.icons.icon ? NS.icons.icon(shape, 'outline-agent-icon') : null;
+      if (glyph) {
+        agentIcon.appendChild(glyph);
+        agentIcon.title = 'Agent: ' + message.agentName;
+        agentIcon.setAttribute('role', 'img');
+        agentIcon.setAttribute('aria-label', 'Agent: ' + message.agentName);
+        headEl.appendChild(agentIcon);
+      }
+    }
     var all = (message && message.sessions) || [];
     var items = visibleRows(all);
     var rendered = limitRows(items);

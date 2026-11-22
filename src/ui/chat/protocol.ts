@@ -412,7 +412,7 @@ export type ExtToChat =
   // **只含列表里真实出现过的目录 + 当前会话的目录**）。客户端据此渲染 header 的 chip，
   // 并在本地按 `dirKey` 过滤——列表本来就在客户端，换目录不该再问一次 agent。
   // 其中 `current: true` 的那条就是"开启过滤时的默认目录"，所以不需要另开一个字段。
-  | { type: 'history'; agentName: string; sessions: HistorySessionSummary[]; source: 'agent' | 'local' | 'merged'; directories?: HistoryDirOption[]; error?: string }
+  | { type: 'history'; agentName: string; agentKind?: string; sessions: HistorySessionSummary[]; source: 'agent' | 'local' | 'merged'; directories?: HistoryDirOption[]; error?: string }
   // 磁盘补充的增量应答（回复 `supplementHistory`）。
   // 客户端按 sessionId 合并进已有列表，不触发 setHistory 的全量替换（那会把 filterKey
   // 重置回 current 目录）。只回发起过滤的那个目录的磁盘会话。
@@ -442,6 +442,9 @@ export type ExtToChat =
   // 定向发给发起请求的那个面（同 058 那四条——这是"某个文档正在编辑的草稿"）；
   // `draftId` 同样不能省：应答回来时用户可能已经换了草稿，客户端据它丢弃过期结果。
   | { type: 'draftOptions'; draftId: string; agentName: string | null; configOptions: SessionConfigOption[]; availableCommands: SessionMeta['availableCommands']; customModels: CustomModel[]; customModelsSupported?: boolean }
+  // [CUSTOM- 2026-11-21] 宿主的快照变了（该 agent 刚建出第一条会话 / 配置项更新）：
+  // 已经打开的草稿页据此重新请求 'listDraftOptions'，否则它会一直停在空输入卡。
+  | { type: 'draftOptionsChanged'; agentName: string }
   | { type: 'sessionClosed'; sessionId: string; reason: CloseReason }
   | { type: 'append'; sessionId: string; entries: WireEntry[] }
   | { type: 'revise'; sessionId: string; entryId: string; patch: EntryPatch }
@@ -624,7 +627,6 @@ export type ChatToExt =
   // [CUSTOM- 会话 tab 右键：复制会话（`session/fork` 不带 messageId = 在末尾分叉），
   // 新会话继承源会话的上下文与消息记录，然后自动聚焦。
   | { type: 'duplicateSession'; sessionId: string }
-  | { type: 'focusAgent'; agentName: string }
   // [CUSTOM- 带上行区间 = 只摘那一段（同一个文件可以引用多段）；不带 = 整个路径全摘。
   | { type: 'detachFile'; sessionId: string; path: string; lineStart?: number; lineEnd?: number }
   // [CUSTOM- Files dropped onto / pasted into the panel. Session

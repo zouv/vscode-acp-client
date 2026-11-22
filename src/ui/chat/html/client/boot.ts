@@ -170,6 +170,7 @@ export const bootClient = `
     applyAgentLabel(defaultAgent || undefined);
     // Unsent drafts are new sessions too: they follow the configured default.
     for (var i = 0; i < drafts.length; i++) { drafts[i].agentName = defaultAgent; }
+    if (focusedDraftId && NS.tabs && NS.tabs.refreshFocusedDraft) { NS.tabs.refreshFocusedDraft(); }
     if (focusedDraftId && NS.composer && NS.composer.setDraftAgent) {
       NS.composer.setDraftAgent(defaultAgent);
     }
@@ -958,6 +959,12 @@ export const bootClient = `
       // draftId 自己判断（应答是异步的，用户可能已经换了草稿）。
       case 'draftOptions':
         NS.composer.setDraftOptions(message);
+        break;
+
+      // [CUSTOM- 2026-11-21] 宿主的快照更新了：让当前草稿重新请求一次。
+      // 覆盖"草稿先打开、第一条会话后才产生快照"的时序（此前它会一直停在空输入卡）。
+      case 'draftOptionsChanged':
+        if (NS.composer.noteDraftOptionsChanged) { NS.composer.noteDraftOptionsChanged(message.agentName); }
         break;
 
       case 'draftFailed':

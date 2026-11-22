@@ -185,8 +185,9 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 斜杠命令都是 agent 在 `session/new` 时（或之后的通知里）下发的，所以草稿页本来只有输入框。
 现在由宿主按 agent 留一份"上一次会话的快照"来填（`listDraftOptions` → `draftOptions`），
 用户选的值随 `createDraftAndSend` 一起走、建出会话后逐项校验再应用 —— 见
-[`chat-panel.md`](./chat-panel.md) §5.32。**仍然成立的部分**：全新环境（本进程没开过该 agent
-的会话）没有快照可用，那时草稿页依旧只有输入框。
+[`chat-panel.md`](./chat-panel.md) §5.32。**仍然成立的部分**：从没在任何一个窗口里跑过该 agent
+（也没有历史快照文件）时，草稿页依旧只有输入框；一旦某处建出第一条会话，快照落文件并广播
+`draftOptionsChanged`，已打开的草稿会自动补全。
 
 ### 5.24 历史选择器的目录过滤（CUSTOM-20260926-079）
 

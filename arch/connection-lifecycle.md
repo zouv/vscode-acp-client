@@ -42,6 +42,15 @@
 - SideChatPanel 只在 fork 成功后登记成员并创建/复用单个多标签面板；每次 open 都产生独立 Side，创建/attach/activate 失败只回滚本次新 Side，fork 在途时 dispose 或源已关闭会删除晚到 Side。活动 tab 关闭优先选右邻、否则左邻，最后一个 tab 才销毁面板；源关闭批量清理其子 Side。关闭先移除成员防重入，再 `deleteSession`：待决权限/表单先结算，有在途轮次先 `cancelTurn`，然后 close（能力允许）、best-effort delete 与本地 forget。
 - 不支持 fork 时不创建空 Side；不支持 delete 或厂商删除失败不阻断本地清理，但不能据此承诺厂商磁盘转录或 `session/list` 无残留。
 
+## 隔离与工具回收（ARCHITECTURE §3.4 的细节）
+
+- disconnect 先取消握手/自动恢复，再移除会话并结算两桥；意外退出仅对 resume-capable agent 有界恢复，保留 tab/草稿、不重发 prompt。
+- SessionUpdateHandler 的 sourceAgentId ownership 覆盖早到更新；releaseAgent 清归属且拒绝旧连接晚到数据。SessionStore、openExisting/load/resume 遇跨 agent 同 sessionId 明确拒绝，不静默覆盖（尚未改复合键）。
+- TranscriptStore 的 onRemove 在条目限长、会话 LRU、drop/dropAgent 时通知 host；host 只回收已经没有可见引用的 toolCallId 及 entry-id 索引，重复引用保留。
+- ToolInvocationStore 的单次消息 JSON 有 128K 字符预算（深度 10、2048 节点、集合 128 项、单字符串 32K）；保留身份字段与显式集合替换语义，contentBlocks 拒绝必需字段缺失的块。活跃会话仍豁免 LRU；agent terminal 的 ID 数量还不是硬上限。
+- 轮次结束（`finalizeTurn`）与 `session-load-end` 都会 `ToolInvocationStore.finalizeOpen` 给没有终态的通告盖上 `endedAt`：被取消/中断的 Task 区间不再一直开到 `now`，因而不会把之后所有工具调用吞进它的嵌套窗口。
+- `session/load` 回放期间（`SessionManager.isLoading`）记录的 `append/appendText/revise/toolUpdate/markdownRendered` **不下发** webview：加载遮罩已覆盖内容，逐条推送只会灌满 webview 的 FIFO，把用户在加载中切换 tab 的 `focus` 回包压到加载结束之后。回放仍完整落进宿主 store；`session-load-end` 只在**该会话仍是焦点**时补一份 `focus` 快照，绝不把焦点抢回到已切走的会话。
+
 ## 边界
 
 真实 Claude/Codex 认证、session/resume 的厂商持久化与真实账号 Webview 交互验收另做；替身回归不能代替这些验收。记录区真实 Chromium 已验证缓存保留选区与流式预览不读全文，预览不等于账号验收。

@@ -1825,6 +1825,19 @@ export const composerClient = `
   }
 
   /**
+   * [CUSTOM- The host's snapshot for this agent changed (its first session was just created,
+   * or the agent updated its options). An open draft does not re-ask on its own — without
+   * this it would stay on the bare "+ / send" composer until it is left and re-focused.
+   */
+  function noteDraftOptionsChanged(agentName) {
+    if (!state.draft) { return; }
+    if (agentName && state.agentName && agentName !== state.agentName) { return; }
+    var request = { type: 'listDraftOptions', draftId: state.draft.draftId };
+    if (state.agentName) { request.agentName = state.agentName; }
+    NS.bridge.post(request);
+  }
+
+  /**
    * [CUSTOM- The configured default agent changed while this draft is open:
    * keep the typed text, switch the draft's agent and re-ask for its options.
    */
@@ -1942,6 +1955,7 @@ export const composerClient = `
     forgetDraft: forgetDraft,
     setDraft: setDraft,
     setDraftAgent: setDraftAgent,
+    noteDraftOptionsChanged: noteDraftOptionsChanged,
     setDraftOptions: setDraftOptions,
     updateDraftCwd: updateDraftCwd,
     resolveDraft: resolveDraft,

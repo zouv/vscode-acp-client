@@ -27,7 +27,7 @@ export function styles(): string {
   /* ⚠️ 不要删这条规则。
      'hidden' 属性靠 UA 样式表的 [hidden]{display:none} 生效，而**作者样式里的任何 display
      声明都会覆盖它**——这与选择器权重无关，是"作者样式 > UA 样式"的层叠顺序决定的。
-     本文件里 .load-overlay / .agent-bar / .attachments 都需要 flex 布局，没有这条 !important
+     本文件里 .load-overlay / .attachments 都需要 flex 布局，没有这条 !important
      的话它们会**永远可见**（曾导致加载遮罩常驻不消失、并吞掉整个面板的点击）。
      改了这条之后：给任何用 hidden 控制的元素加 display 都要先想一下这里。
      另：本文件是模板字符串，注释里禁用反引号——用单引号。 */
@@ -98,23 +98,6 @@ export function styles(): string {
     --vac-composer-max: 720px;
     --vac-input-max-h: min(320px, 38vh);
   }
-
-  /* --- Agent selector ------------------------------------------------- */
-  .agent-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    border-bottom: 1px solid var(--vscode-panel-border);
-    position: relative;
-  }
-  .agent-select {
-    flex: 1;
-    min-width: 0;
-    max-width: none;
-    justify-content: flex-start;
-  }
-  #agentMenu { left: 0; right: auto; min-width: 220px; }
 
   /* [CUSTOM- 待恢复的 tab（本地页，宿主里还没有它）：与草稿同族但**不是**新会话 ——
      用虚一点的名字色 + 一个空心点区分，tooltip 写明 click to open；不可拖拽（顺序由 tabOrder 决定）。 */
@@ -302,6 +285,12 @@ export function styles(): string {
     pointer-events: none;
   }
   .tab-tip-line.dim { color: var(--vscode-descriptionForeground); }
+  /* [CUSTOM- 2026-11-22] Tab 悬停提示里的 Agent 品牌图标（会话 id 前）。
+     行改成 flex 只是为了让图标与文字同基线；长文本仍在 span 内换行。 */
+  .tab-tip-line { display: flex; align-items: center; gap: 5px; }
+  .tab-tip-text { min-width: 0; white-space: pre-wrap; word-break: break-all; }
+  .tab-tip-icon { display: inline-flex; align-items: center; flex: none; opacity: 0.85; }
+  .tab-tip-icon svg { display: block; width: 12px; height: 12px; }
   /* [CUSTOM- 手工排序的落点指示：目标 tab 的哪一侧会被插进去。
      2px 的竖线用 inset 阴影画（跟着 .tab 的圆角走），拖动中的那个自己淡化 —— 让人看清
      "被搬走的是哪一个"。 */
@@ -353,7 +342,13 @@ export function styles(): string {
     position: relative;
     color: var(--vscode-descriptionForeground);
   }
-  .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; }
+  /* [CUSTOM- 2026-11-22] 地址栏左侧的 Agent 品牌图标：与路径同一个按钮、同一行、无底色，
+     读起来是一体（"Claude Code 在 D:\\…"），不额外占一格。 */
+  .session-agent { display: inline-flex; align-items: center; flex: none; opacity: 0.85; }
+  .session-agent-icon svg { display: block; width: 13px; height: 13px; }
+  .session-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-title:disabled .session-agent { display: none; }
   /* [CUSTOM- 没有聚焦会话/草稿时这一格**显示默认目录但点不动**（090 当初是整格
      隐藏）。禁用态必须看起来像一句说明而不是一个坏掉的按钮：不换手型、没有 hover 反馈，
      并且比真实路径淡一点（同一个 .tab/.tab-close 用 opacity 表达"弱化"的习惯）。 */
@@ -371,7 +366,6 @@ export function styles(): string {
   .side-origin-label { flex: none; font-weight: 600; color: var(--vscode-foreground); }
   .side-origin-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .side-origin-time { flex: none; margin-left: auto; white-space: nowrap; }
-  .surface-side .agent-bar,
   .surface-side #newTab,
   .surface-side #defaultAgentBtn,
   .surface-side #settingsBtn,
@@ -413,6 +407,11 @@ export function styles(): string {
     position: sticky; top: 0;
     background: inherit;
   }
+  /* [CUSTOM- 2026-11-22] 历史抽屉标题行的 Agent 标识：**只有品牌图标**（名称走 tooltip），
+     与计数同一行、不额外占宽。 */
+  .outline-agent { display: inline-flex; align-items: center; flex: none; opacity: 0.9; }
+  .outline-agent-icon { display: inline-flex; align-items: center; }
+  .outline-agent-icon svg { display: block; width: 13px; height: 13px; }
   /* The outline owns two tabs; the list scrolls under fixed head/tab rows. */
   #outline { display: flex; flex-direction: column; overflow: hidden; }
   #outline .outline-head, #outline .outline-tabs { flex: none; }
@@ -2900,6 +2899,14 @@ export function styles(): string {
   .picker-item.active .picker-item-desc { color: inherit; opacity: .85; }
   .picker-check { flex: none; margin-left: auto; display: inline-flex; align-items: center; opacity: .9; }
   .picker-check svg { display: block; }
+  /* [CUSTOM- 2026-11-22] 默认 Agent 菜单的每一项是「两行正文 + 左侧品牌图标 + 右侧勾选」，
+     flex-start 会把图标/勾选贴在第一行、看起来偏高；这里按整行垂直居中，并让勾选与图标同为
+     14px 的盒子（勾选图形本身 12px，居中后光学中心一致）。 */
+  .picker-menu.default-agent-menu .picker-item { align-items: center; }
+  .picker-menu.default-agent-menu .picker-icon,
+  .picker-menu.default-agent-menu .picker-check { width: 14px; height: 14px; }
+  .picker-menu.default-agent-menu .picker-check { justify-content: center; }
+  .picker-menu.default-agent-menu .picker-check svg { width: 14px; height: 14px; }
   /* [CUSTOM- '+' 菜单里灰置的项（已有会话的 Workspace directories）。 */
   .picker-item:disabled { opacity: 0.45; cursor: default; }
   /* [CUSTOM- '+' 菜单项：图标与文字之间留一点间距（图标是 .chip-icon 12px inline-flex）。

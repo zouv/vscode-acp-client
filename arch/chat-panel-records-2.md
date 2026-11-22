@@ -291,7 +291,9 @@ hide 与恢复都不报。"变量=0 而卡片可见"于是可达。
 `Duplicate` 发 `duplicateSession` → 宿主走
 `session/fork` **不带 messageId**（在末尾分叉），新会话继承源会话的上下文与消息记录，再由
 `openExistingSession` 重放并聚焦。agent 不支持 fork 时由 `reportError` 在记录区给出提示。
-tab 的悬停提示改为自绘浮层：标题正常色、**SessionId 灰色**（`tabs.ts` 的 `showTip`）。
+tab 的悬停提示改为自绘浮层：标题正常色、**SessionId 灰色**（`tabs.ts` 的 `showTip`）；
+**2026-11-22** 起 sessionId 前再带该会话 agent 的品牌图标（`icon: agentKind`，草稿/待恢复同样带），
+页签本身仍不加图标（避免每个 tab 变长）。
 
 **历史行的悬停动作（212，仅悬停显示）**：`sessionMenu.renderList` 把每行包进
 `.session-row`（`position: relative`），动作层 `.row-actions` 是**行的兄弟**（button 不能嵌

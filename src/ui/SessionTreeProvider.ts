@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { SessionInfo as ProtocolSessionInfo } from '@agentclientprotocol/sdk';
 
-import { getAgentNames } from '../config/AgentConfig';
+import { getAgentKind, getAgentNames } from '../config/AgentConfig';
 import type { SessionHistoryStore, PersistedSessionEntry } from '../core/SessionHistoryStore';
 import type { AgentCapabilitySummary, SessionManager } from '../core/SessionManager';
 import { log, logError } from '../utils/Logger';
@@ -11,13 +11,17 @@ export class AgentTreeItem extends vscode.TreeItem {
     public readonly agentName: string,
     public readonly connected: boolean,
     collapsibleState: vscode.TreeItemCollapsibleState,
+    // [CUSTOM- 2026-11-22] 品牌图标（Claude / Codex / generic）；未提供时退回连接状态圆点。
+    iconPath?: vscode.Uri,
   ) {
     super(agentName, collapsibleState);
     this.contextValue = connected ? 'agent-connected' : 'agent-disconnected';
-    this.iconPath = connected
+    this.iconPath = iconPath ?? (connected
       ? new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('testing.iconPassed'))
-      : new vscode.ThemeIcon('circle-outline');
-    this.description = connected ? 'connected' : '';
+      : new vscode.ThemeIcon('circle-outline'));
+    // [CUSTOM- 2026-11-22] 品牌图标取代了连接状态圆点：状态改由这行文字表达，
+    // 否则断开的 agent 与连着的长得一模一样。
+    this.description = connected ? 'connected' : 'disconnected';
     if (connected) { this.command = { command: 'vac.openChat', title: 'Open Chat' }; }
     this.tooltip = connected
       ? `${agentName} — connected\nClick to open chat`
@@ -98,6 +102,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
     private readonly sessions: SessionManager,
     private readonly history: SessionHistoryStore | null,
     private readonly workspaceCwd: () => string | undefined,
+    // [CUSTOM- 2026-11-22] resources/agent-*.svg 的基址（树根节点品牌图标）。
+    private readonly extensionUri?: vscode.Uri,
   ) {
     for (const event of ['agent-connected', 'agent-disconnected', 'active-session-changed', 'session-info-changed']) {
       const handler = () => this.refresh();
@@ -136,8 +142,19 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
     return getAgentNames().map(name => {
       const caps = this.sessions.getCachedCapabilities(name);
       const localCount = this.history?.list(name, this.workspaceCwd()).length ?? 0;
-      return new AgentTreeItem(name, this.sessions.isAgentConnected(name), this.collapsible(caps, localCount));
+      return new AgentTreeItem(
+        name, this.sessions.isAgentConnected(name), this.collapsible(caps, localCount), this.agentIcon(name),
+      );
     });
+  }
+
+  /** [CUSTOM- 2026-11-22] Agent 根节点的品牌图标（与聊天面板同一套形状）。 */
+  private agentIcon(name: string): vscode.Uri | undefined {
+    if (!this.extensionUri) { return undefined; }
+    const kind = getAgentKind(name);
+    const file = kind === 'claude' ? 'agent-claude.svg'
+      : kind === 'codex' ? 'agent-codex.svg' : 'agent-generic.svg';
+    return vscode.Uri.joinPath(this.extensionUri, 'resources', file);
   }
 
   private collapsible(caps: AgentCapabilitySummary | undefined, localCount: number): vscode.TreeItemCollapsibleState {
