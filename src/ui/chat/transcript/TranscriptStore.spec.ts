@@ -60,7 +60,7 @@ describe('sub-agent cards and the entry cap', () => {
     });
     expect(announced?.created).toBe(true);
 
-    for (let i = 0; i < 500; i++) { transcripts.appendUser('parent', `message ${i}`); }
+    for (let i = 0; i < 500; i++) { transcripts.appendNotice('parent', 'info', `message ${i}`); }
     expect(transcripts.snapshot('parent')!.entries.some(e => e.kind === 'subagent')).toBe(false);
 
     const sweep = transcripts.upsertSubagent('parent', { subagentSessionId: 'child-1', state: 'idle' });
@@ -76,5 +76,40 @@ describe('sub-agent cards and the entry cap', () => {
     });
     expect(result?.created).toBe(true);
     expect(result?.entry.state).toBe('running');
+  });
+});
+
+describe('entry cap keeps the conversation', () => {
+  // A long live session (the reported one: 3.5 h, six turns) blew past the cap
+  // and the OLD prefix trim removed its very first user message while the reply
+  // right after it stayed — the conversation's first question vanished.
+  it('evicts old process records before user/assistant messages', () => {
+    const transcripts = store();
+    transcripts.ensureSession('parent', 'Claude Code');
+    const firstQuestion = transcripts.appendUser('parent', '想简化下应用图标');
+    const firstReply = transcripts.appendAssistantChunk('parent', '我先确认了现状：', 'm1');
+    transcripts.finalizeStreaming('parent', { only: 'assistant' });
+    // Flood the session with tool cards, as a long agent run does.
+    for (let i = 0; i < 600; i++) { transcripts.appendTool('parent', `tool-${i}`); }
+
+    const entries = transcripts.snapshot('parent')!.entries;
+    expect(entries.length).toBe(500);
+    expect(entries.some(e => e.id === firstQuestion!.id)).toBe(true);
+    expect(entries.some(e => e.id === firstReply!.id)).toBe(true);
+    // The oldest tool cards went instead.
+    expect(entries.some(e => e.kind === 'tool' && e.toolCallId === 'tool-0')).toBe(false);
+    expect(entries.some(e => e.kind === 'tool' && e.toolCallId === 'tool-599')).toBe(true);
+  });
+
+  it('falls back to dropping the oldest messages when messages alone exceed the cap', () => {
+    const transcripts = store();
+    transcripts.ensureSession('parent', 'Claude Code');
+    const first = transcripts.appendUser('parent', 'first');
+    for (let i = 0; i < 500; i++) { transcripts.appendUser('parent', `message ${i}`); }
+
+    const entries = transcripts.snapshot('parent')!.entries;
+    expect(entries.length).toBe(500);
+    expect(entries.some(e => e.id === first!.id)).toBe(false);
+    expect(entries.some(e => e.kind === 'user' && e.text === 'message 499')).toBe(true);
   });
 });

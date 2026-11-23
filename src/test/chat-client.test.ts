@@ -118,6 +118,7 @@ class StubNode {
   scrollLeft = 0;
   scrollWidth = 0;
   offsetTop = 0;
+  offsetLeft = 0;
   /** [CUSTOM- Their difference is the scrollbar the pinned bar has to clear. */
   offsetWidth = 0;
   clientWidth = 0;
@@ -6810,6 +6811,18 @@ suite('chat client logic: 目录抽屉的候选每次打开都刷新（stub DOM,
     d.open();
     assert.strictEqual(d.els.cwdMenu.style.maxHeight, '672px',
       'viewport 800 - top 120 - 8px gap');
+  });
+
+  // [CUSTOM- 2026-11-23] 地址栏是一块有底色的圆角色块，抽屉是它的下拉：
+  // 左右边缘与宽度必须跟色块完全对齐，否则读成两个不相干的浮层。
+  test('the directory dropdown matches the address-bar block width', () => {
+    const d = drawer();
+    d.els.cwdBtn.rectWidth = 300;
+    d.els.cwdBtn.offsetLeft = 40;
+    d.open();
+    assert.strictEqual(d.els.cwdMenu.style.width, '300px', 'width comes from the cwd block');
+    assert.strictEqual(d.els.cwdMenu.style.left, '40px', 'left edge aligns with the block');
+    assert.strictEqual(d.els.cwdMenu.style.right, 'auto', 'right must not stretch the drawer');
   });
 });
 

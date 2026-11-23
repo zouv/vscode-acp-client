@@ -6,12 +6,22 @@
 
 ## 状态快照
 
-- **最近更新**：2026-11-22
-- **整体状态**：**v1.19.1 已发布**（GitHub Release 附 `vscode-acp-client-1.19.1.vsix`）。本版含：会话 Agent 标识（页签 tip / 地址栏 / 历史标题图标 / Agents 树）、删除页签栏 Agent 下拉条、草稿配置项快照跨窗口修复。
+- **最近更新**：2026-11-23
+- **整体状态**：**v1.19.1 已发布**（GitHub Release 附 `vscode-acp-client-1.19.1.vsix`）。另有 3 条未提交改动（长会话首条用户消息被裁掉、会话目录色块与抽屉对齐、开关按钮悬停底色）。
 - **当前分支（必填）**：`main`。
-- **最后验证状态**（2026-11-22）：`npm run typecheck` / `npm run lint` ✅；`npm run test:unit` **425 / 49 文件** ✅；真实宿主 **853 passing / 0 failing** ✅；`npm run vsix` 产出 `release/vscode-acp-client-1.19.1.vsix`（1.12 MB，sha256 `868efefc…455f9`）。
+- **最后验证状态**（2026-11-23）：`npm run typecheck` / `npm run lint` ✅；`npm run test:unit` **427 / 49 文件** ✅；真实宿主 **854 passing / 0 failing** ✅；`preview-records.mjs` 的 `#cwdmenuprobe` 实测 `dxLeft=0 / dxRight=0`、宽度一致、圆角 `5px`。
 
 ## 当前任务（In Progress）
+
+- **会话目录地址栏色块 + 抽屉对齐**（2026-11-23，用户要求）：
+  - 已改：`html/styles.ts` 的 `.session-title`（底色 / 圆角 / hover / `.on` / 禁用态透明）+ `html/client/directoryMenu.ts` 新增 `alignDrawer()`（`show()` 与 window resize 时按按钮几何写 `left` + `width`、`right:auto`）；**悬停底色**：`.nest-toggle.off` 与 `:hover` 同权重且在后，把 Tail / 自动展开 / Times 的悬停色盖掉了 ⇒ 悬停选择器改 `:not(.on)` 提权（开着的仍用 `.on` 底框）；测试：`chat-client.test.ts` 的「the directory dropdown matches the address-bar block width」，预览档 `#cwdmenuprobe`（`scripts/preview-records.mjs`）。
+  - 待办：真机看一眼浅色 / 深色主题下的色块与抽屉；按用户指示决定是否提交。
+
+- **修复「长会话重开后首条用户消息消失」**（2026-11-23，用户报：desk-snip 会话 `83afed5f-…` 在 VAC 里少掉第一条「想简化下应用图标…」，官方插件仍在）：
+  - 根因：`src/ui/chat/transcript/TranscriptStore.ts` 每会话 500 条上限原先从头部整段 `splice`；该会话条目在 3.5 小时内超限，最早的用户消息（id 1）被裁，而 1 分 45 秒后才出现的助手正文（id 18）留下 ⇒ 大纲/记录第一条变成助手回复。
+  - 已改：新增 `trimOverflow`，先淘汰最旧的 tool / thought / notice / content 等过程记录，`user` / `assistant` 消息留到最后；只有消息自身超过 500 条才从头部裁。内存上限不变。测试：`TranscriptStore.spec.ts` 的「entry cap keeps the conversation」两条。
+  - 待办：真机把该会话从历史**重新打开一次**（`session/load` 回放补回被裁内容），确认第一条用户消息出现；然后按用户指示决定是否提交。
+  - 注意：已打开会话的内存记录里被裁的数据不会自己回来，只能重开（回放）恢复。
 
 - **v1.19.0 / v1.19.1 / v1.18.0 真机验收**（实现、自动验证与发布均已完成）：
   1. **草稿快照**：重载 → 默认 Agent 选 Codex → 点 `+`，模型 / 推理强度 / 模式选择器与 `/` 命令是否出现；若仍空，查 `~/.vac/vac.log` 的 `listDraftOptions for Codex CLI:` 行。
@@ -27,8 +37,9 @@
 
 ## 下一步（Next Steps）
 
-1. 按「当前任务」四条做真机验收；发现问题在 `CHANGELOG.md` 的 `[未发布]` 记修复并补测试。
-2. 验收通过后继续 `ROADMAP.md`：P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
+1. 先真机验证「长会话首条用户消息」修复：`npm run dev:host`，把 desk-snip 会话 `83afed5f-…` 关掉后从历史重开，确认首条「想简化下应用图标…」出现；通过后再按用户指示提交。
+2. 按「当前任务」四条做 v1.19.x 真机验收；发现问题在 `CHANGELOG.md` 的 `[未发布]` 记修复并补测试。
+3. 验收通过后继续 `ROADMAP.md`：P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
 
 ## 如何运行 / 测试（Quick Verify）
 

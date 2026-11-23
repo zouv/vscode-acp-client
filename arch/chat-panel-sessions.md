@@ -179,6 +179,7 @@ ACP 没有"改会话 cwd"的请求——cwd 只在 `session/new` / `session/load
 | 已开始的会话 | 目录**只读**（协议固定），抽屉里点候选 = 在那个目录里开一个**新草稿**（不假装能改） |
 | 空态 Connect | 改为 `ensureConnected` + 草稿：只拉进程、**不建会话**（按钮的意义"我这个 agent 起得来吗"靠 `ensureConnected` 仍会抛错来保留）；该 agent 已有会话则聚焦最新那条 |
 | 键盘 | `#cwdBtn` 是真 `<button>`（047 的规矩）；三个抽屉（outline / history / cwd）**互斥**，开一个关掉另外两个 |
+| **地址栏色块与抽屉对齐（2026-11-23）** | `#cwdBtn` 做成**有底色 + 圆角的色块**（`--vscode-input-background`，hover / 打开各加深一档；`:disabled` 退回透明，空态仍是"一句说明"），把目录路径与两侧图标按钮在视觉上隔开；`directoryMenu.show()` 在 `drawer.hidden = false` 之后调 `alignDrawer()`，按按钮相对 `.session-header` 的几何写 `left` + `width`、`right: auto` ⇒ 抽屉的左右边缘与色块**逐像素对齐**（window resize 时重算）。验收：`preview-records.mjs` 的 `#cwdmenuprobe` 读 `dxLeft` / `dxRight` / 宽度 / 圆角。**悬停底色**：`.nest-toggle.off` 与 `:hover` 同权重且排在后面，会盖掉悬停色（Tail / 自动展开 / Times 三个关着的按钮"没有悬停反馈"）——悬停选择器用 `:not(.on)` 提权，开着的按钮保持 `.on` 底框 |
 | **切回会话标签（080）** | 点会话标签只发一条 `focusSession`，**渲染完全依赖宿主的 `focus` 应答**；而 `SessionManager.focusSession` 在"**已经是这个会话**"时 early-return（只在**变化**时 emit）。草稿是客户端私有的、宿主不知道它存在 ⇒ 宿主"我这边已经是 A 了"就不回话 ⇒ 面板永远停在草稿页，A 的标签看起来是坏的。修法是宿主侧 `focusSession(sessionId, { force: true })`（manager 自己对 newConversation/loadSession/resume 用的同一条惯用法）。**规矩：客户端显式请求的聚焦，宿主必须回话**——客户端的"我在看什么"不是宿主状态的函数（草稿/空白页就是反例）。守卫不放宽：未知会话照旧丢弃 |
 
 **草稿的固有代价 —— 已被 补上**：草稿没有 `sessionId`，而模式 / 模型 /

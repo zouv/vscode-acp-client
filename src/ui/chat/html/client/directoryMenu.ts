@@ -282,9 +282,33 @@ export const directoryMenuClient = `
     if (!hadChoices || open) { NS.bridge.post({ type: 'listDirectoryChoices' }); }
   }
 
+  /**
+   * [CUSTOM- 2026-11-23] 抽屉与地址栏色块的**左右边缘对齐**。
+   *
+   * 地址栏现在是一块有底色的圆角色块（见 styles.ts 的 .session-title），抽屉是它的
+   * 下拉——宽度对不上会读成两个不相干的浮层。'.outline' 默认用 left/right 拉伸，
+   * 这里按按钮相对 offsetParent（.session-header，position: relative）的几何写
+   * left + width，right 置 auto。只在真有布局时写（stub DOM / 隐藏的面返回 0）。
+   */
+  function alignDrawer() {
+    if (!drawer || !button || !button.getBoundingClientRect) { return; }
+    var rect = button.getBoundingClientRect();
+    if (!rect || !(rect.width > 0)) { return; }
+    var left = button.offsetLeft;
+    var parent = drawer.offsetParent;
+    if (parent && parent.getBoundingClientRect) {
+      var parentRect = parent.getBoundingClientRect();
+      left = rect.left - parentRect.left - (parent.clientLeft || 0);
+    }
+    drawer.style.left = Math.round(left) + 'px';
+    drawer.style.right = 'auto';
+    drawer.style.width = Math.round(rect.width) + 'px';
+  }
+
   function show() {
     open = true;
     drawer.hidden = false;
+    alignDrawer();
     if (NS.dom.fitDrawer) { NS.dom.fitDrawer(drawer); }
     button.classList.add('on');
     query = '';
@@ -381,6 +405,8 @@ export const directoryMenuClient = `
     }
     if (window.addEventListener) {
       window.addEventListener('resize', function () {
+        // 面板变宽/变窄时地址栏色块也跟着变：抽屉的 left/width 必须重算。
+        if (open) { alignDrawer(); }
         if (open && NS.dom.fitDrawer) { NS.dom.fitDrawer(drawer); }
       });
     }

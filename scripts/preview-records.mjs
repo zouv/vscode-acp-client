@@ -817,6 +817,15 @@ function driver() {
     NS.tabs.setDefaultCwd('/work/example-project');
     NS.tabs.setFocus(null);
   }
+  // #cwdmenuprobe：地址栏色块与目录抽屉的**左右边缘 / 宽度**必须一致（2026-11-23）。
+  // 走真路径：两个模块都 init，喂一份聚焦会话，再点 cwdBtn 打开抽屉。
+  if (location.hash.indexOf('cwdmenuprobe') >= 0) {
+    NS.tabs.init();
+    NS.directoryMenu.init();
+    NS.tabs.setFocus({ sessionId: 'cwd-session', agentName: 'Claude Code', title: null,
+      cwd: 'D:/work/example-project', createdAt: '', running: false, loading: false, unread: false });
+    document.getElementById('cwdBtn').click();
+  }
   // #gauge：底部那颗上下文圆环。#gaugehot 造高用量（红），
   // #gaugebusy 造"有轮次在跑"（外圈转起来）。composer.init 需要的那几个元素 body 里都有。
   if (location.hash.indexOf('gauge') >= 0) {
@@ -2451,6 +2460,24 @@ function driver() {
         }));
       }
     }
+    // 地址栏色块 vs 目录抽屉（#cwdmenuprobe，2026-11-23）：左右边缘与宽度必须一致。
+    if (location.hash.indexOf('cwdmenuprobe') >= 0) {
+      var cwdBlock = document.getElementById('cwdBtn');
+      var cwdDrawer = document.getElementById('cwdMenu');
+      if (cwdBlock && cwdDrawer) {
+        var cbr = cwdBlock.getBoundingClientRect();
+        var cdr = cwdDrawer.getBoundingClientRect();
+        out.push(JSON.stringify({
+          kind: 'cwdmenu',
+          hidden: cwdDrawer.hidden === true,
+          dxLeft: Math.round(cdr.left - cbr.left),
+          dxRight: Math.round(cdr.right - cbr.right),
+          blockW: Math.round(cbr.width),
+          drawerW: Math.round(cdr.width),
+          radius: getComputedStyle(cwdBlock).borderRadius,
+        }));
+      }
+    }
     // 引用栏那一格：#refchip 档下读"开关字形 / tag 文本 / 是否算出可点"。
     if (location.hash.indexOf('refchip') >= 0) {
       var refChip = document.querySelector('.ref-chip');
@@ -3299,6 +3326,8 @@ const SHOTS = [
   // 空态 header（已连接、还没有会话）：地址栏该有内容、Times 该贴右缘。
   // 带 probe：判据是数字（Times 右缘与 header 右缘之差），不是肉眼看截图。
   ['#nosessionheaderprobe', 'no-session-header', '1440,900'],
+  // [CUSTOM-20261123] 地址栏色块与目录抽屉对齐（probe 读数字：左右边缘差、宽度、圆角）。
+  ['#cwdmenuprobe', 'cwd-menu', '1440,900'],
   ['#gauge', 'gauge'],
   ['#gaugewarn', 'gauge-warn'],
   ['#gaugehot', 'gauge-hot'],

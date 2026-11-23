@@ -343,6 +343,21 @@ export function styles(): string {
     color: var(--vscode-descriptionForeground);
   }
   .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; }
+  /* [CUSTOM- 2026-11-23] 地址栏做成一块**有底色、圆角的色块**：它两侧都是图标按钮
+     （↺ / Tail / Times / ☰），此前整格透明，目录文本读起来像一条没有边界的说明，
+     也看不出点开抽屉的可点区域。色块同时把"路径"与两侧按钮在视觉上隔离开；
+     hover / 打开时各加深一档，与工具栏按钮同源取色、明暗主题都跟主题走。 */
+  .session-title {
+    padding: 2px 8px;
+    border-radius: 5px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-foreground);
+  }
+  .session-title:hover:not(:disabled) {
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+  }
+  /* 抽屉打开时用聚焦色描边表达"这一格的浮层正开着"（与焦点环同源）。 */
+  .session-title.on { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder); }
   /* [CUSTOM- 2026-11-22] 地址栏左侧的 Agent 品牌图标：与路径同一个按钮、同一行、无底色，
      读起来是一体（"Claude Code 在 D:\\…"），不额外占一格。 */
   .session-agent { display: inline-flex; align-items: center; flex: none; opacity: 0.85; }
@@ -351,8 +366,9 @@ export function styles(): string {
   .session-title:disabled .session-agent { display: none; }
   /* [CUSTOM- 没有聚焦会话/草稿时这一格**显示默认目录但点不动**（090 当初是整格
      隐藏）。禁用态必须看起来像一句说明而不是一个坏掉的按钮：不换手型、没有 hover 反馈，
-     并且比真实路径淡一点（同一个 .tab/.tab-close 用 opacity 表达"弱化"的习惯）。 */
-  .session-title:disabled { cursor: default; opacity: 0.8; }
+     并且比真实路径淡一点（同一个 .tab/.tab-close 用 opacity 表达"弱化"的习惯）。
+     它没有可点的浮层，所以色块也去掉，退回纯文本。 */
+  .session-title:disabled { cursor: default; opacity: 0.8; background: transparent; }
   /* [CUSTOM- 把右侧那一组（Times / Sub-agents / ☰）钉在右边。原先靠 '.session-title'
      的 flex: 1 吃掉剩余宽度把它们顶过去 —— 那一格一旦不显示了（上面那种空态），整组就会滑到
      ↺ 旁边。有 flex 项能成长时 auto margin 分不到任何空间，所以这条对原有布局零影响。 */
@@ -2604,8 +2620,12 @@ export function styles(): string {
     color: var(--vscode-descriptionForeground);
     background: transparent; border-color: transparent;
   }
+  /* [CUSTOM- 2026-11-23] 关态（'.off'）的底色规则排在下面、且与 ':hover' **同权重**，
+     它会盖掉悬停底色 ⇒ Tail / 自动展开 / Times 三个关着的按钮悬停时没有任何反馈
+     （用户报"只有它们没有底色变化"）。':not(.on)' 把这两条拉开权重：关着的按钮
+     悬停时有底色，开着的（'.on'）保持强调色底框、不被悬停色替换。 */
   .session-header .outline-btn:hover,
-  .session-header .nest-toggle:hover {
+  .session-header .nest-toggle:hover:not(.on) {
     background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
     color: var(--vscode-foreground);
   }

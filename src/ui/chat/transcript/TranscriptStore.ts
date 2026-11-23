@@ -57,6 +57,11 @@ function clampText(text: string): string {
  * Capacity is bounded three ways: entries per session, sessions overall (LRU),
  * and characters per entry. Live sessions are exempt from LRU eviction —
  * a dropped transcript on a running session would look like data loss.
+ *
+ * [CUSTOM- The per-session cap evicts old **process** records (tool cards,
+ * thinking, notices) before it touches user/assistant messages: those two are
+ * the conversation itself, and a long session losing its first question while
+ * keeping the reply was a real, silent data loss (see `trimOverflow`).
  */
 export class TranscriptStore {
   private sessions: Map<string, SessionTranscript> = new Map();
@@ -569,14 +574,41 @@ export class TranscriptStore {
     t.entries.push(entry);
     if ((entry.kind === 'assistant' || entry.kind === 'thought') && entry.streaming) { t.open.add(entry); }
     t.touched = ++this.clock;
-    if (t.entries.length > MAX_ENTRIES_PER_SESSION) {
-      const removed = t.entries.splice(0, t.entries.length - MAX_ENTRIES_PER_SESSION);
-      for (const gone of removed) {
-        if (gone.kind === 'assistant' || gone.kind === 'thought') { t.open.delete(gone); }
-      }
-      this.onRemove?.(sessionId, removed);
-    }
+    this.trimOverflow(t, sessionId);
     return entry;
+  }
+
+  /**
+   * Keep a session under the entry cap without eating the conversation.
+   *
+   * [CUSTOM- 原来是从**头部**统一 `splice`：长会话里最早的那条用户消息
+   * （以及它前面的工具卡）会先被裁掉，而紧接着的助手回复却还在——用户看到的就是
+   * 「这条会话的第一问凭空消失」。用户消息与助手消息是这段记录**唯一不可再生**的骨架，
+   * 工具卡/思考只是过程，所以先裁掉最旧的过程记录；只有当整段记录几乎全是消息
+   * （消息本身就超过上限）时，才从头部裁最旧的消息。
+   *
+   * 上限仍是总数（内存边界不变），只是**裁剪顺序**变了。
+   */
+  private trimOverflow(t: SessionTranscript, sessionId: string): void {
+    let over = t.entries.length - MAX_ENTRIES_PER_SESSION;
+    if (over <= 0) { return; }
+    const removed: TranscriptEntry[] = [];
+    const kept: TranscriptEntry[] = [];
+    for (const entry of t.entries) {
+      if (over > 0 && entry.kind !== 'user' && entry.kind !== 'assistant') {
+        removed.push(entry);
+        over -= 1;
+        continue;
+      }
+      kept.push(entry);
+    }
+    // Only messages left and still over: drop the oldest ones (front).
+    if (over > 0) { removed.push(...kept.splice(0, over)); }
+    t.entries = kept;
+    for (const gone of removed) {
+      if (gone.kind === 'assistant' || gone.kind === 'thought') { t.open.delete(gone); }
+    }
+    this.onRemove?.(sessionId, removed);
   }
 
   /** LRU-evict non-live transcripts beyond MAX_SESSIONS. */
