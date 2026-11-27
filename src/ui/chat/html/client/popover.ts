@@ -195,7 +195,12 @@ export const popoverClient = `
       close();
     });
     // 滚动/改尺寸后锚点已经不在原地：收起比留在错位的地方好。
-    document.addEventListener('scroll', close, true);
+    // [CUSTOM- 但记录区的自动追尾（流式输出每来一片就滚一次）不算：浮层是
+    // position: fixed，不会跟着它漂移，而按它收起会让"边看输出边改名"根本无法完成。
+    document.addEventListener('scroll', function (event) {
+      if (NS.dom.isTranscriptScroll && NS.dom.isTranscriptScroll(event)) { return; }
+      close();
+    }, true);
     window.addEventListener('resize', close);
     close();
   }

@@ -938,6 +938,8 @@ export const sessionMenuClient = `
   NS.sessionMenu = {
     init: init,
     reset: reset,
+    // [CUSTOM- F3：与点 ↺ 按钮同一个开关（再按一次收起）。
+    toggle: toggle,
     setHistory: setHistory,
     applySupplement: applySupplement,
     // [CUSTOM- 宿主做完归档/改名后的对账（boot 转发 sessionAction）。

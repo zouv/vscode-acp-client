@@ -86,6 +86,20 @@ export const domClient = `
 
   function qs(id) { return document.getElementById(id); }
 
+  /**
+   * [CUSTOM- Is this scroll event coming from the transcript area (or a scroller
+   * inside it)? The record area auto-follows streamed output, so a new chunk can
+   * scroll it many times a second. Floating menus/popovers are position:fixed and
+   * do not drift with that scroll, so those events must NOT dismiss them — doing
+   * so made a streaming reply close the tab context menu the user had just opened.
+   */
+  function isTranscriptScroll(event) {
+    var target = event && event.target;
+    var messages = qs('messages');
+    if (!target || !messages) { return false; }
+    return target === messages || !!(messages.contains && messages.contains(target));
+  }
+
   // 一帧一次的回调队列。
   // 存在的理由是**读写分离**：DOM 写入在消息任务里同步做完，所有布局读取
   // （scrollHeight / clientHeight / offsetTop）集中在下一帧的回调里，避免
@@ -164,6 +178,7 @@ export const domClient = `
     clear: clear,
     setSanitizedHtml: setSanitizedHtml,
     qs: qs,
+    isTranscriptScroll: isTranscriptScroll,
     schedule: schedule,
     textMatches: textMatches,
     fitDrawer: fitDrawer

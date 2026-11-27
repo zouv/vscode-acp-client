@@ -1190,6 +1190,17 @@ suite('chat client logic: tab strip (stub DOM)', () => {
     assert.deepStrictEqual(posted.pop(), { type: 'focusSession', sessionId: 's2' });
   });
 
+  // [CUSTOM- F2 的落点：与右键 Rename 同一个面板内输入浮层，锚在当前活动 tab。
+  test('renameActive opens the rename popover for the focused session', () => {
+    const { NS, pop } = tabStrip();
+    NS.tabs.setSessions([summary('s1')]);
+    NS.tabs.setFocus(summary('s1'));
+    const ok = NS.tabs.renameActive({ preventDefault: () => {}, stopPropagation: () => {} });
+    assert.strictEqual(ok, true);
+    assert.strictEqual(pop.root.hidden, false, 'the rename popover shows');
+    assert.strictEqual(pop.input.value, 'a session');
+  });
+
   // [CUSTOM- The dot carries two independent signals, which is the whole
   // point of the change: the COLOUR says what the session is doing, the RING says it is
   // working. They cannot be collapsed into one — a turn parked on a permission prompt is
@@ -8633,6 +8644,54 @@ suite('chat client logic: context menu items (stub DOM, )', () => {
       { type: 'renameSession', sessionId: 'a1', title: 'renamed' },
     ]);
   });
+
+  // [CUSTOM- 用户报：「会话里有消息更新时，右键页签的菜单会被关掉」。
+  // 根因是 document 的 capture scroll 监听：流式输出每来一片，记录区（或卡片内层）就自动
+  // 追尾滚动一次。菜单/浮层是 position:fixed，不会跟着记录滚动漂移，这类 scroll 不该算数。
+  test('streaming scroll inside the transcript does not dismiss the context menu', () => {
+    const messages = new StubNode('div');
+    messages.className = 'messages';
+    const menu = new StubNode('div');
+    menu.className = 'ctx-menu';
+    const items = new StubNode('div');
+    items.className = 'ctx-items';
+    menu.appendChild(items);
+    const h = loadClient({ ctxMenu: menu, messages });
+    h.NS.contextMenu.install();
+
+    for (const listener of h.docListeners.contextmenu ?? []) {
+      listener({ target: messages, clientX: 4, clientY: 4, preventDefault: () => {} });
+    }
+    assert.strictEqual(menu.hidden, false, 'the menu opens');
+
+    const card = new StubNode('div');
+    card.className = 'tool-body';
+    messages.appendChild(card);
+    for (const listener of h.docListeners.scroll ?? []) { listener({ target: card }); }
+    assert.strictEqual(menu.hidden, false, 'auto-follow scroll leaves it open');
+
+    for (const listener of h.docListeners.scroll ?? []) { listener({ target: new StubNode('div') }); }
+    assert.strictEqual(menu.hidden, true, 'scroll elsewhere still dismisses');
+  });
+
+  test('streaming scroll inside the transcript does not dismiss an open popover', () => {
+    const messages = new StubNode('div');
+    messages.className = 'messages';
+    const pop = popoverElements();
+    const h = loadClient({ popover: pop.root, messages });
+    h.NS.popover.install();
+    h.NS.popover.prompt({
+      title: 'Rename Session', value: 'alpha', anchor: new StubNode('button'),
+      onSubmit: () => {},
+    });
+    assert.strictEqual(pop.root.hidden, false, 'the popover opens');
+
+    for (const listener of h.docListeners.scroll ?? []) { listener({ target: messages }); }
+    assert.strictEqual(pop.root.hidden, false, 'streaming scroll leaves the rename input open');
+
+    for (const listener of h.docListeners.scroll ?? []) { listener({ target: new StubNode('div') }); }
+    assert.strictEqual(pop.root.hidden, true, 'scroll elsewhere still dismisses');
+  });
 });
 
 // [CUSTOM- 右侧大纲栏的**开/关**按会话记（+ 一个默认值），而且"关"必须落盘。
@@ -9620,6 +9679,21 @@ suite('chat client logic: find in messages (stub DOM, 2026-11-16)', () => {
     assert.strictEqual(h.bar.hidden, true, 'Escape closes it');
     assert.strictEqual(h.count.textContent, '');
   });
+
+  // [CUSTOM- F3 现在归会话历史开关：搜索条关着时不能再被它拿去打开搜索条
+  // （打开搜索是 Ctrl/Cmd+F；搜索条开着时 F3 仍是"下一个命中"）。
+  test('F3 with the bar closed is left for the panel history toggle', () => {
+    const h = harness();
+    let prevented = false;
+    const event = {
+      key: 'F3',
+      preventDefault: () => { prevented = true; },
+      stopPropagation: () => {},
+    };
+    h.docListeners.keydown.forEach((listener: (e: any) => void) => listener(event));
+    assert.strictEqual(h.bar.hidden, true, 'F3 does not open the find bar');
+    assert.strictEqual(prevented, false, 'the key stays available to the panel shortcut');
+  });
 });
 
 suite('chat client logic: shortcuts', () => {
@@ -9686,6 +9760,33 @@ suite('chat client logic: shortcuts', () => {
     NS.composer.isComposable = () => false;
     assert.strictEqual(dispatch('KeyI').defaultPrevented, true);
     assert.deepStrictEqual(calls, []);
+  });
+
+  // [CUSTOM- 固定功能键：F2 重命名当前会话 / F3 开关历史抽屉 / F4 开关目录地址栏。
+  // 与可配置快捷键不同，F3/F4 在对应抽屉**正开着**时才是"再按一次收起"，所以门控里
+  // 不能把 history/cwdMenu 当成"有浮层、不响应"。
+  test('fixed keys dispatch F2/F3/F4 and close the sibling drawer', () => {
+    const { NS, calls, dispatch } = setup();
+    NS.tabs.renameActive = () => { calls.push('rename'); return true; };
+    NS.sessionMenu.toggle = () => { calls.push('history'); };
+    NS.sessionMenu.reset = () => { calls.push('history-reset'); };
+    NS.directoryMenu.toggle = () => { calls.push('cwd'); };
+    NS.directoryMenu.close = () => { calls.push('cwd-close'); };
+
+    const f2 = dispatch('F2', { key: 'F2', altKey: false });
+    const f3 = dispatch('F3', { key: 'F3', altKey: false });
+    const f4 = dispatch('F4', { key: 'F4', altKey: false });
+    for (const event of [f2, f3, f4]) {
+      assert.strictEqual(event.defaultPrevented, true, 'the panel owns the key');
+      assert.strictEqual(event.stopped, true, 'the workbench must not also act on it');
+    }
+    assert.deepStrictEqual(calls, ['rename', 'cwd-close', 'history', 'history-reset', 'cwd']);
+
+    // 带修饰键 / IME 合成中不认；设置面板开着时让位。
+    assert.strictEqual(dispatch('F2', { key: 'F2', altKey: true }).defaultPrevented, false);
+    assert.strictEqual(dispatch('F3', { key: 'F3', altKey: false, isComposing: true }).defaultPrevented, false);
+    NS.settingsPanel.isOpen = () => true;
+    assert.strictEqual(dispatch('F4', { key: 'F4', altKey: false }).defaultPrevented, false);
   });
 });
 

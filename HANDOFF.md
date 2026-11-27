@@ -6,13 +6,18 @@
 
 ## 状态快照
 
-- **最近更新**：2026-11-23
-- **整体状态**：**v1.19.2 已发布**（GitHub Release 附 `vscode-acp-client-1.19.2.vsix`）。本版含：长会话首条用户消息裁剪修复、会话目录地址栏色块与抽屉对齐、Tail / 自动展开 / Times 悬停底色统一。无未提交改动。
+- **最近更新**：2026-11-27
+- **整体状态**：**v1.19.3 已发布**（GitHub Release 附 `vscode-acp-client-1.19.3.vsix`）：聊天面板固定功能键 F2/F3/F4、流式输出不再关闭右键菜单/浮层、移除标题栏 New Conversation / Attach File 两个按钮。真机验收尚未执行（见「当前任务」）。
 - **当前分支（必填）**：`main`。
-- **最后验证状态**（2026-11-23）：`npm run typecheck` / `npm run lint` ✅；`npm run test:unit` **427 / 49 文件** ✅；真实宿主 **854 passing / 0 failing** ✅；`preview-records.mjs` 的 `#cwdmenuprobe` 实测 `dxLeft=0 / dxRight=0`、宽度一致、圆角 `5px`；`npm run vsix` 产出 `release/vscode-acp-client-1.19.2.vsix`（1.12 MB，sha256 `a25d621b…5ec343`）。
+- **最后验证状态**（2026-11-27）：`npm run typecheck` / `npm run lint` ✅；`npm run test:unit` **427 / 49 文件** ✅；真实宿主 **859 passing / 0 failing** ✅（新增 5 条：F2 重命名、F2/F3/F4 分发、记录区滚动不关菜单/浮层、F3 搜索条关闭时让位）；`node scripts/check-webview-client.mjs` ✅；`npm run vsix` 产出 `release/vscode-acp-client-1.19.3.vsix`（1.12 MB，sha256 `1e8742e2…ad085b`）。
 
 ## 当前任务（In Progress）
 
+- **v1.19.3 真机验收（实现、自动验证与发布均已完成）**：
+  1. **流式输出不再关浮层**：`html/client/dom.ts` 新增 `isTranscriptScroll`，`contextMenu.ts` / `popover.ts` / `tabs.ts`（默认 Agent 菜单）的 document `scroll` 监听忽略来自记录区（含工具卡内层）的自动追尾滚动；其他滚动 / 点击 / resize 仍关闭。
+  2. **移除视图标题栏按钮**：`package.json` 的 `view/title` 删掉 `vac.newConversation` 与 `vac.attachFile`（命令仍在命令面板）。
+  3. **固定功能键**：`html/client/shortcuts.ts` 的 `fixedAction` / `blockedFixed`：F2 → `tabs.renameActive`（与右键 Rename 同一浮层）、F3 → `sessionMenu.toggle`（搜索条打开时 F3 归 `findBar` 的"下一个命中"）、F4 → `directoryMenu.toggle`（空态 `#cwdBtn` disabled 不响应）；对应 JS 模块已导出 `toggle` / `renameActive`。
+  4. 真机验收点：流式输出时右键页签菜单保持打开；改名浮层不再被输出打断；F2/F3/F4 各按两次开/关；搜索条打开时 F3 仍是下一个命中；空态按 F4 无反应；标题栏只剩 Open-in-editor / Stop / Disconnect 等原有按钮。
 - **v1.19.0 / v1.19.1 / v1.19.2 / v1.18.0 真机验收**（实现、自动验证与发布均已完成）：
   1. **草稿快照**：重载 → 默认 Agent 选 Codex → 点 `+`，模型 / 推理强度 / 模式选择器与 `/` 命令是否出现；若仍空，查 `~/.vac/vac.log` 的 `listDraftOptions for Codex CLI:` 行。
   2. **Agent 标识**：页签悬停时 ID 前有品牌图标；地址栏目录前有图标（草稿跟默认 agent）；历史抽屉标题行只有图标、悬停显示名称；Agents 树根节点有品牌图标。默认 Agent 下拉的图标/勾选是否居中对齐；浅色/深色主题各看一眼。
@@ -27,8 +32,9 @@
 
 ## 下一步（Next Steps）
 
-1. 按「当前任务」四条做 v1.19.x 真机验收；发现问题在 `CHANGELOG.md` 的 `[未发布]` 记修复并补测试。
-2. 验收通过后继续 `ROADMAP.md`：P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
+1. `npm run dev:host` 验收 v1.19.3：流式输出时页签右键菜单 / 改名浮层保持打开；F2/F3/F4 开/关；搜索条打开时 F3 行为；空态 F4 无反应；标题栏两个按钮已消失。
+2. 按「当前任务」里 v1.19.x 四条做真机验收；发现问题在 `CHANGELOG.md` 的 `[未发布]` 记修复并补测试。
+3. 验收通过后继续 `ROADMAP.md`：P1-8 连接健壮性 → P1-9 SDK 更新类型 → P1-3 打包瘦身。
 
 ## 如何运行 / 测试（Quick Verify）
 

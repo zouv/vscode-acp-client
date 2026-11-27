@@ -244,7 +244,10 @@ export const findBarClient = `
       openBar();
       return;
     }
-    if (event.key === 'F3') {
+    // [CUSTOM- F3 只在搜索条打开时才是"下一个命中"：关闭状态下这颗键
+    // 归面板的会话历史开关（见 client/shortcuts.ts 的固定键），不能再被这里
+    // 顺手拿去打开搜索条。
+    if (event.key === 'F3' && shown) {
       if (event.preventDefault) { event.preventDefault(); }
       if (event.stopPropagation) { event.stopPropagation(); }
       step(event.shiftKey ? -1 : 1);

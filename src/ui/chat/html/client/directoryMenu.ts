@@ -329,7 +329,13 @@ export const directoryMenuClient = `
     button.classList.remove('on');
   }
 
-  function toggle() { if (open) { close(); } else { show(); } }
+  function toggle() {
+    // 与点地址栏同一个开关；空态下那一格是 disabled（见 tabs.renderHeader），
+    // 键也不能绕过它去开一个"没有会话"的抽屉。
+    if (!button || button.hidden || button.disabled) { return false; }
+    if (open) { close(); } else { show(); }
+    return true;
+  }
 
   /**
    * Reply to listDirectoryChoices.
@@ -435,6 +441,8 @@ export const directoryMenuClient = `
     refresh: refresh,
     setChoices: setChoices,
     setPicked: setPicked,
+    // [CUSTOM- F4：与点地址栏同一个开关（再按一次收起）。
+    toggle: toggle,
     close: close
   };
 })(window.__vac = window.__vac || {});

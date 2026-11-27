@@ -381,6 +381,21 @@ export const tabsClient = `
   }
 
   /**
+   * [CUSTOM- F2：给当前活动 tab 上的会话改名。与右键菜单的 Rename 走同一个
+   * 面板内输入浮层（startRename）；草稿/待恢复没有会话，返回 false 什么也不做。
+   */
+  function renameActive(event) {
+    // Side 面板的 tab 没有改名入口（右键菜单同样不提供）：临时会话跟着来源关闭，
+    // 给它改名只会写一条没人再读的本地覆盖。
+    var onSide = !!(document.body && document.body.classList
+      && document.body.classList.contains('surface-side'));
+    if (onSide) { return false; }
+    var node = activeTabNode();
+    if (!node) { return false; }
+    return startRename(node, event);
+  }
+
+  /**
    * [CUSTOM- 2026-10-29：改名改成面板内输入浮层（原来弹宿主 InputBox，抢焦点、
    * 盖住窗口顶部）。tab 右键菜单与历史行共用同一形态；提交后由宿主应用并回
    * 'sessionAction'，tab 名靠 'sessionsChanged' 同步。
@@ -459,9 +474,12 @@ export const tabsClient = `
     // 点菜单外任意处收起（菜单项自己的 click 会 stopPropagation）。
     document.addEventListener('click', function () { closeDefaultAgentMenu(); });
     document.addEventListener('scroll', function (event) {
-      hideTip();
       // A long menu scrolls itself; that must not dismiss it. Any other scroll
-      // moves the anchor (or the panel) and closes it.
+      // moves the anchor (or the panel) and closes it. [CUSTOM- …except the
+      // transcript's own auto-follow: streamed output scrolls it on every chunk,
+      // and these floaters are position:fixed — they do not drift with it.
+      if (NS.dom.isTranscriptScroll && NS.dom.isTranscriptScroll(event)) { return; }
+      hideTip();
       var insideMenu = !!(defaultAgentMenu && event && event.target
         && defaultAgentMenu.contains && defaultAgentMenu.contains(event.target));
       if (!insideMenu) { closeDefaultAgentMenu(); }
@@ -1516,6 +1534,8 @@ export const tabsClient = `
     closeActive: closeActive,
     // [CUSTOM- 会话 tab 右键菜单的 Rename 入口（面板内输入浮层）。
     startRename: startRename,
+    // [CUSTOM- F2：重命名当前活动 tab 的会话（与右键 Rename 同一个浮层）。
+    renameActive: renameActive,
     // [CUSTOM- 前/后一个 tab（-1 / +1，首尾循环），快捷键入口。
     activateRelative: activateRelative,
     // [CUSTOM- 快捷键懒恢复的完结结果（宿主 'restoreFinished' 消息消费）。

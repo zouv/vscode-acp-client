@@ -453,9 +453,14 @@ export const contextMenuClient = `
       }
     }, true);
     // Any click, scroll or resize dismisses it - a floating menu that outlives its
-    // context is worse than no menu.
+    // context is worse than no menu. EXCEPT scrolls coming from the transcript:
+    // streamed output auto-follows and would otherwise close the menu on every
+    // chunk (the menu is position:fixed, so it does not move with that scroll).
     document.addEventListener('click', close);
-    document.addEventListener('scroll', close, true);
+    document.addEventListener('scroll', function (event) {
+      if (NS.dom.isTranscriptScroll && NS.dom.isTranscriptScroll(event)) { return; }
+      close();
+    }, true);
     window.addEventListener('resize', close);
     window.addEventListener('blur', close);
     close();

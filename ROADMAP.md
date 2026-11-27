@@ -44,6 +44,7 @@ Recently used 条数可配、tab/目录提示分色、Markdown 渲染预设。�
 
 ## ✅ 已交付里程碑
 
+- **v1.19.3**（2026-11-27）：聊天面板固定功能键 F2/F3/F4、流式输出不再关闭右键菜单/浮层、移除标题栏 New Conversation / Attach File 两个按钮，见 `CHANGELOG`。
 - **v1.19.2**（2026-11-23）：长会话首条消息裁剪修复、会话目录地址栏色块与抽屉对齐、开关按钮悬停底色，见 `CHANGELOG`。
 - **v1.19.1**（2026-11-22）：会话 Agent 标识、删除 Agent 下拉条、快照跨窗口修复，见 `CHANGELOG`。
 - **v1.19.0**（2026-11-21）：Codex/Claude 对齐、适配器 fork、默认 Agent，见 `CHANGELOG`。

@@ -69,7 +69,44 @@ export const shortcutsClient = `
     return false;
   }
 
-  function execute(action) {
+  /**
+   * [CUSTOM- 固定功能键：F2 重命名会话 / F3 会话历史 / F4 目录地址栏。
+   * 它们是无修饰的属性键，不进可配置快捷键表（设置录制器只收带修饰的组合）。
+   */
+  function fixedAction(event) {
+    if (!event || event.defaultPrevented || event.isComposing || event.keyCode === 229
+        || event.key === 'Dead') { return null; }
+    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) { return null; }
+    if (event.key === 'F2') { return 'renameSession'; }
+    if (event.key === 'F3') { return 'toggleHistory'; }
+    if (event.key === 'F4') { return 'toggleCwd'; }
+    return null;
+  }
+
+  /**
+   * [CUSTOM- 固定键的门控与 blocked() 不同：按 F3/F4 时对应的抽屉往往**正开着**，
+   * 那正是"再按一次收起"要处理的状态，不能把 history/cwdMenu 当成"有浮层所以不响应"。
+   * 其余（设置面板 / 通用浮层 / 图片放大 / 右键菜单 / 表单与权限抽屉）仍然让位。
+   */
+  function blockedFixed(event, action) {
+    if ((NS.settingsPanel && NS.settingsPanel.isOpen && NS.settingsPanel.isOpen())
+        || (NS.popover && NS.popover.isOpen && NS.popover.isOpen())) { return true; }
+    var overlays = ['imageLightbox', 'ctxMenu', 'slashPopup', 'stopConfirm'];
+    for (var i = 0; i < overlays.length; i++) {
+      if (visible(overlays[i])) { return true; }
+    }
+    var target = event.target;
+    if (target && target.closest) {
+      if (target.closest('#elicDrawer, #permDrawer, #settingsPanel, #outline, #outlineSidebar')) { return true; }
+      // F2 在别处的输入框里不抢键（输入卡本身除外 —— 那是最常见的位置）。
+      if (action === 'renameSession'
+          && target.closest('input, textarea, select, [contenteditable]')
+          && !target.closest('#composer')) { return true; }
+    }
+    return false;
+  }
+
+  function execute(action, event) {
     if (action === 'scrollTop' && NS.scroll && NS.scroll.jumpToTop) { NS.scroll.jumpToTop(); }
     else if (action === 'scrollBottom' && NS.scroll && NS.scroll.jumpToLatest) { NS.scroll.jumpToLatest(); }
     else if (action === 'focusInput' && NS.composer && NS.composer.isComposable
@@ -79,12 +116,35 @@ export const shortcutsClient = `
     // 与 tab 上的 × / 中键 / 右键 Close 共用 closeModel 那条路（草稿丢弃、待恢复遗忘、
     // 运行中二次确认都在那里，不另写一份）。
     else if (action === 'closeSession' && NS.tabs && NS.tabs.closeActive) { NS.tabs.closeActive(); }
+    // F2：与右键菜单 Rename 同一个浮层（草稿/待恢复没有会话，renameActive 自己返回 false）。
+    else if (action === 'renameSession' && NS.tabs && NS.tabs.renameActive) { NS.tabs.renameActive(event); }
+    // F3 / F4：与点 ↺ / 地址栏同一个开关（再按一次收起）。两个抽屉互斥，
+    // 键盘切换时手动把另一个先收掉 —— 点击路径靠 document 的"点外面关闭"，
+    // 按键不产生 click。
+    else if (action === 'toggleHistory') {
+      if (NS.directoryMenu && NS.directoryMenu.close) { NS.directoryMenu.close(); }
+      if (NS.sessionMenu && NS.sessionMenu.toggle) { NS.sessionMenu.toggle(); }
+    }
+    else if (action === 'toggleCwd') {
+      if (NS.sessionMenu && NS.sessionMenu.reset) { NS.sessionMenu.reset(); }
+      if (NS.directoryMenu && NS.directoryMenu.toggle) { NS.directoryMenu.toggle(); }
+    }
     // 还原上一个关闭的会话：宿主持有撤销栈（关会话的地方只有它），这里只需发一个面板级请求。
     else if (action === 'restoreClosed' && NS.bridge && NS.bridge.post) { NS.bridge.post({ type: 'restoreLastClosed' }); }
   }
 
   function onKeyDown(event) {
-    if (!event || event.defaultPrevented || blocked(event)) { return; }
+    if (!event || event.defaultPrevented) { return; }
+    // 固定功能键先判：它们不受"抽屉开着"影响（那正是再按一次要收起的状态）。
+    var fixed = fixedAction(event);
+    if (fixed) {
+      if (blockedFixed(event, fixed)) { return; }
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) { execute(fixed, event); }
+      return;
+    }
+    if (blocked(event)) { return; }
     var shortcut = fromEvent(event);
     if (!shortcut) { return; }
     var actions = Object.keys(bindings);
@@ -93,7 +153,7 @@ export const shortcutsClient = `
       // 重复 keydown 仍要挡住冒泡（否则工作台会收到连发），但动作只执行一次。
       event.preventDefault();
       event.stopPropagation();
-      if (!event.repeat) { execute(actions[i]); }
+      if (!event.repeat) { execute(actions[i], event); }
       return;
     }
   }
